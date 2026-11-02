@@ -22,13 +22,14 @@ Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークス�
 
 ```sh
 pnpm install --frozen-lockfile   # ロックファイルどおりに依存を入れる
-pnpm check                       # Rust の単体テスト・clippy・画面の型チェック・画面のテストをまとめて走らせる
+pnpm check                       # Rust の書式の検査・単体テスト・clippy・画面の型チェック・画面のテストをまとめて走らせる
 pnpm tauri dev                   # 開発サーバーとアプリを起動する（ウィンドウが開く）
 cargo run -p yunagi-cli          # コンソール用バイナリ yunagi を動かす
 ```
 
-`pnpm check` は次の4つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
+`pnpm check` は次の5つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
 
+- `pnpm check:fmt`：Rust のコードの書式が rustfmt（Rust の標準の整形ツール）の形にそろっているかを確かめる。`cargo fmt --all --check`（ファイルは書き換えない。ずれていたら `cargo fmt --all` で直す）
 - `pnpm check:rust`：Rust の3つのクレート全体の単体テスト。`cargo test --workspace --locked`（`Cargo.lock` と食い違うと失敗する）
 - `pnpm check:clippy`：Rust の3つのクレート全体（テストのコードを含む）を clippy（Rust のコードの書き方の問題を指摘する検査）にかける。`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告が1つでもあれば失敗する。デスクトップアプリ（`yunagi-app`）がコンパイルできるかもこれで確かめる。Tauri と WebView のライブラリを含むため初回は1分ほどかかるが、2回目以降は変わった所だけ確かめるので速い）
 - `pnpm check:types`：画面のコードの型チェック（`svelte-check`）と、設定ファイル（`vite.config.ts`・`svelte.config.js`）の型チェック（`tsc -p tsconfig.node.json`）

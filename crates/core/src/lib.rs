@@ -9,4 +9,3 @@ pub mod storage;
 
 /// コアの版。GUI と `yunagi` が同じコアを使っていることの確認にも使う。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-

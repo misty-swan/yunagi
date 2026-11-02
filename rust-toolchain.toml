@@ -2,5 +2,5 @@
 # 上げるときはここを書き換え、`pnpm check`（clippy を含む）が通ることを確かめる。
 [toolchain]
 channel = "1.99.1"
-components = ["clippy"]
+components = ["clippy", "rustfmt"]
 profile = "minimal"

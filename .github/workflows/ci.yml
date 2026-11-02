@@ -41,7 +41,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      # 版と clippy は rust-toolchain.toml から読む
+      # 版と clippy・rustfmt は rust-toolchain.toml から読む
       - name: Install Rust
         run: rustup toolchain install
 
