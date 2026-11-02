@@ -8,12 +8,15 @@ pub mod cloud_sync;
 pub mod data_dir;
 mod error;
 mod migration;
+pub mod table;
+mod ulid;
 
 use std::path::Path;
 
 use rusqlite::Connection;
 
 pub use error::StorageError;
+pub use ulid::{ParseUlidError, Ulid};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。
 pub struct Database {
@@ -53,7 +56,7 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// SQLite への接続。表の読み書きは後続の課題でこの層に作る。
+    /// SQLite への接続。表ごとの基本の読み書きは [`table`] の関数に渡して行う。
     pub fn connection(&self) -> &Connection {
         &self.conn
     }

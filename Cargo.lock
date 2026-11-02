@@ -4363,6 +4363,7 @@ dependencies = [
 name = "yunagi-core"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.4.3",
  "jiff",
  "rusqlite",
  "serde",
