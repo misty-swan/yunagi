@@ -81,7 +81,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 - 持ち越しの画面（S-03）を表示している間に、エージェントが前回の日の項目を変えた場合は、一覧をその場で更新し、確定の時点の内容で持ち越す（確定の時点で未完了・未解消の項目だけを持ち越し、本文などは確定の時点の値を写す。画面設計書 5章）。
 - 見直しで「やめる」を選んだ TODO は、元項目を `status = dropped`、`close_reason = dropped` にする。「外部ツールへ戻す」（外部連携が有効で、外部課題と紐付いた TODO のみ）は `close_reason = returned_external` とする。
 - 「分割する」を選んだ場合は、元項目を `status = dropped`、`close_reason = split` にし、今日に作る子項目は `split_from_id` で元を指す（子項目の `carry_count` は 0）。
-- 取りやめた TODO（`status = dropped`）は、持ち越し済みの項目と同じく、その日の終わりの状態として残すため、`status`・`text`・`completed_at` を変えない（2026-11-03 決定）。エージェントの書き込み（`edit_todo`・`complete_todo`・`reopen_todo`）は `invalid_argument` で拒み（MCP・CLI 仕様書 3章）、画面でも変えられない（操作仕様書 2章）。削除と並べ替えは通常どおりできる。`agent revert` でこれらの欄を戻すかは未決（MCP・CLI 仕様書 9章）。障害には `dropped` が無いため、この決まりは TODO だけに当てはまる。
+- 取りやめた TODO（`status = dropped`）は、持ち越し済みの項目と同じく、その日の終わりの状態として残すため、`status`・`close_reason`・`text`・`completed_at` を変えない（2026-11-03 決定）。エージェントの書き込み（`edit_todo`・`complete_todo`・`reopen_todo`）は `invalid_argument` で拒み（MCP・CLI 仕様書 3章）、画面でも変えられない（操作仕様書 2章）。削除と並べ替えは通常どおりできる。`agent revert` でこれらの欄を戻すかは未決（MCP・CLI 仕様書 9章）。障害には `dropped` が無いため、この決まりは TODO だけに当てはまる。
 - 持ち越しで作る障害には、元項目の `resolution_note`（未解消に戻した障害に残っている解消メモ。操作仕様書 2章）を写さない。解消メモは元の日の障害に残る。
 - 持ち越した項目は、今日のリストの先頭に、前回の日の順のまま入るよう `sort_key` を付ける。
 
