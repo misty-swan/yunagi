@@ -13,9 +13,9 @@
 //! 切り替わり時刻を壁時計の時刻どうしで比べず、瞬間（UTC の時刻）で比べるのは、
 //! 夏時間の切り替えで日付が逆戻りしないようにするため。
 //!
-//! - 切り替わり時刻が夏時間の開始で飛ばされる日（例：2:00〜3:00 が無い日に 2:30）は、
+//! - 切り替わり時刻が夏時間の開始で飛ばされる日（例：2:00〜2:59 が無い日に 2:30）は、
 //!   飛ばされた後の最初の時刻（この例では 3:00）にその日が始まる。
-//! - 切り替わり時刻が夏時間の終了で2回ある日（例：1:00〜2:00 が2回ある日に 1:30）は、
+//! - 切り替わり時刻が夏時間の終了で2回ある日（例：1:00〜1:59 が2回ある日に 1:30）は、
 //!   1回目にその日が始まる。2回目の 1:00〜1:30 も、もう同じ日である。
 //!
 //! # 切り替わり時刻を変えたとき
@@ -23,6 +23,11 @@
 //! この規則は、新しく日付を求めるときにだけ使う。保存済みの日付（[`LogicalDate`]）は
 //! 値として持つだけで、切り替わり時刻を変えても付け直さない（アーキテクチャ設計書 5章）。
 //! そのため、このモジュールには保存済みの日付を切り替わり時刻から求め直す関数を置かない。
+//!
+//! # タイムゾーン
+//!
+//! 端末のタイムゾーンは `TimeZone::try_system()` で得る。`TimeZone::system()` は
+//! 決められないとき黙って UTC にし、日付が気づかれずにずれるので使わない。
 
 use std::fmt;
 use std::str::FromStr;
@@ -100,21 +105,28 @@ pub struct LogicalDate(Date);
 
 impl LogicalDate {
     /// 瞬間 `at` の論理日付を、タイムゾーン `tz` と切り替わり時刻 `boundary` から求める。
+    ///
+    /// 1〜9999年の外になる瞬間は、その端の日（0001-01-01・9999-12-31）に収める。
     pub fn at(at: Timestamp, tz: &TimeZone, boundary: DayBoundary) -> Self {
         let calendar_date = tz.to_datetime(at).date();
-        // 翌日がもう始まっていれば翌日。夏時間の終了で時計が深夜0時をまたいで前日へ戻る
-        // タイムゾーンでは、カレンダー日付が戻っても翌日はすでに始まっている
-        if let Ok(next) = calendar_date.tomorrow()
-            && day_start(next, tz, boundary).is_some_and(|start| start <= at)
-        {
-            return Self(next);
-        }
-        match day_start(calendar_date, tz, boundary) {
-            Some(start) if at < start => Self(prev_day(calendar_date)),
-            // 求められないのは、暦の端（-9999年・9999年）だけ。カレンダー日付のままにする
-            _ => Self(calendar_date),
-        }
+        // その日の始まりを求められないのは、暦の端（-9999年・9999年）か、夏時間の開始の後に
+        // 次の切り替えが無い壊れたタイムゾーンのデータのとき。カレンダー日付のままにする
+        let date = match day_start(calendar_date, tz, boundary) {
+            Some(start) if at < start => calendar_date.yesterday().unwrap_or(calendar_date),
+            // 翌日がもう始まっていれば翌日。夏時間の終了で時計が深夜0時をまたいで前日へ戻る
+            // タイムゾーンでは、カレンダー日付が戻っても翌日はすでに始まっている
+            _ => match calendar_date.tomorrow() {
+                Ok(next) if day_start(next, tz, boundary).is_some_and(|start| start <= at) => next,
+                _ => calendar_date,
+            },
+        };
+        Self(date).clamp(Self::MIN, Self::MAX)
     }
+
+    /// 扱える最初の日（0001-01-01）。
+    pub const MIN: Self = Self(Date::constant(1, 1, 1));
+    /// 扱える最後の日（9999-12-31）。
+    pub const MAX: Self = Self(Date::constant(9999, 12, 31));
 
     /// 時刻付きの値（タイムゾーンを含む）の論理日付を求める。
     pub fn of_zoned(zoned: &Zoned, boundary: DayBoundary) -> Self {
@@ -132,12 +144,16 @@ impl LogicalDate {
 
     /// 翌日の論理日付。9999-12-31 の翌日は無いので `None`。
     pub fn tomorrow(self) -> Option<Self> {
-        self.0.tomorrow().ok().map(Self)
+        (self < Self::MAX)
+            .then(|| self.0.tomorrow().ok().map(Self))
+            .flatten()
     }
 
-    /// 前日の論理日付。
-    pub fn yesterday(self) -> Self {
-        Self(prev_day(self.0))
+    /// 前日の論理日付。0001-01-01 の前日は無いので `None`。
+    pub fn yesterday(self) -> Option<Self> {
+        (self > Self::MIN)
+            .then(|| self.0.yesterday().ok().map(Self))
+            .flatten()
     }
 
     /// jiff の日付として取り出す（日付の加減算などに使う）。
@@ -147,8 +163,7 @@ impl LogicalDate {
 }
 
 impl fmt::Display for LogicalDate {
-    /// `YYYY-MM-DD`。1〜9999年は [`FromStr`] で読み戻せる
-    /// （[`LogicalDate::at`] が暦の端で求めた日付だけは、jiff の拡張した年の書式になる）。
+    /// `YYYY-MM-DD`。値は 1〜9999年に限るので、いつも [`FromStr`] で読み戻せる。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
     }
@@ -159,15 +174,7 @@ impl FromStr for LogicalDate {
 
     /// `YYYY-MM-DD`（年は4桁、月・日は2桁）だけを受け付ける。存在しない日付は誤り。
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let err = || ParseError::Date(s.to_owned());
-        let b = s.as_bytes();
-        if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
-            return Err(err());
-        }
-        let year = four_digits(&b[0..4]).ok_or_else(err)?;
-        let month = two_digits(&b[5..7]).ok_or_else(err)?;
-        let day = two_digits(&b[8..10]).ok_or_else(err)?;
-        Self::new(year as i16, month as i8, day as i8).ok_or_else(err)
+        parse_ymd(s).map_err(|_| ParseError::Date(s.to_owned()))
     }
 }
 
@@ -186,16 +193,22 @@ pub enum DateSpec {
 
 impl DateSpec {
     /// 論理日付の今日 `today` を基準に、指定を論理日付に直す。
-    pub fn resolve(self, today: LogicalDate) -> LogicalDate {
+    /// 今日が 0001-01-01 のときの `yesterday` だけは日付が無いので `None`。
+    pub fn resolve(self, today: LogicalDate) -> Option<LogicalDate> {
         match self {
-            Self::Today => today,
+            Self::Today => Some(today),
             Self::Yesterday => today.yesterday(),
-            Self::Date(d) => d,
+            Self::Date(d) => Some(d),
         }
     }
 
     /// 瞬間 `now` の論理日付を今日として、指定を論理日付に直す。
-    pub fn resolve_at(self, now: Timestamp, tz: &TimeZone, boundary: DayBoundary) -> LogicalDate {
+    pub fn resolve_at(
+        self,
+        now: Timestamp,
+        tz: &TimeZone,
+        boundary: DayBoundary,
+    ) -> Option<LogicalDate> {
         self.resolve(LogicalDate::at(now, tz, boundary))
     }
 }
@@ -207,9 +220,11 @@ impl FromStr for DateSpec {
         match s {
             "today" => Ok(Self::Today),
             "yesterday" => Ok(Self::Yesterday),
-            // 形は YYYY-MM-DD だが存在しない日付（2026-02-30 など）は、ParseError::Date のまま返す
-            _ if looks_like_date(s) => s.parse().map(Self::Date),
-            _ => Err(ParseError::DateSpec(s.to_owned())),
+            // 形は YYYY-MM-DD だが存在しない日付（2026-02-30 など）は、ParseError::Date で返す
+            _ => parse_ymd(s).map(Self::Date).map_err(|e| match e {
+                YmdError::Shape => ParseError::DateSpec(s.to_owned()),
+                YmdError::Nonexistent => ParseError::Date(s.to_owned()),
+            }),
         }
     }
 }
@@ -247,17 +262,6 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-/// 端末のタイムゾーン。
-///
-/// 決められないとき（`/etc/localtime` が読めない、`TZ` が解釈できないなど）は誤りを返す。
-/// 黙って UTC にすると、日付が気づかれずにずれるため。どうするかは呼び出し側が決める。
-///
-/// IANA の名前（`Asia/Tokyo` など）は [`TimeZone::iana_name`] で得られるが、
-/// POSIX 形式の `TZ` などでは名前が無い（`None`）。
-pub fn system_time_zone() -> Result<TimeZone, jiff::Error> {
-    TimeZone::try_system()
-}
-
 /// カレンダー日 `date` の論理日付が始まる瞬間（その日の切り替わり時刻）。
 ///
 /// - 切り替わり時刻が夏時間の開始で飛ばされるなら、飛ばされた後の最初の瞬間
@@ -279,22 +283,24 @@ fn day_start(date: Date, tz: &TimeZone, boundary: DayBoundary) -> Option<Timesta
     }
 }
 
-/// 前日。暦の最初の日（-9999-01-01）だけはそのまま返す。
-fn prev_day(d: Date) -> Date {
-    d.yesterday().unwrap_or(d)
+/// `YYYY-MM-DD` を読めなかった理由。
+enum YmdError {
+    /// 形が `YYYY-MM-DD`（年は4桁、月・日は2桁の数字）でない。
+    Shape,
+    /// 形は合っているが、存在しない日付（2026-02-30、0000年など）。
+    Nonexistent,
 }
 
-/// `YYYY-MM-DD` の形（数字と `-` の並び）をしているか。日付として存在するかは見ない。
-fn looks_like_date(s: &str) -> bool {
+/// `YYYY-MM-DD` を読む。[`LogicalDate`] と [`DateSpec`] の読み取りはここだけを使う。
+fn parse_ymd(s: &str) -> Result<LogicalDate, YmdError> {
     let b = s.as_bytes();
-    b.len() == 10
-        && b.iter().enumerate().all(|(i, c)| {
-            if i == 4 || i == 7 {
-                *c == b'-'
-            } else {
-                c.is_ascii_digit()
-            }
-        })
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return Err(YmdError::Shape);
+    }
+    let year = four_digits(&b[0..4]).ok_or(YmdError::Shape)?;
+    let month = two_digits(&b[5..7]).ok_or(YmdError::Shape)?;
+    let day = two_digits(&b[8..10]).ok_or(YmdError::Shape)?;
+    LogicalDate::new(year as i16, month as i8, day as i8).ok_or(YmdError::Nonexistent)
 }
 
 fn two_digits(b: &[u8]) -> Option<u8> {
@@ -565,7 +571,7 @@ mod tests {
         let b = boundary("06:00");
         assert_eq!(
             DateSpec::Today.resolve_at(now, &tokyo, b),
-            date("2026-11-01")
+            Some(date("2026-11-01"))
         );
 
         // 保存済みの日付は値として読み戻すだけで、付け直さない
@@ -589,10 +595,11 @@ mod tests {
     fn date_spec_parses_and_resolves() {
         let today = date("2026-03-01");
         let spec = |s: &str| s.parse::<DateSpec>().unwrap();
-        assert_eq!(spec("today").resolve(today), date("2026-03-01"));
-        assert_eq!(spec("yesterday").resolve(today), date("2026-02-28"));
-        assert_eq!(spec("2026-10-31").resolve(today), date("2026-10-31"));
-        assert_eq!(DateSpec::default().resolve(today), today);
+        assert_eq!(spec("today").resolve(today), Some(date("2026-03-01")));
+        assert_eq!(spec("yesterday").resolve(today), Some(date("2026-02-28")));
+        assert_eq!(spec("2026-10-31").resolve(today), Some(date("2026-10-31")));
+        assert_eq!(DateSpec::default().resolve(today), Some(today));
+        assert_eq!(spec("yesterday").resolve(LogicalDate::MIN), None);
     }
 
     #[test]
@@ -603,11 +610,11 @@ mod tests {
         let b = DayBoundary::DEFAULT;
         assert_eq!(
             DateSpec::Today.resolve_at(now, &tokyo, b),
-            date("2026-11-01")
+            Some(date("2026-11-01"))
         );
         assert_eq!(
             DateSpec::Yesterday.resolve_at(now, &tokyo, b),
-            date("2026-10-31")
+            Some(date("2026-10-31"))
         );
     }
 
@@ -663,6 +670,19 @@ mod tests {
         assert_eq!(LogicalDate::new(-1, 1, 1), None);
         assert_eq!(date("2026-12-31").tomorrow(), Some(date("2027-01-01")));
         assert_eq!(date("9999-12-31").tomorrow(), None);
+        assert_eq!(date("0001-01-01").yesterday(), None);
+        // 1〜9999年の外の瞬間は端の日に収め、読み戻せる文字列だけを作る
+        let b = DayBoundary::DEFAULT;
+        assert_eq!(
+            LogicalDate::at(Timestamp::MIN, &TimeZone::UTC, b),
+            LogicalDate::MIN
+        );
+        assert_eq!(LogicalDate::MIN.to_string(), "0001-01-01");
+        // jiff の最後の瞬間は 9999-12-30 のうち。どのタイムゾーンでも読み戻せる日付になる
+        for zone in [TimeZone::UTC, tz("Asia/Tokyo"), tz("Pacific/Kiritimati")] {
+            let last = LogicalDate::at(Timestamp::MAX, &zone, b);
+            assert_eq!(last.to_string().parse(), Ok(last));
+        }
     }
 
     #[test]
