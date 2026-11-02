@@ -826,10 +826,23 @@ mod tests {
         // zoneinfo の外にコピーした TZif ファイルは、名前の無いタイムゾーンとして読まれる
         let dir = tempfile::tempdir().unwrap();
         let unnamed = dir.path().join("localtime");
-        // ほかのテストの `tz("Asia/Tokyo")` などと同じく、システムのタイムゾーンデータを使う
-        let source = "/usr/share/zoneinfo/America/New_York";
-        std::fs::copy(source, &unnamed)
-            .unwrap_or_else(|e| panic!("needs the system tzdata ({source}): {e}"));
+        // ほかのテストの `tz("Asia/Tokyo")` などと同じく、システムのタイムゾーンデータを使う。
+        // 探す場所は jiff と同じ（環境変数 TZDIR、なければ決まったフォルダ）
+        let source = std::env::var_os("TZDIR")
+            .map(std::path::PathBuf::from)
+            .into_iter()
+            .chain(
+                [
+                    "/usr/share/zoneinfo",
+                    "/usr/share/lib/zoneinfo",
+                    "/etc/zoneinfo",
+                ]
+                .map(std::path::PathBuf::from),
+            )
+            .map(|dir| dir.join("America/New_York"))
+            .find(|path| path.is_file())
+            .expect("needs the system tzdata (America/New_York)");
+        std::fs::copy(&source, &unnamed).unwrap();
         for (tz_env, named, expected) in [
             ("Asia/Tokyo", true, "Asia/Tokyo"),
             ("JST-9", false, "JST-9"),
@@ -838,11 +851,7 @@ mod tests {
             (unnamed.to_str().unwrap(), false, "-04:00"),
         ] {
             let out = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "domain::logical_date::tests::system_time_zone_record_in_child",
-                    "--test-threads=1",
-                ])
+                .args(["--exact", &child_test_name(), "--test-threads=1"])
                 .env("TZ", tz_env)
                 .env(CHILD_EXPECTED, expected)
                 .env(CHILD_NAMED, if named { "1" } else { "0" })
@@ -855,6 +864,13 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
+    }
+
+    /// 子プロセスで走らせるテストの名前（クレート名を除いた、テストの実行時に指定する形）。
+    #[cfg(unix)]
+    fn child_test_name() -> String {
+        let (_crate, module) = module_path!().split_once("::").unwrap();
+        format!("{module}::system_time_zone_record_in_child")
     }
 
     /// [`records_system_time_zone_without_iana_name`] が子プロセスで走らせる。ふだんは何もしない。
