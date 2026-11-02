@@ -109,9 +109,19 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 
 ```json
 {"error": {"code": "permission_denied", "required_scope": "todo", "message": "This agent is not allowed to modify TODOs. Enable it in Yunagi > Settings > Agents."}}
+{"error": {"code": "conflict", "reason": "user_editing", "message": "The user is editing this item. Try again later."}}
 ```
 
-エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`（対象が直前に変更された、または利用者が入力中。アーキテクチャ設計書 4.1）、`storage_unavailable`。利用者が入力中で `conflict` になった場合は、`message` でその旨と、しばらくしてからやり直すよう伝える（例：`The user is editing this item. Try again later.`）。`message` の言語は未決（9章）。
+エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`。
+
+`conflict` には、エージェントが次の動きを決められるよう、理由を `reason` 欄で付ける。CLI の終了コードはどちらの理由でも 5 で、`--json` のときは同じ JSON を出し、テキスト出力では `message` を表示する。
+
+| `reason` | 意味 | エージェントの次の動き |
+| --- | --- | --- |
+| `changed` | 対象が直前に変更された（`edit_note` の `--expect` の不一致、`agent revert` で対象がその後に人に変更されている場合など） | 最新の内容を読み直してから、必要なら操作を組み立て直す |
+| `user_editing` | 利用者が対象を入力中（アーキテクチャ設計書 4.1）。操作は何も反映していない | 同じ操作を、しばらくしてからそのままやり直す |
+
+`user_editing` の場合は、`message` でもその旨と、しばらくしてからやり直すよう伝える（例：`The user is editing this item. Try again later.`）。`message` の言語は未決（9章）。
 
 ## 5. 依頼文の書き出し（A-06）
 
