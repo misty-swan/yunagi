@@ -3,7 +3,8 @@
 //!
 //! - アプリは起動時に取り、終了まで持ち続ける（[`Database`] が持つ）。
 //! - 直接モードの CLI・MCP は、操作ごとに取ってから開き、終わったら離す
-//!   （[`Database::with_locked`]）。
+//!   （[`Database::with_locked`]）。データベースの場所（保存先）は、ロックを取った後で求める
+//!   （[`DbLock::database_path`]）。
 //! - [`Database::open`] はロック（[`DbLock`]）を受け取らないと呼べない。
 //!   これで、ロックを取らずにマイグレーションが走ることを型で防ぐ。
 //! - ロックは既定ディレクトリ（[`DefaultDir`]）でしか取れない。[`DefaultDir`] は本番では
@@ -19,11 +20,11 @@
 use std::fmt;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::data_dir::DefaultDir;
+use super::data_dir::{self, DataDirError, DefaultDir};
 use super::{Database, StorageError};
 
 /// ロックファイルの名前。置き場所は既定ディレクトリ（アーキテクチャ設計書 6章。YUN-20）。
@@ -159,23 +160,55 @@ impl std::error::Error for LockError {
     }
 }
 
+/// ロックを離さずに閉じようとして（[`Database::close_keeping_lock`]）、閉じるのに失敗した。
+/// 接続は手放してある。ロックは離さずに返すので、呼び出し側は持ち続けるか手放すかを選べる。
+#[derive(Debug)]
+pub struct CloseError {
+    /// 閉じるのに失敗した理由。
+    pub error: StorageError,
+    /// 持ったままのロック。
+    pub lock: DbLock,
+}
+
+impl DbLock {
+    /// ロックを持ったまま、`config.json` から保存先を求め、そこの `yunagi.db` のパスを返す。
+    ///
+    /// データベースのパスは、ロックを取った後で求める（アーキテクチャ設計書 4.2）。取る前に
+    /// 求めると、待っている間にアプリが保存先を移したとき、古い保存先に空のデータベースを
+    /// 作ってしまうため。
+    pub fn database_path(&self) -> Result<PathBuf, DataDirError> {
+        Ok(data_dir::database_path(&data_dir::resolve_data_dir(
+            &self.default_dir,
+        )?))
+    }
+}
+
 impl Database {
     /// 接続を閉じ、ロックは離さずに返す。保存先の変更
     /// （[`super::data_dir::change_data_dir`]）の前に、アプリがデータベースを閉じるのに使う
     /// （閉じてからロックを取り直すと、その間に CLI・MCP がデータベースを開きうるため）。
     ///
-    /// 閉じるのに失敗したら（WAL の書き戻しの失敗など）、接続を手放し、ロックも離してから
-    /// エラーを返す。
-    pub fn close_keeping_lock(self) -> Result<DbLock, StorageError> {
+    /// 閉じるのに失敗したら（WAL の書き戻しの失敗など）、接続を手放してから、
+    /// ロックを持ったまま [`CloseError`] で返す。
+    pub fn close_keeping_lock(self) -> Result<DbLock, Box<CloseError>> {
         let Self { conn, _lock: lock } = self;
-        // 失敗したときは、map_err の中で接続が手放されてから、関数を抜けるときにロックが離れる
-        conn.close().map_err(|(_, e)| StorageError::from(e))?;
-        Ok(lock)
+        match conn.close() {
+            Ok(()) => Ok(lock),
+            // 失敗したときに返ってくる接続は、ここで手放す
+            Err((_, e)) => Err(Box::new(CloseError {
+                error: StorageError::from(e),
+                lock,
+            })),
+        }
     }
 
     /// 直接モードの CLI・MCP の1回の操作：既定ディレクトリ `default_dir` の `yunagi.lock` を
-    /// 取ってから `db_path` を開き、`operation` を行い、終わったら閉じてロックを離す
+    /// 取ってから、保存先の `yunagi.db` を開き、`operation` を行い、終わったら閉じてロックを離す
     /// （アーキテクチャ設計書 4章 2）。
+    ///
+    /// 保存先は、ロックを取った後で `config.json` から求める（[`DbLock::database_path`]）。
+    /// 求められなければ（`config.json` が壊れているなど）、ロックを離してから
+    /// [`DataDirError`] を返す。
     ///
     /// ロックが取れなければ、最大 `wait` 待ってから [`StorageError::Lock`] を返す。
     /// `operation` が失敗しても、閉じてロックを離してからその失敗を返す（閉じるのにも
@@ -184,14 +217,14 @@ impl Database {
     /// [`DbLock::acquire`] と同じ。
     pub fn with_locked<T, E>(
         default_dir: &DefaultDir,
-        db_path: impl AsRef<Path>,
         wait: Duration,
         operation: impl FnOnce(&mut Database) -> Result<T, E>,
     ) -> Result<T, E>
     where
-        E: From<StorageError>,
+        E: From<StorageError> + From<DataDirError>,
     {
         let lock = DbLock::acquire(default_dir, wait).map_err(StorageError::Lock)?;
+        let db_path = lock.database_path()?;
         let mut db = Database::open(lock, db_path)?;
         let result = operation(&mut db);
         let closed = db.close();
@@ -204,6 +237,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Read};
+    use std::path::Path;
     use std::process::{Child, Command, Stdio};
 
     use super::*;
@@ -309,6 +343,26 @@ mod tests {
         }
     }
 
+    /// `with_locked` に渡す操作の失敗。本番の CLI・MCP のエラーと同じく、ストレージと
+    /// 保存先の両方の失敗を受け取れる。
+    #[derive(Debug)]
+    enum TestError {
+        Storage(StorageError),
+        DataDir(DataDirError),
+    }
+
+    impl From<StorageError> for TestError {
+        fn from(e: StorageError) -> Self {
+            Self::Storage(e)
+        }
+    }
+
+    impl From<DataDirError> for TestError {
+        fn from(e: DataDirError) -> Self {
+            Self::DataDir(e)
+        }
+    }
+
     /// 一時フォルダ `dir` を既定ディレクトリとして使う。
     fn dd(dir: &tempfile::TempDir) -> DefaultDir {
         DefaultDir::for_test(dir.path())
@@ -408,21 +462,24 @@ mod tests {
         // 子がロックを取ってデータベースを開いている（アプリの起動中に当たる）
         let child = spawn_holder(path, Some(&db_path));
 
-        let err = Database::with_locked(path, &db_path, Duration::from_millis(100), |_db| {
-            Ok::<_, StorageError>(())
+        let err = Database::with_locked(path, Duration::from_millis(100), |_db| {
+            Ok::<_, TestError>(())
         })
         .unwrap_err();
         assert!(
-            matches!(err, StorageError::Lock(LockError::Busy { .. })),
+            matches!(
+                err,
+                TestError::Storage(StorageError::Lock(LockError::Busy { .. }))
+            ),
             "{err:?}"
         );
 
         child.release();
         // 子が閉じた後は開いて操作でき、操作が終わるとロックが離れている
-        let mode = Database::with_locked(path, &db_path, Duration::ZERO, |db| {
+        let mode = Database::with_locked(path, Duration::ZERO, |db| {
             db.connection()
                 .pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
-                .map_err(StorageError::from)
+                .map_err(|e| TestError::Storage(e.into()))
         })
         .unwrap();
         assert_eq!(mode, "wal");
@@ -433,15 +490,37 @@ mod tests {
     fn with_locked_releases_the_lock_when_the_operation_fails() {
         let dir = tempfile::tempdir().unwrap();
         let path = &dd(&dir);
-        let db_path = super::super::data_dir::database_path(dir.path());
 
-        let err = Database::with_locked(path, &db_path, Duration::ZERO, |_db| {
-            Err::<(), _>(StorageError::WalUnavailable {
+        let err = Database::with_locked(path, Duration::ZERO, |_db| {
+            Err::<(), _>(TestError::Storage(StorageError::WalUnavailable {
                 mode: "test".into(),
-            })
+            }))
         })
         .unwrap_err();
-        assert!(matches!(err, StorageError::WalUnavailable { .. }));
+        assert!(
+            matches!(err, TestError::Storage(StorageError::WalUnavailable { .. })),
+            "{err:?}"
+        );
+        drop(DbLock::acquire(path, Duration::ZERO).unwrap());
+    }
+
+    #[test]
+    fn with_locked_releases_the_lock_when_the_config_is_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = &dd(&dir);
+        std::fs::write(
+            dir.path().join(super::super::data_dir::CONFIG_FILE_NAME),
+            "{ not json",
+        )
+        .unwrap();
+        let err =
+            Database::with_locked(path, Duration::ZERO, |_db| Ok::<_, TestError>(())).unwrap_err();
+        assert!(
+            matches!(err, TestError::DataDir(DataDirError::InvalidConfig { .. })),
+            "{err:?}"
+        );
+        // データベースは作らず、ロックは離している
+        assert!(!super::super::data_dir::database_path(dir.path()).exists());
         drop(DbLock::acquire(path, Duration::ZERO).unwrap());
     }
 
@@ -466,26 +545,72 @@ mod tests {
         // アプリ（子プロセス）が、既定ディレクトリのロックを取って、新しい保存先のデータベースを開く
         let app = spawn_holder(default_dir, Some(&db_path));
 
-        // CLI（このプロセス）も、同じ既定ディレクトリから保存先を求めて開こうとし、ロックで止まる
-        let cli_db_path = database_path(&resolve_data_dir(default_dir).unwrap());
-        let err = Database::with_locked(default_dir, &cli_db_path, Duration::ZERO, |_db| {
-            Ok::<_, StorageError>(())
-        })
-        .unwrap_err();
+        // CLI（このプロセス）も、同じ既定ディレクトリのロックを取ろうとし、止まる
+        let err = Database::with_locked(default_dir, Duration::ZERO, |_db| Ok::<_, TestError>(()))
+            .unwrap_err();
         assert!(
-            matches!(err, StorageError::Lock(LockError::Busy { .. })),
+            matches!(
+                err,
+                TestError::Storage(StorageError::Lock(LockError::Busy { .. }))
+            ),
             "{err:?}"
         );
         // ロックファイルは既定ディレクトリにだけあり、保存先には作られていない
         assert!(default.join(LOCK_FILE_NAME).exists());
         assert!(!data_dir.join(LOCK_FILE_NAME).exists());
 
-        // アプリが閉じた後は、CLI が開ける
+        // アプリが閉じた後は、CLI が新しい保存先のデータベースを開ける
         app.release();
-        Database::with_locked(default_dir, &cli_db_path, Duration::ZERO, |_db| {
-            Ok::<_, StorageError>(())
+        let opened = Database::with_locked(default_dir, Duration::ZERO, |db| {
+            Ok::<_, TestError>(db.connection().path().map(PathBuf::from))
         })
         .unwrap();
+        assert_eq!(
+            opened.map(|p| p.canonicalize().unwrap()),
+            Some(db_path.canonicalize().unwrap())
+        );
+    }
+
+    #[test]
+    fn with_locked_opens_the_data_dir_recorded_after_waiting_for_the_lock() {
+        use super::super::data_dir::{change_data_dir, database_path};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let default = tmp.path().join("default");
+        std::fs::create_dir(&default).unwrap();
+        let default_dir = DefaultDir::for_test(&default);
+        let new_dir = tmp.path().join("new");
+
+        // アプリがデータベースを開いている
+        let app_db = Database::open(
+            DbLock::acquire(&default_dir, Duration::ZERO).unwrap(),
+            database_path(&default),
+        )
+        .unwrap();
+        // CLI はロックを待つ
+        let cli = {
+            let default_dir = default_dir.clone();
+            thread::spawn(move || {
+                Database::with_locked(&default_dir, Duration::from_secs(30), |db| {
+                    Ok::<_, TestError>(db.connection().path().map(PathBuf::from))
+                })
+                .unwrap()
+            })
+        };
+        // 待っている間に、アプリがロックを持ったまま保存先を移し、閉じる
+        thread::sleep(Duration::from_millis(200));
+        let lock = app_db.close_keeping_lock().unwrap();
+        change_data_dir(&lock, &new_dir).unwrap();
+        drop(lock);
+
+        // CLI は、ロックを取った後に記録を読むので、新しい保存先を開く。古い保存先に
+        // 空のデータベースを作らない
+        let opened = cli.join().unwrap();
+        assert_eq!(
+            opened.map(|p| p.canonicalize().unwrap()),
+            Some(database_path(&new_dir).canonicalize().unwrap())
+        );
+        assert!(!database_path(&default).exists());
     }
 
     #[test]

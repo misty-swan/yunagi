@@ -18,7 +18,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use error::StorageError;
-pub use lock::{DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
+pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
 pub use ulid::{ParseUlidError, Ulid};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。
@@ -72,9 +72,8 @@ impl Database {
     /// 接続を閉じ、ロックを離す。閉じるのに失敗したら（WAL の書き戻しの失敗など）エラーを返す。
     /// 閉じずに手放した（drop した）ときは、閉じるときの失敗は捨てられる。
     pub fn close(self) -> Result<(), StorageError> {
-        // 接続を閉じてから、関数の終わりでロックを離す
-        let Self { conn, _lock } = self;
-        conn.close().map_err(|(_, e)| StorageError::from(e))
+        // 接続を閉じてから、ロックを離す
+        self.close_keeping_lock().map(drop).map_err(|e| e.error)
     }
 
     /// SQLite への接続。表ごとの基本の読み書きは [`table`] の関数に渡して行う。
