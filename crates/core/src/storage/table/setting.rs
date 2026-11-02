@@ -4,20 +4,24 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::{execute, query_row};
 use crate::storage::StorageError;
 
 /// キーの値（JSON）。無ければ `None`（使う側が既定値を使う）。
 pub fn get(conn: &Connection, key: &str) -> Result<Option<String>, StorageError> {
-    Ok(conn
-        .query_row("SELECT value FROM setting WHERE key = ?1", [key], |r| {
-            r.get(0)
-        })
-        .optional()?)
+    Ok(query_row(
+        conn,
+        "SELECT value FROM setting WHERE key = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .optional()?)
 }
 
 /// キーの値（JSON）を書く。すでにあれば置き換える。JSON として正しくなければ失敗する。
 pub fn set(conn: &Connection, key: &str, value_json: &str) -> Result<(), StorageError> {
-    conn.execute(
+    execute(
+        conn,
         "INSERT INTO setting (key, value) VALUES (?1, ?2) \
          ON CONFLICT (key) DO UPDATE SET value = excluded.value",
         params![key, value_json],
@@ -27,13 +31,13 @@ pub fn set(conn: &Connection, key: &str, value_json: &str) -> Result<(), Storage
 
 /// キーを消す（既定値に戻す）。消したら `true`、無ければ `false`。
 pub fn remove(conn: &Connection, key: &str) -> Result<bool, StorageError> {
-    let n = conn.execute("DELETE FROM setting WHERE key = ?1", [key])?;
+    let n = execute(conn, "DELETE FROM setting WHERE key = ?1", [key])?;
     Ok(n == 1)
 }
 
 /// すべてのキーと値を、キーの順で返す。
 pub fn list(conn: &Connection) -> Result<Vec<(String, String)>, StorageError> {
-    let mut stmt = conn.prepare("SELECT key, value FROM setting ORDER BY key")?;
+    let mut stmt = conn.prepare_cached("SELECT key, value FROM setting ORDER BY key")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }

@@ -6,7 +6,7 @@
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::{format_time, get_opt_time, get_time, opt_time, text_enum};
+use super::{Time, execute, get_opt_time, get_time, opt_time, query_row, text_enum};
 use crate::domain::logical_date::LogicalDate;
 use crate::storage::{StorageError, Ulid};
 
@@ -105,7 +105,8 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Item> {
 
 /// 行を入れる。その日の day の行が先に要る（外部キー）。
 pub fn insert(conn: &Connection, item: &Item) -> Result<(), StorageError> {
-    conn.execute(
+    execute(
+        conn,
         &format!(
             "INSERT INTO item ({COLUMNS}) VALUES \
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"
@@ -126,8 +127,8 @@ pub fn insert(conn: &Connection, item: &Item) -> Result<(), StorageError> {
             item.agent_client_id,
             item.external_ref_id,
             opt_time(item.completed_at),
-            format_time(item.created_at),
-            format_time(item.updated_at),
+            Time(item.created_at),
+            Time(item.updated_at),
             opt_time(item.deleted_at),
         ],
     )?;
@@ -136,18 +137,18 @@ pub fn insert(conn: &Connection, item: &Item) -> Result<(), StorageError> {
 
 /// id の行。論理削除したものも返す。無ければ `None`。
 pub fn get(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    Ok(conn
-        .query_row(
-            &format!("SELECT {COLUMNS} FROM item WHERE id = ?1"),
-            [id],
-            from_row,
-        )
-        .optional()?)
+    Ok(query_row(
+        conn,
+        &format!("SELECT {COLUMNS} FROM item WHERE id = ?1"),
+        [id],
+        from_row,
+    )
+    .optional()?)
 }
 
 /// その日の項目を並び順（`sort_key`、同じなら id）で返す。論理削除したものは含めない。
 pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, StorageError> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {COLUMNS} FROM item WHERE date = ?1 AND deleted_at IS NULL ORDER BY sort_key, id"
     ))?;
     let rows = stmt.query_map([date], from_row)?;
@@ -156,7 +157,7 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, S
 
 /// `carried_from_id` で `id` を指す項目（`id` を持ち越して作った項目）。論理削除したものも含める。
 pub fn list_carried_from(conn: &Connection, id: Ulid) -> Result<Vec<Item>, StorageError> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {COLUMNS} FROM item WHERE carried_from_id = ?1 ORDER BY id"
     ))?;
     let rows = stmt.query_map([id], from_row)?;
@@ -170,7 +171,8 @@ pub fn list_carried_from(conn: &Connection, id: Ulid) -> Result<Vec<Item>, Stora
 /// 古い値で書いても、削除が取り消されないようにするため。欄ごとの書き込み
 /// （アーキテクチャ設計書 4.1）は項目の操作の課題で作る。
 pub fn update(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
-    let n = conn.execute(
+    let n = execute(
+        conn,
         "UPDATE item SET kind = ?2, text = ?3, status = ?4, close_reason = ?5, sort_key = ?6, \
          carry_count = ?7, carried_from_id = ?8, split_from_id = ?9, resolution_note = ?10, \
          origin = ?11, agent_client_id = ?12, external_ref_id = ?13, completed_at = ?14, \
@@ -191,7 +193,7 @@ pub fn update(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
             item.agent_client_id,
             item.external_ref_id,
             opt_time(item.completed_at),
-            format_time(item.updated_at),
+            Time(item.updated_at),
         ],
     )?;
     Ok(n == 1)
@@ -200,9 +202,10 @@ pub fn update(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
 /// 論理削除する（`deleted_at` と `updated_at` に `now` を入れる）。
 /// 行が無いか、すでに削除済みなら何もせず `false`。
 pub fn soft_delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<bool, StorageError> {
-    let n = conn.execute(
+    let n = execute(
+        conn,
         "UPDATE item SET deleted_at = ?2, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
-        params![id, format_time(now)],
+        params![id, Time(now)],
     )?;
     Ok(n == 1)
 }
@@ -210,9 +213,10 @@ pub fn soft_delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<bool, 
 /// 論理削除を戻す（`deleted_at` を NULL にし、`updated_at` に `now` を入れる）。削除の取り消しに使う。
 /// 行が無いか、削除されていなければ何もせず `false`。
 pub fn restore(conn: &Connection, id: Ulid, now: Timestamp) -> Result<bool, StorageError> {
-    let n = conn.execute(
+    let n = execute(
+        conn,
         "UPDATE item SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NOT NULL",
-        params![id, format_time(now)],
+        params![id, Time(now)],
     )?;
     Ok(n == 1)
 }

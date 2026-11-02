@@ -34,6 +34,10 @@ pub(crate) struct Migration {
 ///
 /// 一度配布した版に入ったものは書き換えない（利用者のデータベースには適用済みのため、
 /// 書き換えても反映されない）。スキーマを変えるときは、新しい番号を末尾に足す。
+///
+/// 表の構造を変えなくても、保存する値の種類（item の `status`、agent_client の `scopes` など）を
+/// 足すときは、新しい番号を足す（SQL は空でもよい）。旧版は新しい番号のデータベースを開かずに
+/// 断るので、知らない値を読んで途中で止まることがない（設計書 1.1）。
 pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
     version: 1,
     name: "create initial tables",

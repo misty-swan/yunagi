@@ -5,7 +5,7 @@
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::{format_time, get_time};
+use super::{Time, get_time, query_row};
 use crate::domain::logical_date::LogicalDate;
 use crate::storage::StorageError;
 
@@ -51,16 +51,16 @@ pub fn get(
     doc: TextDoc,
     date: LogicalDate,
 ) -> Result<Option<TextDocRow>, StorageError> {
-    Ok(conn
-        .query_row(
-            &format!(
-                "SELECT date, body, rev, updated_at FROM {} WHERE date = ?1",
-                doc.table()
-            ),
-            [date],
-            from_row,
-        )
-        .optional()?)
+    Ok(query_row(
+        conn,
+        &format!(
+            "SELECT date, body, rev, updated_at FROM {} WHERE date = ?1",
+            doc.table()
+        ),
+        [date],
+        from_row,
+    )
+    .optional()?)
 }
 
 /// 本文を書き、書いた後の版の番号を返す。行が無ければ版 1 で作り、あれば版を 1 増やす。
@@ -75,7 +75,8 @@ pub fn save(
     body: &str,
     now: Timestamp,
 ) -> Result<i64, StorageError> {
-    let rev = conn.query_row(
+    let rev = query_row(
+        conn,
         &format!(
             "INSERT INTO {table} (date, body, rev, updated_at) VALUES (?1, ?2, 1, ?3) \
              ON CONFLICT (date) DO UPDATE SET body = excluded.body, rev = {table}.rev + 1, \
@@ -83,7 +84,7 @@ pub fn save(
              RETURNING rev",
             table = doc.table()
         ),
-        params![date, body, format_time(now)],
+        params![date, body, Time(now)],
         |r| r.get(0),
     )?;
     Ok(rev)

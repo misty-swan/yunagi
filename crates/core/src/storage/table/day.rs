@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::{format_time, get_opt_time, get_time, opt_time};
+use super::{Time, execute, get_opt_time, get_time, opt_time, query_row};
 use crate::domain::logical_date::LogicalDate;
 use crate::storage::StorageError;
 
@@ -41,22 +41,23 @@ pub fn ensure(
     tz: &str,
     now: Timestamp,
 ) -> Result<bool, StorageError> {
-    let n = conn.execute(
+    let n = execute(
+        conn,
         "INSERT INTO day (date, tz, created_at) VALUES (?1, ?2, ?3) ON CONFLICT (date) DO NOTHING",
-        params![date, tz, format_time(now)],
+        params![date, tz, Time(now)],
     )?;
     Ok(n == 1)
 }
 
 /// その日の行。無ければ `None`。
 pub fn get(conn: &Connection, date: LogicalDate) -> Result<Option<Day>, StorageError> {
-    Ok(conn
-        .query_row(
-            &format!("SELECT {COLUMNS} FROM day WHERE date = ?1"),
-            [date],
-            from_row,
-        )
-        .optional()?)
+    Ok(query_row(
+        conn,
+        &format!("SELECT {COLUMNS} FROM day WHERE date = ?1"),
+        [date],
+        from_row,
+    )
+    .optional()?)
 }
 
 /// 持ち越しの状態を表す時刻のどれか。
@@ -89,7 +90,8 @@ pub fn set_carryover(
     mark: CarryoverMark,
     at: Option<Timestamp>,
 ) -> Result<bool, StorageError> {
-    let n = conn.execute(
+    let n = execute(
+        conn,
         &format!("UPDATE day SET {} = ?2 WHERE date = ?1", mark.column()),
         params![date, opt_time(at)],
     )?;

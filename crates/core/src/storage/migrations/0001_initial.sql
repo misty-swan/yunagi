@@ -5,7 +5,8 @@
 -- - 日付は論理日付 `YYYY-MM-DD`。
 -- - id は ULID（26 文字）。
 -- - 状態などの値（kind・status など）は、検査（CHECK）を付けずにコアの型で確かめる。
---   値を足すたびに表を作り直さずに済むようにするため。
+--   値を足すたびに表を作り直さずに済むようにするため。ただし値を足すときは、旧版が
+--   知らない値を読んで止まらないよう、新しい番号のマイグレーションを足す（設計書 1.1）。
 -- - JSON の列は、正しい JSON であること（scopes は配列であること）だけを確かめる。
 -- - external_ref は MVP 後の機能のため、まだ作らない（item.external_ref_id は参照先を持たない列）。
 
@@ -35,8 +36,8 @@ CREATE TABLE item (
     close_reason    TEXT,
     sort_key        TEXT NOT NULL,
     carry_count     INTEGER NOT NULL,
-    carried_from_id TEXT,
-    split_from_id   TEXT,
+    carried_from_id TEXT REFERENCES item (id),
+    split_from_id   TEXT REFERENCES item (id),
     resolution_note TEXT,
     origin          TEXT NOT NULL,
     agent_client_id TEXT REFERENCES agent_client (id),
@@ -52,6 +53,8 @@ CREATE INDEX item_date_sort_key ON item (date, sort_key);
 -- 持ち越し済み・分割済みかの判定（元を指す項目があるか）と、ノートの行へのさかのぼり
 CREATE INDEX item_carried_from_id ON item (carried_from_id);
 CREATE INDEX item_split_from_id ON item (split_from_id);
+-- 外部キーの参照元の列。参照先の行を消す・id を変えるときに、表全体を調べずに済むように
+CREATE INDEX item_agent_client_id ON item (agent_client_id) WHERE agent_client_id IS NOT NULL;
 
 CREATE TABLE note (
     date       TEXT NOT NULL PRIMARY KEY REFERENCES day (date),
@@ -91,13 +94,16 @@ CREATE TABLE change_log (
     after           TEXT CHECK (after IS NULL OR json_valid(after)),
     created_at      TEXT NOT NULL,
     reverted_at     TEXT,
-    revert_of_id    TEXT,
+    revert_of_id    TEXT REFERENCES change_log (id),
     seen_at         TEXT
 ) STRICT;
 
 -- 項目の行頭の菱形（その項目を指す記録があるか）と、取り消し前の確認
 CREATE INDEX change_log_target ON change_log (target_type, target_id);
 -- エージェントによる未確認の変更（上部のバーとサイドバーの件数）。確認すると索引から外れる
+CREATE INDEX change_log_agent_client_id ON change_log (agent_client_id)
+    WHERE agent_client_id IS NOT NULL;
+CREATE INDEX change_log_revert_of_id ON change_log (revert_of_id) WHERE revert_of_id IS NOT NULL;
 CREATE INDEX change_log_unseen_agent ON change_log (id) WHERE actor = 'agent' AND seen_at IS NULL;
 
 CREATE TABLE setting (

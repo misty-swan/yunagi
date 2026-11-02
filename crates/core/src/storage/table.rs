@@ -11,7 +11,8 @@
 //!
 //! - 時刻（[`Timestamp`]）は UTC の ISO 8601 で、ミリ秒までの決まった桁数
 //!   （`2026-11-03T09:15:00.000Z`）。文字列の大小が時刻の前後と一致する。
-//!   ミリ秒より細かい部分は切り捨てる。
+//!   ミリ秒より細かい部分は切り捨てる（行に入れる時刻を [`now`] や [`truncate_time`] で作れば、
+//!   読み戻した値と一致する）。0 年より前の時刻は保存できない。
 //! - 日付（[`LogicalDate`]）は `YYYY-MM-DD`。
 //! - id（[`super::Ulid`]）は 26 文字の ULID。
 //! - JSON の列（設定の値・変更前後のスナップショット）は、JSON の文字列のまま受け渡す。
@@ -27,13 +28,48 @@ pub mod text_doc;
 
 use jiff::Timestamp;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Type, ValueRef};
-use rusqlite::{Row, ToSql};
+use rusqlite::{Connection, Params, Row, ToSql};
 
 use crate::domain::logical_date::LogicalDate;
 
-/// 時刻を保存する形の文字列にする。
+/// 時刻を保存する形の文字列にする。0〜9999 年の外の時刻は桁数がそろわないので、
+/// 保存するときは [`Time`] を通して範囲を確かめる。
 pub fn format_time(t: Timestamp) -> String {
     t.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// ミリ秒より細かい部分を切り捨てた時刻。保存して読み戻した値と同じになる。
+pub fn truncate_time(t: Timestamp) -> Timestamp {
+    Timestamp::from_millisecond(t.as_millisecond()).expect("truncating keeps the time in range")
+}
+
+/// いまの時刻（ミリ秒まで）。行に入れる時刻はこれで作ると、手元の値と保存した値が一致する。
+pub fn now() -> Timestamp {
+    truncate_time(Timestamp::now())
+}
+
+/// 保存できる最も早い時刻（0000-01-01T00:00:00Z）の UNIX 時刻（ミリ秒）。これより前は年の桁数が変わる。
+const EARLIEST_MS: i64 = -62_167_219_200_000;
+
+/// 保存する時刻。SQL の引数に渡すと、保存する形の文字列になる。
+/// 0 年より前（年が負になる）の時刻は、文字列の大小が時刻の前後と一致しなくなるので誤りにする
+/// （jiff の時刻は 9999 年までなので、後ろの側は考えなくてよい）。
+struct Time(Timestamp);
+
+impl ToSql for Time {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        if self.0.as_millisecond() < EARLIEST_MS {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                format!("time {} is before year 0 and cannot be stored", self.0).into(),
+            ));
+        }
+        Ok(ToSqlOutput::from(format_time(self.0)))
+    }
+}
+
+/// NULL になりうる時刻を、保存する形にする。
+fn opt_time(t: Option<Timestamp>) -> Option<Time> {
+    t.map(Time)
 }
 
 /// 行の `idx` 番目の列を時刻として読む。
@@ -53,9 +89,19 @@ fn parse_time(idx: usize, s: &str) -> rusqlite::Result<Timestamp> {
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(e)))
 }
 
-/// NULL になりうる時刻を保存する形にする。
-fn opt_time(t: Option<Timestamp>) -> Option<String> {
-    t.map(format_time)
+/// SQL を実行する。解析した文は接続ごとに取っておき、同じ SQL では使い回す。
+fn execute(conn: &Connection, sql: &str, params: impl Params) -> rusqlite::Result<usize> {
+    conn.prepare_cached(sql)?.execute(params)
+}
+
+/// 1行を読む。解析した文は使い回す（[`execute`] と同じ）。
+fn query_row<T>(
+    conn: &Connection,
+    sql: &str,
+    params: impl Params,
+    f: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>,
+) -> rusqlite::Result<T> {
+    conn.prepare_cached(sql)?.query_row(params, f)
 }
 
 impl ToSql for LogicalDate {
@@ -208,6 +254,30 @@ mod tests {
         assert_eq!(
             format_time(at("2026-11-03T09:15:00.123987654Z")),
             "2026-11-03T09:15:00.123Z"
+        );
+    }
+
+    #[test]
+    fn now_and_truncate_time_keep_only_milliseconds() {
+        let t = at("2026-11-03T09:15:00.123987654Z");
+        assert_eq!(truncate_time(t), at("2026-11-03T09:15:00.123Z"));
+        assert_eq!(now().subsec_nanosecond() % 1_000_000, 0);
+    }
+
+    #[test]
+    fn times_before_year_0_are_not_stored() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let ok: String = conn
+            .query_row("SELECT ?1", [Time(at("0000-01-01T00:00:00Z"))], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(ok, "0000-01-01T00:00:00.000Z");
+        let too_early = at("0000-01-01T00:00:00Z") - jiff::SignedDuration::from_millis(1);
+        assert!(
+            conn.query_row("SELECT ?1", [Time(too_early)], |r| r.get::<_, String>(0))
+                .is_err()
         );
     }
 
@@ -402,7 +472,12 @@ mod tests {
         assert!(foreign_keys(conn, "day").is_empty());
         assert_eq!(
             foreign_keys(conn, "item"),
-            ["agent_client_id -> agent_client.id", "date -> day.date"]
+            [
+                "agent_client_id -> agent_client.id",
+                "carried_from_id -> item.id",
+                "date -> day.date",
+                "split_from_id -> item.id",
+            ]
         );
         assert_eq!(foreign_keys(conn, "note"), ["date -> day.date"]);
         assert_eq!(foreign_keys(conn, "reflection"), ["date -> day.date"]);
@@ -412,7 +487,10 @@ mod tests {
         );
         assert_eq!(
             foreign_keys(conn, "change_log"),
-            ["agent_client_id -> agent_client.id"]
+            [
+                "agent_client_id -> agent_client.id",
+                "revert_of_id -> change_log.id",
+            ]
         );
         assert!(foreign_keys(conn, "agent_client").is_empty());
         assert!(foreign_keys(conn, "setting").is_empty());

@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::{format_time, get_time};
+use super::{Time, execute, get_time, query_row};
 use crate::domain::logical_date::LogicalDate;
 use crate::storage::{StorageError, Ulid};
 
@@ -37,7 +37,8 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<NoteSend> {
 
 /// 行を入れる。その日の day の行と、送り先の項目が先に要る（外部キー）。
 pub fn insert(conn: &Connection, send: &NoteSend) -> Result<(), StorageError> {
-    conn.execute(
+    execute(
+        conn,
         &format!("INSERT INTO note_send ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
         params![
             send.id,
@@ -45,7 +46,7 @@ pub fn insert(conn: &Connection, send: &NoteSend) -> Result<(), StorageError> {
             send.line_text,
             send.line_fingerprint,
             send.item_id,
-            format_time(send.created_at),
+            Time(send.created_at),
         ],
     )?;
     Ok(())
@@ -53,18 +54,18 @@ pub fn insert(conn: &Connection, send: &NoteSend) -> Result<(), StorageError> {
 
 /// id の行。無ければ `None`。
 pub fn get(conn: &Connection, id: Ulid) -> Result<Option<NoteSend>, StorageError> {
-    Ok(conn
-        .query_row(
-            &format!("SELECT {COLUMNS} FROM note_send WHERE id = ?1"),
-            [id],
-            from_row,
-        )
-        .optional()?)
+    Ok(query_row(
+        conn,
+        &format!("SELECT {COLUMNS} FROM note_send WHERE id = ?1"),
+        [id],
+        from_row,
+    )
+    .optional()?)
 }
 
 /// その日のノートから送った記録を、id の順（おおよそ送った順。[`Ulid`] を参照）で返す。
 pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<NoteSend>, StorageError> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {COLUMNS} FROM note_send WHERE date = ?1 ORDER BY id"
     ))?;
     let rows = stmt.query_map([date], from_row)?;
@@ -73,7 +74,7 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<NoteSend
 
 /// その項目へ送った記録を、id の順（おおよそ送った順。[`Ulid`] を参照）で返す。
 pub fn list_by_item(conn: &Connection, item_id: Ulid) -> Result<Vec<NoteSend>, StorageError> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {COLUMNS} FROM note_send WHERE item_id = ?1 ORDER BY id"
     ))?;
     let rows = stmt.query_map([item_id], from_row)?;
