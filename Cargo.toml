@@ -16,3 +16,5 @@ yunagi-core = { path = "crates/core" }
 # 版の 2.12 系をそろえる（Tauri は major.minor が食い違うと警告する）
 tauri = { version = "=2.12.5", features = [] }
 tauri-build = { version = "=2.7.4", features = [] }
+# 時刻とタイムゾーン（論理日付の計算。crates/core/src/domain/logical_date.rs）
+jiff = "=0.2.38"
