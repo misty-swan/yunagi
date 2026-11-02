@@ -16,11 +16,11 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
-use rusqlite::backup::NO_PROGRESS;
-use rusqlite::{Connection, MAIN_DB, OpenFlags};
+use rusqlite::backup::Backup as SqliteBackup;
+use rusqlite::{Connection, OpenFlags};
 
 use super::data_dir::{self, DataDirError};
 use super::migration::{self, Migration};
@@ -109,11 +109,14 @@ impl Database {
             None
         } else {
             let secs = now_secs();
-            Some(create_backup(
-                &db_path,
-                &dir,
-                &format!("{DAILY_PREFIX}{today}-{secs}"),
-            )?)
+            // 作れなかったときも古いものは片付ける（場所が空き、次は作れることがある）
+            match create_backup(&db_path, &dir, &format!("{DAILY_PREFIX}{today}-{secs}")) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    prune(&backups, Some(today), None);
+                    return Err(e);
+                }
+            }
         };
         backups.extend(created.clone());
         prune(
@@ -151,16 +154,21 @@ impl Database {
         if !self.conn.is_autocommit() {
             return Err(BackupError::TransactionOpen);
         }
-        check_restorable(backup, &db_path, migrations)?;
+        // 確かめたのと同じ接続から写し込む（確かめた後でファイルが消えたり差し替わったり
+        // しても、確かめていない内容を写さない）
+        let src = open_restorable(backup, &db_path, migrations)?;
         let dir = backups_dir_of(&db_path);
         let saved = create_backup(
             &db_path,
             &dir,
             &format!("{PRE_RESTORE_PREFIX}{}", now_secs()),
         )?;
-        if let Err(source) = self.replace_with(backup, &dir, migrations) {
+        let pre_migration_before = pre_migration_paths(&dir);
+        if let Err(source) = self.replace_with(&src, &dir, migrations) {
             let source = Box::new(source);
-            return Err(match self.replace_with(&saved.path, &dir, migrations) {
+            let rollback = open_read_only(&saved.path)
+                .and_then(|saved_src| self.replace_with(&saved_src, &dir, migrations));
+            return Err(match rollback {
                 Ok(()) => BackupError::RestoreFailed {
                     source,
                     saved: saved.path,
@@ -171,6 +179,15 @@ impl Database {
                     saved: saved.path,
                 },
             });
+        }
+        drop(src);
+        // 古いスキーマから復元すると、マイグレーションが復元したものの写しを
+        // pre-migration-*.db として作る。選んだバックアップと同じ内容なので消す
+        // （旧版の再導入に備えて残している、本来のマイグレーション前のものを押し出さないように）
+        for path in pre_migration_paths(&dir) {
+            if !pre_migration_before.contains(&path) {
+                let _ = fs::remove_file(&path);
+            }
         }
         // データはもう置き換わっているので、片付けに失敗しても復元は失敗にしない。
         // 時計が戻っていても、退避したばかりのものは消さない
@@ -183,21 +200,23 @@ impl Database {
     /// 接続を保ったまま、`src` の内容をデータベースに写し込み、最新のスキーマにする。
     fn replace_with(
         &mut self,
-        src: &Path,
+        src: &Connection,
         backup_dir: &Path,
         migrations: &[Migration],
     ) -> Result<(), BackupError> {
-        self.conn.restore(MAIN_DB, src, NO_PROGRESS)?;
+        // 写し込み先が使用中（BUSY）のときは、少し待って続ける
+        SqliteBackup::new(src, &mut self.conn)?.run_to_completion(100, RESTORE_PAUSE, None)?;
         // 写し込んでも WAL モードのままだが、開くときと同じ設定にそろえておく
         super::configure(&self.conn)?;
         migration::migrate(&mut self.conn, backup_dir, migrations)?;
         Ok(())
     }
 
-    /// データベースのファイルのパス。
+    /// データベースのファイルのパス。開いたときに渡されたもの（SQLite がシンボリックリンクを
+    /// 辿った後のパスではなく）を使い、バックアップの置き場所をマイグレーションとそろえる。
     fn file_path(&self) -> Result<PathBuf, BackupError> {
         match self.conn.path() {
-            Some(p) if !p.is_empty() => Ok(PathBuf::from(p)),
+            Some(p) if !p.is_empty() => Ok(self.path.clone()),
             _ => Err(BackupError::NoDatabaseFile),
         }
     }
@@ -208,20 +227,22 @@ fn backups_dir_of(db_path: &Path) -> PathBuf {
     data_dir::backups_dir(db_path.parent().unwrap_or_else(|| Path::new("")))
 }
 
-/// 復元に使えるバックアップかを確かめる。ファイルには書かない。
-fn check_restorable(
+/// 写し込みの合間に待つ時間（写し込み先が使用中のとき）。
+const RESTORE_PAUSE: Duration = Duration::from_millis(10);
+
+/// 復元に使えるバックアップかを確かめ、読み取り専用で開いた接続を返す。ファイルには書かない。
+fn open_restorable(
     backup: &Path,
     db_path: &Path,
     migrations: &[Migration],
-) -> Result<(), BackupError> {
+) -> Result<Connection, BackupError> {
     // データベースそのものから写し込むと、自分を読みながら書くことになる
     if let (Ok(a), Ok(b)) = (fs::canonicalize(backup), fs::canonicalize(db_path))
         && a == b
     {
         return Err(BackupError::NotABackup(backup.to_path_buf()));
     }
-    // 読み取り専用で開く（無いファイルを作らない。バックアップに書かない）
-    let conn = Connection::open_with_flags(backup, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = open_read_only(backup)?;
     let result: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     if result != "ok" {
         return Err(BackupError::Corrupted {
@@ -234,7 +255,25 @@ fn check_restorable(
     if migration::check_supported(&conn, migrations)? == 0 {
         return Err(BackupError::NotYunagiDatabase(backup.to_path_buf()));
     }
-    Ok(())
+    Ok(conn)
+}
+
+/// 読み取り専用で開く（無いファイルを作らない。バックアップに書かない）。
+fn open_read_only(path: &Path) -> Result<Connection, BackupError> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?)
+}
+
+/// `dir` にあるマイグレーション前のバックアップのパス。読めなければ空。
+fn pre_migration_paths(dir: &Path) -> Vec<PathBuf> {
+    list_in(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| matches!(b.kind, BackupKind::PreMigration { .. }))
+        .map(|b| b.path)
+        .collect()
 }
 
 /// データベース `db_path` を `dir` に `<stem>.db` として写し、写したものを返す。
@@ -271,8 +310,15 @@ fn remove_stale_temp_files(dir: &Path) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let ours = name.starts_with(DAILY_PREFIX) || name.starts_with(PRE_RESTORE_PREFIX);
-        if ours && name.contains(TEMP_SUFFIX) {
+        // `<バックアップの名前>.db.tmp` と、その横に SQLite が作る `-journal`・`-wal`・`-shm` だけ
+        let Some((stem, side)) = name.split_once(TEMP_SUFFIX) else {
+            continue;
+        };
+        let ours = matches!(side, "" | "-journal" | "-wal" | "-shm")
+            && parse(Path::new(&format!("{stem}{EXTENSION}"))).is_some_and(|b| {
+                matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore)
+            });
+        if ours {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -319,6 +365,7 @@ fn newer_first(a: &Backup, b: &Backup) -> std::cmp::Ordering {
 /// - 定期は日付の新しい順に残す（時計が戻って、作った時刻の順と食い違っても日付で決める）。
 ///   ただし `today` より後の日付（時計が進んでいたときに作ったもの）は、いちばん古いものとして
 ///   扱う（いつまでも枠を占めないように）。
+/// - `today` が無いとき（復元の後）は、定期には触れない（未来の日付を見分けられないため）。
 /// - `keep` は数に関係なく残す（作ったばかりのもの。時計が戻っていると、名前の時刻では
 ///   いちばん古く見える）。
 fn prune(backups: &[Backup], today: Option<LogicalDate>, keep: Option<&Path>) {
@@ -345,8 +392,14 @@ fn prune(backups: &[Backup], today: Option<LogicalDate>, keep: Option<&Path>) {
     let pre_migration = by_kind(|k| matches!(k, BackupKind::PreMigration { .. }));
     let pre_restore = by_kind(|k| *k == BackupKind::PreRestore);
 
+    // 今日が分からなければ、定期は消さない（残す数より多い分は、次に作るときに消す）
+    let daily_limit = if today.is_some() {
+        DAILY_KEEP
+    } else {
+        usize::MAX
+    };
     for (list, limit) in [
-        (daily, DAILY_KEEP),
+        (daily, daily_limit),
         (pre_migration, PRE_MIGRATION_KEEP),
         (pre_restore, PRE_RESTORE_KEEP),
     ] {
@@ -838,14 +891,25 @@ mod tests {
             "pre-restore-1.db.tmp",
             "pre-migration-v1-to-v2-1.db.tmp",
             "mine.db.tmp",
+            "daily-notes.db.tmp.bak",
+            "pre-restore-manual.db.tmp",
+            "daily-2026-11-02-1.db.tmp.old",
         ] {
             fs::write(backups.join(name), b"").unwrap();
         }
-        db.ensure_daily_backup(day(3)).unwrap().unwrap();
-        let left = names(&backups);
-        assert_eq!(left.len(), 3, "{left:?}");
-        assert!(left.contains(&"pre-migration-v1-to-v2-1.db.tmp".to_owned()));
-        assert!(left.contains(&"mine.db.tmp".to_owned()));
+        let made = db.ensure_daily_backup(day(3)).unwrap().unwrap();
+        let mut left = names(&backups);
+        left.retain(|n| Path::new(n) != made.path.file_name().unwrap());
+        assert_eq!(
+            left,
+            [
+                "daily-2026-11-02-1.db.tmp.old",
+                "daily-notes.db.tmp.bak",
+                "mine.db.tmp",
+                "pre-migration-v1-to-v2-1.db.tmp",
+                "pre-restore-manual.db.tmp",
+            ]
+        );
     }
 
     #[test]
@@ -964,6 +1028,9 @@ mod tests {
 
         db.restore_with_migrations(&old, &[V1, V2]).unwrap();
         assert_eq!(user_version(&db), 2);
+        // マイグレーションが作る復元したものの写しは残らない（退避した1つだけ）
+        let kinds: Vec<_> = env.list().into_iter().map(|b| b.kind).collect();
+        assert_eq!(kinds, [BackupKind::PreRestore]);
         assert_eq!(memo(&db), ["old"]);
         let done: i64 = db
             .connection()
@@ -1137,6 +1204,50 @@ mod tests {
             .collect();
         assert_eq!(dates.len(), DAILY_KEEP);
         assert!(!dates.contains(&LogicalDate::new(2030, 1, 1).unwrap()));
+    }
+
+    #[test]
+    fn restore_does_not_remove_daily_backups() {
+        let env = Env::new();
+        let mut db = open(&env.db_path());
+        fs::create_dir_all(env.backups()).unwrap();
+        // 時計が進んでいたときの未来の日付のものと、ふつうのものが合わせて残す数を超えている
+        for d in 1..=4 {
+            plain_db(&env.backups().join(format!("daily-2030-01-0{d}-1.db")), 1);
+        }
+        for d in 1..=6 {
+            db.ensure_daily_backup(day(d)).unwrap().unwrap();
+        }
+        let before = env
+            .list()
+            .iter()
+            .filter(|b| matches!(b.kind, BackupKind::Daily { .. }))
+            .count();
+        let backup = env.list()[0].path.clone();
+        db.restore_backup(&backup).unwrap();
+        let after = env
+            .list()
+            .iter()
+            .filter(|b| matches!(b.kind, BackupKind::Daily { .. }))
+            .count();
+        assert_eq!(after, before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backups_go_next_to_the_path_given_to_open_even_through_a_symlink() {
+        let env = Env::new();
+        let real = tempfile::tempdir().unwrap();
+        let real_db = real.path().join("yunagi.db");
+        drop(open(&real_db));
+        std::os::unix::fs::symlink(&real_db, env.db_path()).unwrap();
+        let mut db = open(&env.db_path());
+        let made = db.ensure_daily_backup(day(3)).unwrap().unwrap();
+        assert_eq!(made.path.parent().unwrap(), env.backups());
+        db.restore_backup(&made.path).unwrap();
+        assert_eq!(env.list().len(), 2);
+        // 新しく作ったときにマイグレーションが作る空のフォルダはあるが、中身は無い
+        assert!(names(&real.path().join("backups")).is_empty());
     }
 
     #[test]

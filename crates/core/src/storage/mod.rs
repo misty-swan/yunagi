@@ -14,7 +14,7 @@ mod migration;
 pub mod table;
 mod ulid;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
@@ -27,6 +27,8 @@ pub use ulid::{ParseUlidError, Ulid};
 /// `yunagi.lock` のロックを持っている。閉じる（drop する）と、接続を閉じてからロックを離す。
 pub struct Database {
     conn: Connection,
+    /// 開いたときに渡されたパス（バックアップの置き場所を、マイグレーションと同じに決めるため）
+    path: PathBuf,
     // フィールドは書いた順に drop される。接続を閉じてからロックを離すよう、conn より後に置く
     _lock: DbLock,
 }
@@ -67,14 +69,18 @@ impl Database {
             .unwrap_or_else(|| Path::new(""))
             .join(data_dir::BACKUPS_DIR_NAME);
         migration::migrate(&mut conn, &backup_dir, migrations)?;
-        Ok(Self { conn, _lock: lock })
+        Ok(Self {
+            conn,
+            path: path.to_path_buf(),
+            _lock: lock,
+        })
     }
 
     /// 接続を閉じ、ロックを離す。閉じるのに失敗したら（WAL の書き戻しの失敗など）エラーを返す。
     /// 閉じずに手放した（drop した）ときは、閉じるときの失敗は捨てられる。
     pub fn close(self) -> Result<(), StorageError> {
         // 接続を閉じてから、関数の終わりでロックを離す
-        let Self { conn, _lock } = self;
+        let Self { conn, _lock, .. } = self;
         conn.close().map_err(|(_, e)| StorageError::from(e))
     }
 
