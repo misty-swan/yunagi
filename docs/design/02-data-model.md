@@ -59,7 +59,6 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | agent_client_id | TEXT NULL | エージェントが作成した場合の識別 |
 | external_ref_id | TEXT NULL | 外部課題との紐付け |
 | completed_at | TEXT NULL | 完了・解消時刻 |
-| rev | INTEGER | 版の番号。1 から始め、書き込みのたびに＋1（アーキテクチャ設計書 4.1） |
 | created_at / updated_at / deleted_at | TEXT | 監査用時刻 |
 
 持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
@@ -89,7 +88,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | --- | --- | --- |
 | date | TEXT PK FK→day | 論理日付 |
 | body | TEXT | Markdown 風のプレーンテキスト |
-| rev | INTEGER | 版の番号。1 から始め、書き込みのたびに＋1（アーキテクチャ設計書 4.1） |
+| rev | INTEGER | 版の番号。1 から始め、書き込みのたびに＋1。画面の保存とエージェントの変更の行き違いを見つけるために使う（アーキテクチャ設計書 4.1。item は版の番号を持たず、送られた欄だけを書く） |
 | updated_at | TEXT | 最終更新時刻 |
 
 ノートの会議区切りは本文中の見出し行（`## 10:00 定例` 形式）で表し、別テーブルは設けない。見出しの一覧は本文から都度抽出する。
@@ -120,13 +119,13 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | agent_client_id | TEXT FK→agent_client NULL | 操作したエージェント（CLI は `name = cli` の行）。`actor = human` のときは NULL |
 | operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則）。取り消しの記録は `agent.revert` |
 | target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection`。target_id は、item なら項目の id、note・reflection なら日付（`YYYY-MM-DD`） |
-| before / after | TEXT（JSON） | 変更前後のスナップショット |
+| before / after | TEXT（JSON） | 変更前後のスナップショット。item は、その操作が変えた欄だけを入れる（追加・削除では項目全体）。note・reflection は本文 |
 | created_at | TEXT | 操作時刻 |
 | reverted_at | TEXT NULL | 取り消した時刻 |
 | revert_of_id | TEXT NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
 | seen_at | TEXT NULL | 利用者が変更履歴画面で確認した時刻 |
 
-取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、対象の現在の状態と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
+取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。item では、`before` / `after` に入っている欄だけを書き戻し、ほかの欄には触れない（画面の保存が欄ごとに書くのと合わせるため。アーキテクチャ設計書 4.1）。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、`after` に入っている欄（note・reflection では本文）の現在の値と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
 
 画面の「エージェントによる未確認の変更」は、`actor = agent` かつ `seen_at` が NULL の記録で表す。上部のバーとサイドバーの件数はその記録の数、項目の行頭の菱形は `target_type = item` でその項目を指す記録があるときに付ける。
 

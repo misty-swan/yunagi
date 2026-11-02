@@ -54,7 +54,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 - 要件 A-03 の「取り消し」は、完了の取り消し（未完了に戻す＝`reopen_todo`）を指す。エージェントの変更の取り消し（A-08 の `agent revert`）とは別の操作である。
 - `--kind K` は `todo` / `blocker` / `note` / `reflection` を受け付ける（複数指定可）。
 - `append_note` の `--heading [TITLE]` は、現在時刻の見出し（`## HH:MM TITLE`）を挿入してから本文を追記する。
-- `edit_note` の行番号 `N`・`M` は1始まり。`--expect`（MCP では `expected_text`）に書き換え前の行の本文を必ず渡し、一致しなければ `conflict` を返す（人の編集で行がずれた場合に別の行を書き換えないため）。
+- `edit_note` の行番号 `N`・`M` は1始まり。`--expect`（MCP では `expected_text`）に書き換え前の行の本文を必ず渡し、一致しなければ `conflict`（`reason: changed`。4.3）を返す（人の編集で行がずれた場合に別の行を書き換えないため）。利用者が画面で入力中の行（アーキテクチャ設計書 4.1 の守る行）を書き換え・削除・移動しようとした場合、または画面から知らされた守る行が古い版のものである場合は `conflict`（`reason: user_editing`）を返す。両方に当たるときは `changed` を返す（`--expect` を先に確かめる）。`user_editing` のまま同じ操作をやり直しても、行が一致しない以上は必ず失敗するため、先に読み直させる。
 - A-01 のノート取得は、`get_board`（見出しと長さ）と `get_note`（本文）の組で満たす（4.2 参照）。
 
 ### 3.1 その他の CLI コマンド
@@ -109,9 +109,19 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 
 ```json
 {"error": {"code": "permission_denied", "required_scope": "todo", "message": "This agent is not allowed to modify TODOs. Enable it in Yunagi > Settings > Agents."}}
+{"error": {"code": "conflict", "reason": "user_editing", "message": "The user is editing this item. Try again later."}}
 ```
 
-エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`（対象が直前に変更された、または利用者が入力中。アーキテクチャ設計書 4.1）、`storage_unavailable`。利用者が入力中で `conflict` になった場合は、`message` でその旨と、しばらくしてからやり直すよう伝える（例：`The user is editing this item. Try again later.`）。`message` の言語は未決（9章）。
+エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。アーキテクチャ設計書 4.1）。
+
+`conflict` には、エージェントが次の動きを決められるよう、理由を `reason` 欄で付ける。CLI の終了コードはどちらの理由でも 5 で、`--json` のときは同じ JSON を出し、テキスト出力では `message` を表示する。
+
+| `reason` | 意味 | エージェントの次の動き |
+| --- | --- | --- |
+| `changed` | 対象が直前に変更された（`edit_note` の `--expect` の不一致、`agent revert` の対象がその後に人に変更されている場合） | 最新の内容を読み直してから、操作を組み立て直す。`agent revert` は人が実行する操作で、差分を確かめたうえで `--force` で上書きもできる（7章） |
+| `user_editing` | 利用者が対象を入力中（画面から知らされた守る行が古い版のもので、知らせ直しを待っている場合を含む。アーキテクチャ設計書 4.1）。操作は何も反映していない | 同じ操作を、しばらくしてからそのままやり直す |
+
+`user_editing` の場合は、`message` でもその旨と、しばらくしてからやり直すよう伝える。文言は対象に合わせる（例：項目なら `The user is editing this item. Try again later.`、ノート・振り返りの行なら `The user is editing this line. Try again later.`）。`message` の言語は未決（9章）。
 
 ## 5. 依頼文の書き出し（A-06）
 
@@ -150,7 +160,7 @@ API のレート制限を調査
 
 - todo・blocker・append・note_edit に該当する操作は、MCP・CLI のどちらからでも、すべて change_log に記録する（operation は 3章の命名規則に従う）。
 - MCP・CLI から作成された項目には `origin = agent` と agent_client_id（CLI は `cli`）を記録し、画面で印を表示する。
-- `yunagi agent revert` は取り消しを実行し、対象がその後に人によって変更されている場合は `conflict`（終了コード 5）を返す（`--force` で上書き）。取り消しの確定には 2章の確認が必要。
+- `yunagi agent revert` は取り消しを実行し、対象がその後に人によって変更されている場合は `conflict`（`reason: changed`。終了コード 5）を返す（`--force` で上書き）。項目では、その記録の操作が変えた欄だけで判定し、取り消しもその欄だけを戻す（ほかの欄に人が加えた変更は残る。データモデル設計書 change_log）。取り消しの確定には 2章の確認が必要。
 
 ## 8. 第2フェーズで追加する操作（案。段階はロードマップ参照）
 
