@@ -240,6 +240,7 @@ def main():
             out["summary"][app] = {
                 "errors": [x["error"] for x in b if "error" in x],
                 "editing_all_runs": [x.get("editing") for x in b],
+                "dom_writes_all_runs": [x.get("domWrites") for x in b],
                 "reload_all_runs": [x.get("reload") for x in b],
                 **{k: summarize([x[k] for x in t]) for k in (t[0] if t else {})},
             }

@@ -21,9 +21,10 @@
 
 - 左：TODO の入力欄と一覧。Enter で追加（IME の変換中の Enter では追加しない。`docs/design/04-interaction-spec.md` 3章の規則）。チェックで完了、「すべて消す」ボタン。
 - 左下：「Event log」。入力欄とエディタで起きたキー・変換のイベントと、IME 判定の結果を表示する（実機確認の手がかり用）。
+- 真ん中：その場で編集する項目の一覧（「Board」）。各項目は contenteditable で、Enter で分割・直上／直下に追加、空の項目の Backspace で削除、↑↓ で移動（prototype/app.js と同じ考え方）。「読み込み直す」ボタンと、3秒ごとの自動読み込み直し、エージェントの変更を混ぜる切り替え付き（コアからの読み込み直しの模擬）。
 - 右：CodeMirror 6 のエディタ1つ（Markdown）。
 
-違うのは `svelte/src/App.svelte`・`svelte/src/main.ts` と `solid/src/App.tsx`・`solid/src/main.tsx`（と設定ファイル）だけです。`src/shared/` は `shared/` のコピーで、直接は編集しません。
+違うのは `svelte/src/App.svelte`・`ItemList.svelte`・`main.ts` と `solid/src/App.tsx`・`ItemList.tsx`・`main.tsx`（と設定ファイル）だけです。`src/shared/` は `shared/` のコピーで、直接は編集しません。
 
 ## 使い方
 
@@ -48,5 +49,9 @@ cd svelte && mise exec rust -- pnpm tauri dev     # Solid 版は cd solid
 # 画面には出ない。見えない場所では描画が起きないので、起動は「画面の組み上げ完了」までを測る）
 python3 scripts/measure.py startup --runs 10
 python3 scripts/measure.py bench --runs 3
+python3 scripts/measure.py listcheck --runs 3   # その場で編集する一覧の自動チェック
 python3 scripts/static_metrics.py
+
+# 工夫を省いた書き方（変種）を一時的に当てて試す。終わったら両版を pnpm tauri build し直す
+python3 scripts/variants.py
 ```

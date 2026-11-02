@@ -85,6 +85,7 @@ async function reloadKeeps(index: number, start: number, end: number, during?: (
 
 async function editingChecks() {
   const r: Record<string, boolean> = {};
+  const counts: Record<string, number> = {};
   const expect = (name: string, ok: boolean) => (r[name] = ok);
   const base = texts().slice();
 
@@ -133,6 +134,40 @@ async function editingChecks() {
   const saved = core.load().map((i) => i.text);
   expect('typingReachesCore', texts()[2]!.endsWith('X') && saved[2] === texts()[2]);
 
+  // 7b. 1文字入力したとき、フレームワークが DOM を書き戻していないか（DOM の変更記録の数を数える。
+  //     ブラウザ自身の入力で 1 件。それより多ければ、フレームワークが同じ値などを書き込んでいる。
+  //     変換中にこれが起きると IME が壊れる恐れがある）。カーソルとテキストノードも保たれるか
+  {
+    const t = spans()[2];
+    const len = t.textContent!.length;
+    focusAt(t, len);
+    const node = t.firstChild;
+    let records = 0;
+    const mo = new MutationObserver((rs) => (records += rs.length));
+    mo.observe(t, { subtree: true, characterData: true, childList: true });
+    document.execCommand('insertText', false, 'Y');
+    await settle();
+    counts.typingDomMutations = records + mo.takeRecords().length;
+    mo.disconnect();
+    expect('typingKeepsCaretAndTextNode', t.firstChild === node && focusIs(2, len + 1));
+  }
+
+  // 7c. 空の項目（行末の Enter で作ったもの）に入力しても、画面とデータが一致する
+  focusAt(spans()[2], spans()[2].textContent!.length);
+  key(spans()[2], 'Enter');
+  await settle();
+  {
+    const t = spans()[3];
+    let records = 0;
+    const mo = new MutationObserver((rs) => (records += rs.length));
+    mo.observe(t, { subtree: true, characterData: true, childList: true });
+    document.execCommand('insertText', false, 'あい');
+    await settle();
+    counts.typingIntoEmptyDomMutations = records + mo.takeRecords().length;
+    mo.disconnect();
+    expect('typingIntoEmptyItemOk', t.textContent === 'あい' && core.load()[3].text === 'あい' && focusIs(3, 2));
+  }
+
   // 8. IME：変換中の Enter では分割しない。compositionend 直後の Enter も分割せず、改行も入れない
   const el = spans()[2];
   focusAt(el, 1);
@@ -154,7 +189,7 @@ async function editingChecks() {
   key(el, 'Enter');
   await settle();
   expect('imeLaterEnterSplits', spans().length === count + 1);
-  return r;
+  return { checks: r, counts };
 }
 
 async function reloadChecks() {
@@ -247,8 +282,8 @@ async function perf() {
 
 export async function runListCheck() {
   (window as unknown as { __yun2NoLog: boolean }).__yun2NoLog = true;
-  const editing = await editingChecks();
+  const { checks: editing, counts: domWrites } = await editingChecks();
   const reload = await reloadChecks();
   const timing = await perf();
-  return { editing, reload, timing, visibility: document.visibilityState };
+  return { editing, domWrites, reload, timing, visibility: document.visibilityState };
 }
