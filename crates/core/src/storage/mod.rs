@@ -4,6 +4,8 @@
 //! データベースは [`Database::open`] で開く。開くときに、未適用のマイグレーション
 //! （スキーマを番号順に更新する手順）を自動で適用する（[`migration`] モジュール）。
 
+pub mod cloud_sync;
+pub mod data_dir;
 mod error;
 mod migration;
 
@@ -25,7 +27,7 @@ impl Database {
     /// - 適用前に、`path` と同じフォルダの `backups/` にバックアップを取る。
     ///   適用に失敗したら、バックアップに戻してから [`StorageError::MigrationFailed`] を返す。
     ///
-    /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は YUN-20）。
+    /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は [`data_dir`]）。
     ///
     /// 同じデータベースを同時に開くのは1つのプロセスだけ、という前提で動く
     /// （呼び出し側が `yunagi.lock` を取ってから開く。アーキテクチャ設計書 4章）。
@@ -46,7 +48,7 @@ impl Database {
         let backup_dir = path
             .parent()
             .unwrap_or_else(|| Path::new(""))
-            .join("backups");
+            .join(data_dir::BACKUPS_DIR_NAME);
         migration::migrate(&mut conn, &backup_dir, migrations)?;
         Ok(Self { conn })
     }
