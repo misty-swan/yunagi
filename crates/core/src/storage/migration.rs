@@ -5,8 +5,8 @@
 //! - 起動時（[`super::Database::open`]）に、記録より大きい番号のものを順に適用する。
 //! - 適用の前に、保存先の `backups/` にバックアップを取る。1つでも失敗したら、
 //!   それまでに適用したものも含めてバックアップに戻し、データを適用前のままにする。
-//! - 記録がこのアプリの知る最新より大きい（新しい版で作られた）データベースは、
-//!   スキーマもデータも変えずにエラーとする。
+//! - 記録がこのアプリの知る範囲にない（新しい版で作られた）データベースは、
+//!   ファイルに書かずにエラーとする（WAL への切り替えより前に確かめる）。
 //! - 適用中は外部キーの検査を止め（表の作り直しのため）、各マイグレーションの確定前に
 //!   `foreign_key_check` で参照が壊れていないことを確かめる（SQLite の推奨する手順）。
 
@@ -49,18 +49,13 @@ pub(super) fn migrate(
     backup_dir: &Path,
     migrations: &[Migration],
 ) -> Result<(), StorageError> {
-    assert!(
+    // 本番の一覧はコンパイル時に確かめている。ここはテスト用の一覧のため
+    debug_assert!(
         is_sequential(migrations),
         "migration versions must be 1, 2, 3, ... in order"
     );
-    let current = schema_version(conn)?;
+    let current = check_supported(conn, migrations)?;
     let latest = migrations.last().map_or(0, |m| m.version);
-    if current > latest {
-        return Err(StorageError::NewerSchema {
-            found: current,
-            supported: latest,
-        });
-    }
     // 番号は 1 からの連番なので、先頭から current 個が適用済み
     let pending = &migrations[current as usize..];
     if pending.is_empty() {
@@ -131,8 +126,22 @@ fn schema_is_empty(conn: &Connection) -> Result<bool, StorageError> {
     Ok(count == 0)
 }
 
-/// 適用済みの番号（`user_version`）。
-fn schema_version(conn: &Connection) -> Result<u32, StorageError> {
+/// 適用済みの番号が、このアプリの知る範囲（0 から最新まで）にあることを確かめ、その番号を返す。
+/// 範囲外なら [`StorageError::UnsupportedSchema`]。読むだけで、ファイルには書かない。
+pub(super) fn check_supported(
+    conn: &Connection,
+    migrations: &[Migration],
+) -> Result<u32, StorageError> {
+    let found = schema_version(conn)?;
+    let supported = migrations.last().map_or(0, |m| m.version);
+    if found < 0 || found > i64::from(supported) {
+        return Err(StorageError::UnsupportedSchema { found, supported });
+    }
+    Ok(found as u32)
+}
+
+/// 適用済みの番号（`user_version`）。SQLite では符号付きの 32 ビットの値なので、そのまま読む。
+fn schema_version(conn: &Connection) -> Result<i64, StorageError> {
     Ok(conn.pragma_query_value(None, "user_version", |row| row.get(0))?)
 }
 
@@ -161,6 +170,7 @@ fn apply(conn: &mut Connection, m: &Migration) -> rusqlite::Result<()> {
 ///
 /// 名前は `pre-migration-v<適用前の番号>-to-v<適用後の番号>-<UNIX 時刻（秒）>.db`。
 /// 書き終わる前に止まっても壊れたバックアップが残らないよう、一時ファイルに書いてから名前を変える。
+/// 前回に中断して残った一時ファイルは、ここで消す。
 fn create_backup(
     conn: &Connection,
     backup_dir: &Path,
@@ -168,6 +178,7 @@ fn create_backup(
     to: u32,
 ) -> Result<PathBuf, StorageError> {
     fs::create_dir_all(backup_dir)?;
+    remove_stale_temp_files(backup_dir)?;
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -181,9 +192,17 @@ fn create_backup(
 
     let tmp = path.with_extension("db.tmp");
     let result = (|| {
-        remove_if_exists(&tmp)?;
         // SQLite のオンラインバックアップ。WAL にだけある直近の書き込みも含めて写す
         conn.backup(MAIN_DB, &tmp, NO_PROGRESS)?;
+        // 写したファイルは元と同じく WAL の印を持ち、開くたびに横に -wal・-shm ができる。
+        // バックアップは1つのファイルで完結させたいので、通常の（DELETE）モードにする
+        let mode: String = Connection::open(&tmp)?.pragma_update_and_check(
+            None,
+            "journal_mode",
+            "DELETE",
+            |row| row.get(0),
+        )?;
+        debug_assert_eq!(mode, "delete");
         fs::rename(&tmp, &path)?;
         sync_dir(backup_dir)?;
         Ok(())
@@ -204,11 +223,19 @@ fn restore(conn: &mut Connection, backup: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn remove_if_exists(path: &Path) -> std::io::Result<()> {
-    match fs::remove_file(path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
+/// 書きかけのまま残ったバックアップの一時ファイル（`pre-migration-*.db.tmp`）を消す。
+fn remove_stale_temp_files(backup_dir: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(backup_dir)? {
+        let path = entry?.path();
+        let is_temp = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("pre-migration-") && n.ends_with(".db.tmp"));
+        if is_temp {
+            fs::remove_file(&path)?;
+        }
     }
+    Ok(())
 }
 
 /// 名前の変更を確実にディスクに書く（電源断で消えないように）。Windows ではフォルダを
@@ -461,7 +488,7 @@ mod tests {
             .expect("should refuse a newer schema");
         assert!(matches!(
             err,
-            StorageError::NewerSchema {
+            StorageError::UnsupportedSchema {
                 found: 2,
                 supported: 1
             }
@@ -557,6 +584,68 @@ mod tests {
             .unwrap();
         Database::open_with_migrations(&path, &[V1]).unwrap();
         assert_eq!(backups(&dir).len(), 1);
+    }
+
+    #[test]
+    fn newer_database_file_is_not_rewritten() {
+        // 新しい版が別のジャーナルモードで書いたファイルでも、WAL に切り替える前に断る
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE x (a); PRAGMA user_version = 9;")
+            .unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let err = Database::open_with_migrations(&path, &[V1])
+            .err()
+            .expect("should refuse a newer schema");
+        assert!(matches!(
+            err,
+            StorageError::UnsupportedSchema { found: 9, .. }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(!dir.path().join("yunagi.db-wal").exists());
+    }
+
+    #[test]
+    fn negative_schema_version_is_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version = -1;")
+            .unwrap();
+        let err = Database::open_with_migrations(&path, &[V1])
+            .err()
+            .expect("should refuse");
+        assert!(
+            matches!(err, StorageError::UnsupportedSchema { found: -1, .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn backups_are_single_files_and_stale_temp_files_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        create_v1_with_rows(&path);
+        let stale = dir.path().join("backups/pre-migration-v1-to-v2-1.db.tmp");
+        fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        fs::write(&stale, b"half written").unwrap();
+
+        // 失敗して復元する（バックアップを開いて読む）ところまで通す
+        Database::open_with_migrations(&path, &[V1, V2, V3_FAILS])
+            .err()
+            .expect("migration should fail");
+
+        let saved = backups(&dir);
+        assert_eq!(saved.len(), 1, "{saved:?}");
+        assert!(saved[0].extension().is_some_and(|e| e == "db"));
+        let backup = Connection::open(&saved[0]).unwrap();
+        let mode: String = backup
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
     }
 
     #[test]

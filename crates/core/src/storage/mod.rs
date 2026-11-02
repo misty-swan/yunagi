@@ -39,7 +39,10 @@ impl Database {
         path: &Path,
         migrations: &[migration::Migration],
     ) -> Result<Self, StorageError> {
-        let mut conn = connect(path)?;
+        let mut conn = Connection::open(path)?;
+        // 新しい版で作られたデータベースは、WAL への切り替えなどでファイルを書き換える前に断る
+        migration::check_supported(&conn, migrations)?;
+        configure(&conn)?;
         let backup_dir = path
             .parent()
             .unwrap_or_else(|| Path::new(""))
@@ -54,9 +57,8 @@ impl Database {
     }
 }
 
-/// 接続を開き、WAL モードと `synchronous=NORMAL` にする。
-fn connect(path: &Path) -> Result<Connection, StorageError> {
-    let conn = Connection::open(path)?;
+/// 接続を WAL モード・`synchronous=NORMAL`・外部キー有効にする。
+fn configure(conn: &Connection) -> Result<(), StorageError> {
     // journal_mode は、切り替えられなかったとき（WAL に対応しない場所など）にエラーにならず、
     // 元のモードを返す。黙って別のモードで動かないよう、結果を確かめる
     let mode: String =
@@ -68,5 +70,5 @@ fn connect(path: &Path) -> Result<Connection, StorageError> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     // SQLite は、接続ごとに有効にしない限り外部キー（REFERENCES）を確かめない
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    Ok(conn)
+    Ok(())
 }

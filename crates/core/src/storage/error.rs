@@ -13,9 +13,9 @@ pub enum StorageError {
     Io(io::Error),
     /// WAL モードにできなかった。`mode` は実際のジャーナルモード。
     WalUnavailable { mode: String },
-    /// データベースのスキーマが、このアプリの知るものより新しい（新しい版で作られた）。
-    /// スキーマとデータは変えていない。
-    NewerSchema { found: u32, supported: u32 },
+    /// データベースのスキーマの番号を、このアプリが知らない。ふつうは新しい版で作られたもの
+    /// （番号が `supported` より大きい）。負の番号もここに入る。ファイルには触れていない。
+    UnsupportedSchema { found: i64, supported: u32 },
     /// マイグレーションの適用に失敗し、バックアップに戻した。データは適用前のまま。
     /// 画面では旧版の再導入方法を案内する（ビルド・配布手順書 5章）。
     MigrationFailed {
@@ -43,9 +43,9 @@ impl fmt::Display for StorageError {
             Self::WalUnavailable { mode } => {
                 write!(f, "could not enable WAL mode (journal mode is {mode})")
             }
-            Self::NewerSchema { found, supported } => write!(
+            Self::UnsupportedSchema { found, supported } => write!(
                 f,
-                "database schema version {found} is newer than this app supports ({supported})"
+                "database schema version {found} is not supported by this app (supports up to {supported})"
             ),
             Self::MigrationFailed {
                 version,
@@ -80,7 +80,7 @@ impl std::error::Error for StorageError {
             Self::MigrationFailed { source, .. } | Self::RestoreFailed { source, .. } => {
                 Some(source)
             }
-            Self::WalUnavailable { .. } | Self::NewerSchema { .. } => None,
+            Self::WalUnavailable { .. } | Self::UnsupportedSchema { .. } => None,
         }
     }
 }
