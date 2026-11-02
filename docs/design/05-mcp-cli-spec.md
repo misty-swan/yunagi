@@ -68,6 +68,13 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - 対象：ID が障害を指す場合と、取りやめた TODO（`dropped`。持ち越しの見直しで「やめる」「分割する」「外部ツールへ戻す」を選んだもの。データモデル設計書 3章）を指す場合は、どちらの操作も何も変えずに `invalid_argument` を返す。取りやめた TODO を完了や未完了に変えると、利用者が閉じた項目を黙って戻すことになるため。同じく、`resolve_blocker` に TODO の ID を渡した場合も `invalid_argument` を返す。`message` では、やり直しても成功しないことと理由を伝える（例：`This TODO was dropped by the user. It was not changed. Do not retry.`、`This ID is a blocker, not a TODO. Use resolve_blocker.`）。エージェントは同じ操作をやり直さず、取りやめた TODO なら利用者に伝える。
   - 判定の順：`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` を先に確かめ、どれにも当たらなければ成功とする（状態の欄は入力中でも受け付けるので `user_editing` は返さない。アーキテクチャ設計書 4.1）。そのため、何も変えない操作でも、保存の再試行中は `storage_unavailable` になる。
   - 応答と記録：成功の応答には `resolve_blocker` と同じ `updated`（`true` / `false`）を含める。CLI では、`--json` のときに同じ `updated` を含む JSON を出し、テキスト出力では `Completed.`（完了にした）・`Already done. Nothing changed.`（`complete_todo` で何も変えていない）、`Reopened.`（未完了に戻した）・`Already open. Nothing changed.`（`reopen_todo` で何も変えていない）を表示する。終了コードはどれも 0。何も変えなかった場合（`updated: false`）は change_log に記録しない（7章）。記録するときは、`todo.complete` / `todo.reopen` として状態と完了時刻を `before` / `after` に入れる。
+- 持ち越し済みの項目（持ち越し元。データモデル設計書 3章「持ち越し」）への書き込みは、持ち越し先へ向け直さず、何も変えずに拒む（2026-11-03 決定）。持ち越すと前の日の項目は `open` のまま残るため、そのまま受け付けると、前の日の項目だけが完了などになり、今日の持ち越しの項目は元のまま残って、利用者とエージェントの見ている状態が食い違うため。黙って向け直すと、エージェントが指定した項目とは別の項目が変わり、`edit_todo` の本文や解消メモの判定も別の項目で行われるため、向け直しはしない。
+  - 対象の操作：`edit_todo`・`complete_todo`・`reopen_todo`・`resolve_blocker`。ID が持ち越し済みの項目を指す場合は、その項目の状態（完了・未完了など）にかかわらず、`conflict`（`reason: carried_over`。4.3）を返す。同じ操作を何度送っても同じ結果になり、前の日の項目は変わらない。
+  - 持ち越し先の知らせ方：エラーに、持ち越し先の項目の id `carried_to_id`（データモデル設計書 3章の定義）と、その項目の日付 `carried_to_date` を含める。持ち越しが続いている場合（前の日から次の日へ、さらに今日へ）は、送り直した先でも `carried_over` が返るので、同じようにたどる。持ち越し先が取りやめた TODO（`dropped`）であることもあり、その ID に送った操作は上の `invalid_argument` の決まりに従う。
+  - 判定の順：`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` の次に `carried_over` を確かめ、続けて `user_editing`、`note_exists` の順に確かめる（上の `resolve_blocker`・`complete_todo` の判定の順に `carried_over` を加える）。
+  - 読み取り：`get_board`・`open_board` の各項目には、持ち越し先の項目の id を `carried_to_id` として含める（持ち越し済みでなければ `null`。4.2）。エージェントは、前の日のボードを読んだときに、持ち越し済みの項目を操作の対象から外せる。
+  - 持ち越し先の項目が削除された場合、元の項目は持ち越し済みでなくなり、通常どおり受け付ける（その項目が残っている唯一の写しになるため）。
+  - `agent revert` で持ち越し済みの項目を戻す場合の扱いは未決（9章）。
 - A-01 のノート取得は、`get_board`（見出しと長さ）と `get_note`（本文）の組で満たす（4.2 参照）。
 
 ### 3.1 その他の CLI コマンド
@@ -106,10 +113,10 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {
   "date": "2026-11-02",
   "todos": [
-    {"id": "01J...", "text": "API のレート制限を調査", "status": "open", "carry_count": 1, "origin": "human", "external_ref": null}
+    {"id": "01J...", "text": "API のレート制限を調査", "status": "open", "carry_count": 1, "origin": "human", "external_ref": null, "carried_to_id": null}
   ],
   "blockers": [
-    {"id": "01J...", "text": "ステージング環境の権限待ち", "status": "open", "carry_count": 0, "origin": "note", "external_ref": null, "resolution_note": null}
+    {"id": "01J...", "text": "ステージング環境の権限待ち", "status": "open", "carry_count": 0, "origin": "note", "external_ref": null, "resolution_note": null, "carried_to_id": null}
   ],
   "reflection": "…",
   "note": {"headings": ["10:00 定例", "14:00 設計レビュー"], "length": 2380}
@@ -133,9 +140,10 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | --- | --- | --- |
 | `changed` | 対象が直前に変更された（`edit_note` の `--expect` の不一致、`agent revert` の対象がその後に人に変更されている場合） | 最新の内容を読み直してから、操作を組み立て直す。`agent revert` は人が実行する操作で、差分を確かめたうえで `--force` で上書きもできる（7章） |
 | `note_exists` | `resolve_blocker` の `--note` と異なる解消メモが、障害にすでにある（3章）。操作は何も反映していない | 最新の内容を読み直す。エージェントは既存の解消メモを書き換えられないため、足したい内容があれば利用者に伝える。解消だけが目的なら `--note` を付けずに送る（同じ `--note` のままやり直しても必ず失敗する） |
+| `carried_over` | 対象の項目は持ち越し済みで、前の日に残っている元の項目である（3章）。操作は何も反映していない。エラーに `carried_to_id`・`carried_to_date` を含める | 同じ操作を `carried_to_id` の項目に送り直す（同じ ID のままやり直しても必ず失敗する）。送り直した先でも `carried_over` なら、同じようにたどる |
 | `user_editing` | 利用者が対象を入力中（画面から知らされた守る行が古い版のもので、知らせ直しを待っている場合を含む。アーキテクチャ設計書 4.1）。操作は何も反映していない | 同じ操作を、しばらくしてからそのままやり直す |
 
-`user_editing` の場合は、`message` でもその旨と、しばらくしてからやり直すよう伝える。文言は対象に合わせる（例：項目なら `The user is editing this item. Try again later.`、ノート・振り返りの行なら `The user is editing this line. Try again later.`）。`note_exists` の場合は、やり直しても成功しないことと次の動きを伝える（例：`This blocker already has a different resolution note. It was not changed. To resolve it, send the request without a note.`）。`message` の言語は未決（9章）。
+`user_editing` の場合は、`message` でもその旨と、しばらくしてからやり直すよう伝える。文言は対象に合わせる（例：項目なら `The user is editing this item. Try again later.`、ノート・振り返りの行なら `The user is editing this line. Try again later.`）。`note_exists` の場合は、やり直しても成功しないことと次の動きを伝える（例：`This blocker already has a different resolution note. It was not changed. To resolve it, send the request without a note.`）。`carried_over` の場合は、持ち越し先へ送り直すことを伝える（例：`This item was carried over to 2026-11-03. It was not changed. Send the request to carried_to_id instead.`）。`message` の言語は未決（9章）。
 
 ## 5. 依頼文の書き出し（A-06）
 
@@ -185,4 +193,5 @@ API のレート制限を調査
 ## 9. 未決事項
 
 - エラーの `message` を利用者の言語設定（`locale`）に合わせて日英で出すか、英語固定にするか
+- `agent revert` の対象が、記録の後に持ち越し済みになった項目である場合（持ち越す前にエージェントが本文を変えていた場合など）に、取り消しを拒むか、元の項目だけを戻すか（3章の持ち越し済みの項目への書き込み。持ち越し先には記録が無い）
 - `cli` クライアントで作成した項目を、人が CLI で直接作ったものとして `origin = human` にする手段（対話端末での実行時など）を設けるか
