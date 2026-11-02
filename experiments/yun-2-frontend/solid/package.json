@@ -1,0 +1,23 @@
+{
+  "name": "yun2-solid",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/view": "6.43.15",
+    "@tauri-apps/api": "2.12.4",
+    "codemirror": "6.0.2",
+    "solid-js": "1.9.18"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "vite": "8.3.5",
+    "vite-plugin-solid": "2.11.15"
+  }
+}
