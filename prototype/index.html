@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yunagi 試作品</title>
+<!-- 見た目の参考であり、仕様の正本は docs/design（03・04・06）。README.md 参照 -->
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app" data-mode="board" data-layout="A" data-side="open">
+  <div id="page">
+    <!-- サイドバー（閉じられる） -->
+    <aside class="side" id="side" aria-label="Sidebar">
+      <div class="logo"><span class="mark" aria-hidden="true"><span class="mk-clip"><span class="mk-sun"></span></span><span class="mk-line"></span></span><span class="word">yunagi</span></div>
+      <nav class="nav" id="nav" aria-label="Menu"></nav>
+      <div class="side-h label" id="recentH"></div>
+      <div id="recent"></div>
+      <div class="side-fill"></div>
+      <button class="nav-btn" id="navSettings" type="button"></button>
+      <div class="side-status" id="sideStatus"></div>
+    </aside>
+
+    <div class="main" id="main">
+      <div class="sky" aria-hidden="true"></div>
+
+      <!-- 上部のバー -->
+      <header class="top">
+        <span class="top-logo"><span class="mark" aria-hidden="true"><span class="mk-clip"><span class="mk-sun"></span></span><span class="mk-line"></span></span><span class="word">yunagi</span></span>
+        <div class="datenav" id="dateNav">
+          <button class="icon-btn" id="prevDay" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg></button>
+          <span class="date" id="hDate"></span>
+          <button class="icon-btn" id="nextDay" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
+          <button class="today-pill" id="hToday" type="button"></button>
+        </div>
+        <div class="seg" id="modeSeg" role="group">
+          <button type="button" data-mode="board" id="segBoard"></button>
+          <button type="button" data-mode="note" id="segNote"></button>
+        </div>
+        <span class="top-title" id="archTitle" hidden></span>
+        <div class="top-fill"></div>
+        <span class="flash" id="hFlash" role="status" aria-live="polite"></span>
+        <button class="search" id="searchBtn" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM10.4 10.4 13.5 13.5"/></svg><span id="searchLabel"></span><kbd id="searchKey"></kbd></button>
+        <button class="agent-ind" id="hAgent" type="button" hidden><span class="mk-agent"></span><span id="hAgentN"></span></button>
+        <button class="upd" id="hUpdate" type="button" hidden></button>
+        <span class="save-dot" id="hSaving" role="img" hidden></span>
+        <button class="save-fail" id="hSaveFail" type="button" hidden></button>
+      </header>
+
+      <!-- 凪メーター -->
+      <div class="meter" id="meter" role="img"></div>
+
+      <!-- S-01 整理モード -->
+      <main class="board" id="board" lang="ja">
+        <section class="region r-todo" data-region="todo" tabindex="-1" aria-labelledby="hTodo">
+          <div class="rh"><h2 class="label" id="hTodo"></h2><span class="rm" id="mTodo"></span></div>
+          <div class="scroll">
+            <ul class="list" id="todoList"></ul>
+            <p class="empty" id="todoEmpty" hidden></p>
+          </div>
+        </section>
+        <section class="region r-blk blk" data-region="blocker" tabindex="-1" aria-labelledby="hBlkTitle">
+          <div class="rh"><h2 class="label" id="hBlkTitle"></h2><span class="rm warn" id="mBlk"></span></div>
+          <div class="scroll">
+            <ul class="list" id="blkList"></ul>
+            <p class="empty blank" id="blkEmpty" hidden></p>
+          </div>
+        </section>
+        <section class="region r-ref" data-region="reflection" aria-labelledby="hRef">
+          <div class="rh"><h2 class="label" id="hRef"></h2></div>
+          <div class="scroll"><div id="refEd"></div></div>
+        </section>
+      </main>
+
+      <!-- S-02 ノートモード -->
+      <main class="note" id="note" lang="ja" hidden>
+        <div class="note-wrap">
+          <div id="noteEd"></div>
+          <aside class="outline" id="outline"></aside>
+        </div>
+      </main>
+
+      <!-- ふりかえり（Archive） -->
+      <main class="archive" id="archive" lang="ja" tabindex="-1" hidden></main>
+
+      <footer class="hints" id="hints"></footer>
+    </div>
+  </div>
+
+  <!-- S-03 持ち越し / S-04 検索パレット（重ねて表示） -->
+  <div class="ov ov-carry" id="ovCarry" hidden></div>
+  <div class="ov ov-pal" id="ovPal" hidden></div>
+  <div class="pop" id="pop" hidden></div>
+  <div class="vim-ind" id="vimInd" hidden></div>
+</div>
+
+<div class="ctx" id="ctx" role="menu" hidden></div>
+
+<!-- 試作品だけの操作（本番の画面にはない） -->
+<aside class="proto" id="proto" aria-label="試作品の操作">
+  <div class="proto-panel" id="protoPanel" hidden>
+    <p class="proto-note">試作品だけの操作です。本番の画面にはありません。Alt+Shift+P で開閉します。</p>
+    <div class="proto-sec"><span class="proto-h">画面</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-act="carry">持ち越し（S-03）を最初から</button>
+        <button class="pb" type="button" data-act="palette">検索パレット（S-04）</button>
+        <button class="pb" type="button" data-act="mode">Board ⇄ Note</button>
+        <button class="pb" type="button" data-act="archive">Archive</button>
+        <button class="pb" type="button" data-act="prev">前日（10-28）</button>
+        <button class="pb" type="button" data-act="empty">空の日（翌日）</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">凪メーターの時刻</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="clock:real">いまの時刻</button>
+        <button class="pb" type="button" data-set="clock:570">9:30</button>
+        <button class="pb" type="button" data-set="clock:780">13:00</button>
+        <button class="pb" type="button" data-set="clock:1002">16:42</button>
+        <button class="pb" type="button" data-set="clock:1145">19:05</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">レイアウト</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="layout:A">A. 2段</button>
+        <button class="pb" type="button" data-set="layout:B">B. 3列</button>
+        <button class="pb" type="button" data-set="layout:C">C. 縦積み</button>
+      </div>
+      <div class="proto-row" style="margin-top:4px">
+        <button class="pb" type="button" data-set="narrow:off">ウィンドウの幅</button>
+        <button class="pb" type="button" data-set="narrow:on">幅 820px で表示（900px 未満の確認）</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">テーマ</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="theme:system">OS に合わせる</button>
+        <button class="pb" type="button" data-set="theme:light">ライト</button>
+        <button class="pb" type="button" data-set="theme:dark">ダーク</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">言語</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="lang:ja">日本語</button>
+        <button class="pb" type="button" data-set="lang:en">English</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">文字サイズ（13〜19px）</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="fs:13">13</button>
+        <button class="pb" type="button" data-set="fs:15">15</button>
+        <button class="pb" type="button" data-set="fs:17">17</button>
+        <button class="pb" type="button" data-set="fs:19">19</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">ノートの書体</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="noteMono:off">本文と同じ</button>
+        <button class="pb" type="button" data-set="noteMono:on">等幅</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">状態</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-toggle="fail">保存失敗を再現</button>
+        <button class="pb" type="button" data-toggle="hold">保存中の点を出したままにする</button>
+        <button class="pb" type="button" data-toggle="update">新しい版がある</button>
+        <button class="pb" type="button" data-act="unseen">未確認の変更を戻す</button>
+      </div>
+    </div>
+    <div class="proto-sec"><span class="proto-h">Vimモード（整理モードのリストのみ）</span>
+      <div class="proto-row">
+        <button class="pb" type="button" data-set="vim:off">無効</button>
+        <button class="pb" type="button" data-set="vim:on">有効</button>
+      </div>
+    </div>
+    <p class="proto-status" id="protoStatus"></p>
+  </div>
+  <button class="proto-btn" id="protoBtn" type="button" aria-expanded="false" aria-controls="protoPanel">試作品</button>
+</aside>
+
+<script src="i18n.js"></script>
+<script src="data.js"></script>
+<script src="editor.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

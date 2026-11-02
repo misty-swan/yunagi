@@ -1,0 +1,6 @@
+# Claude Code の個人設定（端末ごと）
+.claude/settings.local.json
+
+# OS が作るファイル
+.DS_Store
+Thumbs.db
