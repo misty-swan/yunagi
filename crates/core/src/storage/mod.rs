@@ -64,6 +64,14 @@ impl Database {
         Ok(Self { conn, _lock: lock })
     }
 
+    /// 接続を閉じ、ロックを離す。閉じるのに失敗したら（WAL の書き戻しの失敗など）エラーを返す。
+    /// 閉じずに手放した（drop した）ときは、閉じるときの失敗は捨てられる。
+    pub fn close(self) -> Result<(), StorageError> {
+        // 接続を閉じてから、関数の終わりでロックを離す
+        let Self { conn, _lock } = self;
+        conn.close().map_err(|(_, e)| StorageError::from(e))
+    }
+
     /// SQLite への接続。表の読み書きは後続の課題でこの層に作る。
     pub fn connection(&self) -> &Connection {
         &self.conn

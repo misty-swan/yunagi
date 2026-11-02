@@ -252,7 +252,7 @@ fn sync_dir(dir: &Path) -> std::io::Result<()> {
 mod tests {
     use std::time::Duration;
 
-    use super::super::{Database, DbLock, LOCK_FILE_NAME};
+    use super::super::{Database, DbLock};
     use super::*;
 
     /// テスト用のマイグレーション。本番の一覧（MIGRATIONS）とは別。
@@ -285,15 +285,16 @@ mod tests {
         dir.path().join("yunagi.db")
     }
 
-    /// `path` の隣の `yunagi.lock` を取ってから、マイグレーションの一覧を指定して開く。
+    /// ロックを取ってから、マイグレーションの一覧を指定して開く。テストでは、既定ディレクトリの
+    /// 代わりにデータベースと同じ一時フォルダにロックファイルを置く（本番では別のフォルダ）。
     fn open_with(path: &Path, migrations: &[Migration]) -> Result<Database, StorageError> {
-        let lock = DbLock::acquire(path.with_file_name(LOCK_FILE_NAME), Duration::ZERO).unwrap();
+        let lock = DbLock::acquire(path.parent().unwrap(), Duration::ZERO).unwrap();
         Database::open_with_migrations(lock, path, migrations)
     }
 
-    /// `path` の隣の `yunagi.lock` を取ってから、本番の一覧で開く。
+    /// ロックを取ってから、本番の一覧で開く（ロックの置き場所は [`open_with`] と同じ）。
     fn open_default(path: &Path) -> Result<Database, StorageError> {
-        let lock = DbLock::acquire(path.with_file_name(LOCK_FILE_NAME), Duration::ZERO).unwrap();
+        let lock = DbLock::acquire(path.parent().unwrap(), Duration::ZERO).unwrap();
         Database::open(lock, path)
     }
 
