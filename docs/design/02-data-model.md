@@ -64,11 +64,11 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | carry_count | INTEGER | 持ち越された回数（0 から。持ち越すたびに元項目の値＋1） |
 | carried_from_id | TEXT NULL | 持ち越し元（前回の日）の項目の id |
 | split_from_id | TEXT NULL | 分割元の項目の id（分割で作った子項目のみ） |
-| resolution_note | TEXT NULL | 障害の解消メモ |
+| resolution_note | TEXT NULL | 障害の解消メモ（未解消に戻しても残す。持ち越しで作る項目には写さない。操作仕様書 2章） |
 | origin | TEXT | `human` / `agent` / `note`（ノートから送った） / `external` |
 | agent_client_id | TEXT NULL | エージェントが作成した場合の識別 |
 | external_ref_id | TEXT NULL | 外部課題との紐付け |
-| completed_at | TEXT NULL | 完了・解消時刻 |
+| completed_at | TEXT NULL | 完了・解消時刻（未完了・未解消に戻すと NULL。すでに完了・解消済みへのやり直しでは変えない。操作仕様書 2章、MCP・CLI 仕様書 3章） |
 | created_at / updated_at / deleted_at | TEXT | 監査用時刻 |
 
 持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
@@ -76,6 +76,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 - 前回の日の元項目の `status` は変更しない。持ち越し済みかどうかは、`carried_from_id` で元を指す項目があるかで判定する（`carried_to_id` は派生列またはビューで参照する）。
 - 見直しで「やめる」を選んだ TODO は、元項目を `status = dropped`、`close_reason = dropped` にする。「外部ツールへ戻す」（外部連携が有効で、外部課題と紐付いた TODO のみ）は `close_reason = returned_external` とする。
 - 「分割する」を選んだ場合は、元項目を `status = dropped`、`close_reason = split` にし、今日に作る子項目は `split_from_id` で元を指す（子項目の `carry_count` は 0）。
+- 持ち越しで作る障害には、元項目の `resolution_note`（未解消に戻した障害に残っている解消メモ。操作仕様書 2章）を写さない。解消メモは元の日の障害に残る。
 - 持ち越した項目は、今日のリストの先頭に、前回の日の順のまま入るよう `sort_key` を付ける。
 
 #### 件数の数え方
@@ -130,12 +131,12 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則）。取り消しの記録は `agent.revert` |
 | target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection`。target_id は、item なら項目の id、note・reflection なら日付（`YYYY-MM-DD`） |
 | before / after | TEXT（JSON） | 変更前後のスナップショット。item は、その操作が変えた欄だけを入れる（追加・削除では項目全体）。note・reflection は本文 |
-| created_at | TEXT | 操作時刻 |
+| created_at | TEXT | 操作時刻（ミリ秒まで。画面の操作との前後をこの値で比べる。アーキテクチャ設計書 4.1） |
 | reverted_at | TEXT NULL | 取り消した時刻 |
 | revert_of_id | TEXT NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
 | seen_at | TEXT NULL | 利用者が変更履歴画面で確認した時刻 |
 
-記録するのは、実際に何かを変えた操作だけとする。何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker` をやり直した場合など。MCP・CLI 仕様書 3章）は記録しない。やり直しのたびに同じ記録と未確認の印が増えないようにするため。
+記録するのは、実際に何かを変えた操作だけとする。何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker` をやり直した場合など。MCP・CLI 仕様書 3章）は記録しない。やり直しのたびに同じ記録と未確認の印が増えないようにするため。利用者が画面で項目の状態を変えてから保存されるまでの間に、エージェントが同じ状態にした場合も、利用者の保存の書き込み時に、そのエージェントの記録から状態と完了時刻の欄を外し、何も残らなければ記録を消す（利用者の変更として扱う。アーキテクチャ設計書 4.1）。
 
 取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。item では、`before` / `after` に入っている欄だけを書き戻し、ほかの欄には触れない（画面の保存が欄ごとに書くのと合わせるため。アーキテクチャ設計書 4.1）。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、`after` に入っている欄（note・reflection では本文）の現在の値と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
 
