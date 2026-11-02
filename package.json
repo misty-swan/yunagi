@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "tauri": "tauri",
-    "check": "pnpm run check:rust && pnpm run check:app && pnpm run check:types && pnpm run check:web",
+    "check": "pnpm run check:rust && pnpm run check:clippy && pnpm run check:types && pnpm run check:web",
     "check:rust": "cargo test -p yunagi-core -p yunagi-cli --locked",
-    "check:app": "cargo check -p yunagi-app --locked",
+    "check:clippy": "cargo clippy --workspace --all-targets --locked -- -D warnings",
     "check:types": "svelte-check --tsconfig ./tsconfig.json --config ./svelte.config.js --fail-on-warnings && tsc -p tsconfig.node.json",
     "check:web": "vitest run"
   },

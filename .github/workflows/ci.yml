@@ -1,0 +1,67 @@
+# 開発用 CI：PR と main への push のたびに、手元と同じ `pnpm check` を走らせる。
+# 配布用のビルド（docs/release/07-build-and-distribution.md 3章）とは別のもの。
+# 検査の中身は package.json の `check` にだけ書き、ここには書かない（手元と CI をずらさないため）。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同じ PR（またはブランチ）で新しい push があったら、古い実行は止める
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: pnpm check (Linux)
+    # macOS・Windows は 5. 配布で追加する
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri（yunagi-app）のコンパイルに要る Linux のライブラリ
+      # https://v2.tauri.app/start/prerequisites/#linux
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # target/ と cargo の取得物をキャッシュする（Cargo.lock が変わると作り直す）
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      # 版は package.json の packageManager から読む
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm check
+        run: pnpm check
