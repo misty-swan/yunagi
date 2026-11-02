@@ -4365,6 +4365,8 @@ version = "0.0.0"
 dependencies = [
  "jiff",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
