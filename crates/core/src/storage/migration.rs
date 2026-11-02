@@ -294,8 +294,7 @@ mod tests {
 
     /// ロックを取ってから、本番の一覧で開く（ロックの置き場所は [`open_with`] と同じ）。
     fn open_default(path: &Path) -> Result<Database, StorageError> {
-        let lock = DbLock::acquire(path.parent().unwrap(), Duration::ZERO).unwrap();
-        Database::open(lock, path)
+        open_with(path, MIGRATIONS)
     }
 
     fn backups(dir: &tempfile::TempDir) -> Vec<PathBuf> {

@@ -59,13 +59,13 @@ impl DbLock {
         };
         // Windows の LockFileEx は読みか書きの権限で開いたファイルにしか使えないため、両方で開く。
         // 中身は使わないので切り詰めない
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(io_error)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        // 本人だけが読み書きできる権限で作る（docs/release/SECURITY.md）。ほかの利用者が
+        // ファイルを開けると、ロックを取って本人を締め出せるため。既にあるファイルの権限は変えない
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(&path).map_err(io_error)?;
         // 待ち時間が大きすぎて期限を表せないとき（Duration::MAX など）は、期限なしで待つ
         let deadline = Instant::now().checked_add(wait);
         loop {
@@ -111,6 +111,11 @@ pub enum LockError {
 impl fmt::Display for LockError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Busy { path, waited } if waited.is_zero() => write!(
+                f,
+                "the Yunagi database is already in use (could not lock {})",
+                path.display()
+            ),
             Self::Busy { path, waited } => write!(
                 f,
                 "the Yunagi database is already in use (could not lock {} within {} ms)",
@@ -139,8 +144,9 @@ impl Database {
     /// （アーキテクチャ設計書 4章 2）。
     ///
     /// ロックが取れなければ、最大 `wait` 待ってから [`StorageError::Lock`] を返す。
-    /// `operation` が失敗しても、閉じてロックを離してからその失敗を返す。`operation` が
-    /// 成功して閉じるのに失敗したら、その失敗を返す。呼んだスレッドを止めうる点は
+    /// `operation` が失敗しても、閉じてロックを離してからその失敗を返す（閉じるのにも
+    /// 失敗したときは、`operation` の失敗のほうを返す）。`operation` が成功して閉じるのに
+    /// 失敗したら、閉じる失敗を返す。呼んだスレッドを止めうる点は
     /// [`DbLock::acquire`] と同じ。
     pub fn with_locked<T, E>(
         default_dir: impl AsRef<Path>,
@@ -187,7 +193,10 @@ mod tests {
     #[test]
     #[ignore = "spawn_holder が子プロセスとして動かす"]
     fn lock_holder_child() {
-        let lock_dir = std::env::var_os(CHILD_LOCK_ENV).expect("child: lock dir");
+        // 子として起動されたのでなければ（`--include-ignored` などで走ったとき）何もしない
+        let Some(lock_dir) = std::env::var_os(CHILD_LOCK_ENV) else {
+            return;
+        };
         let lock = DbLock::acquire(&lock_dir, Duration::ZERO).expect("child: acquire lock");
         // データベースを開くときは Database がロックを持ち、開かないときはそのまま持つ
         let held: Box<dyn std::any::Any> = match std::env::var_os(CHILD_DB_ENV) {
@@ -232,11 +241,14 @@ mod tests {
 
     /// テストの実行ファイルをもう1つ起動し、ロックを持たせる。ロックを取るまで待って返す。
     fn spawn_holder(lock_dir: &Path, db_path: Option<&Path>) -> Holder {
+        // テストの名前は、クレート名を除いたモジュールの場所＋関数名（名前を変えても追従する）
+        let (_crate, module) = module_path!().split_once("::").unwrap();
+        let test_name = format!("{module}::lock_holder_child");
         let mut cmd = Command::new(std::env::current_exe().unwrap());
         cmd.args([
             "--ignored",
             "--exact",
-            "storage::lock::tests::lock_holder_child",
+            &test_name,
             "--nocapture",
             "--test-threads=1",
         ])
@@ -279,6 +291,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = DbLock::acquire(dir.path().join("missing"), Duration::ZERO).unwrap_err();
         assert!(matches!(err, LockError::Io { .. }), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_file_is_readable_only_by_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        drop(DbLock::acquire(dir.path(), Duration::ZERO).unwrap());
+        let mode = std::fs::metadata(dir.path().join(LOCK_FILE_NAME))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "mode {mode:o}");
     }
 
     #[test]
