@@ -119,13 +119,13 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | agent_client_id | TEXT FK→agent_client NULL | 操作したエージェント（CLI は `name = cli` の行）。`actor = human` のときは NULL |
 | operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則）。取り消しの記録は `agent.revert` |
 | target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection`。target_id は、item なら項目の id、note・reflection なら日付（`YYYY-MM-DD`） |
-| before / after | TEXT（JSON） | 変更前後のスナップショット |
+| before / after | TEXT（JSON） | 変更前後のスナップショット。item は、その操作が変えた欄だけを入れる（追加・削除では項目全体）。note・reflection は本文 |
 | created_at | TEXT | 操作時刻 |
 | reverted_at | TEXT NULL | 取り消した時刻 |
 | revert_of_id | TEXT NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
 | seen_at | TEXT NULL | 利用者が変更履歴画面で確認した時刻 |
 
-取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、対象の現在の状態と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
+取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。item では、`before` / `after` に入っている欄だけを書き戻し、ほかの欄には触れない（画面の保存が欄ごとに書くのと合わせるため。アーキテクチャ設計書 4.1）。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、`after` に入っている欄（note・reflection では本文）の現在の値と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
 
 画面の「エージェントによる未確認の変更」は、`actor = agent` かつ `seen_at` が NULL の記録で表す。上部のバーとサイドバーの件数はその記録の数、項目の行頭の菱形は `target_type = item` でその項目を指す記録があるときに付ける。
 
