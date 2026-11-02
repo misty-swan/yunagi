@@ -289,8 +289,11 @@ pub struct ChangeReport {
 /// - ロック（[`DbLock`]）を渡さないと呼べない。`config.json` は、ロックを取った既定ディレクトリ
 ///   （[`DbLock::default_dir`]）のものを使う。
 /// - 開いているデータベース（[`super::Database`]）はロックを持っているので、ロックが手元に
-///   あれば、このプロセスのデータベースは閉じている。アプリは
+///   あれば、このプロセスがコアを通して開いたデータベースは閉じている（閉じるのに失敗した
+///   ときも、ロックはデータベースと一緒にしか返らない）。アプリは
 ///   [`super::Database::close_keeping_lock`] で、ロックを離さずに閉じてから呼ぶ。
+///   コアを通さずに開いた接続（`rusqlite::Connection` を直接使うもの）までは型で防げないので、
+///   データベースはコアの外で開かない。
 pub fn change_data_dir(lock: &DbLock, new_dir: &Path) -> Result<ChangeReport, DataDirError> {
     let default_dir = lock.default_dir();
     if !new_dir.is_absolute() {

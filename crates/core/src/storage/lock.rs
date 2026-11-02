@@ -40,7 +40,7 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(50);
 /// 取った `yunagi.lock` の排他ロック。手放す（drop する）とロックが離れる。
 ///
 /// 開いているデータベース（[`Database`]）は、このロックを持つ。逆に、ロックが手元にある
-/// （`Database` に渡していない）なら、このプロセスはデータベースを開いていない。保存先の変更
+/// （`Database` に渡していない）なら、このプロセスがコアを通して開いたデータベースは無い。保存先の変更
 /// （[`super::data_dir::change_data_dir`]）は、これを使って「ロックを持ち、データベースを
 /// 閉じている」ことを型で求める。
 #[derive(Debug)]
@@ -110,6 +110,17 @@ impl DbLock {
     pub fn default_dir(&self) -> &DefaultDir {
         &self.default_dir
     }
+
+    /// ロックを持ったまま、`config.json` から保存先を求め、そこの `yunagi.db` のパスを返す。
+    ///
+    /// データベースのパスは、ロックを取った後で求める（アーキテクチャ設計書 4.2）。取る前に
+    /// 求めると、待っている間にアプリが保存先を移したとき、古い保存先に空のデータベースを
+    /// 作ってしまうため。
+    pub fn database_path(&self) -> Result<PathBuf, DataDirError> {
+        Ok(data_dir::database_path(&data_dir::resolve_data_dir(
+            &self.default_dir,
+        )?))
+    }
 }
 
 impl Drop for DbLock {
@@ -161,25 +172,34 @@ impl std::error::Error for LockError {
 }
 
 /// ロックを離さずに閉じようとして（[`Database::close_keeping_lock`]）、閉じるのに失敗した。
-/// 接続は手放してある。ロックは離さずに返すので、呼び出し側は持ち続けるか手放すかを選べる。
-#[derive(Debug)]
+///
+/// 接続が閉じたとは限らないので、ロックだけを返さず、データベース（`db`）ごと返す。
+/// これで「ロックが手元にあれば、データベースは閉じている」が崩れない。呼び出し側は、
+/// `db` でもう一度閉じるのを試すか、手放す（接続を閉じてからロックが離れる）。
 pub struct CloseError {
     /// 閉じるのに失敗した理由。
     pub error: StorageError,
-    /// 持ったままのロック。
-    pub lock: DbLock,
+    /// 閉じられなかったデータベース。ロックも持ったまま。
+    pub db: Database,
 }
 
-impl DbLock {
-    /// ロックを持ったまま、`config.json` から保存先を求め、そこの `yunagi.db` のパスを返す。
-    ///
-    /// データベースのパスは、ロックを取った後で求める（アーキテクチャ設計書 4.2）。取る前に
-    /// 求めると、待っている間にアプリが保存先を移したとき、古い保存先に空のデータベースを
-    /// 作ってしまうため。
-    pub fn database_path(&self) -> Result<PathBuf, DataDirError> {
-        Ok(data_dir::database_path(&data_dir::resolve_data_dir(
-            &self.default_dir,
-        )?))
+impl fmt::Debug for CloseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CloseError")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for CloseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "could not close the database: {}", self.error)
+    }
+}
+
+impl std::error::Error for CloseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
     }
 }
 
@@ -188,16 +208,15 @@ impl Database {
     /// （[`super::data_dir::change_data_dir`]）の前に、アプリがデータベースを閉じるのに使う
     /// （閉じてからロックを取り直すと、その間に CLI・MCP がデータベースを開きうるため）。
     ///
-    /// 閉じるのに失敗したら（WAL の書き戻しの失敗など）、接続を手放してから、
-    /// ロックを持ったまま [`CloseError`] で返す。
+    /// 閉じるのに失敗したら（WAL の書き戻しの失敗など）、閉じられなかったデータベースを
+    /// [`CloseError`] で返す（ロックだけは返さない）。
     pub fn close_keeping_lock(self) -> Result<DbLock, Box<CloseError>> {
         let Self { conn, _lock: lock } = self;
         match conn.close() {
             Ok(()) => Ok(lock),
-            // 失敗したときに返ってくる接続は、ここで手放す
-            Err((_, e)) => Err(Box::new(CloseError {
+            Err((conn, e)) => Err(Box::new(CloseError {
                 error: StorageError::from(e),
-                lock,
+                db: Database { conn, _lock: lock },
             })),
         }
     }
@@ -591,14 +610,18 @@ mod tests {
         let cli = {
             let default_dir = default_dir.clone();
             thread::spawn(move || {
-                Database::with_locked(&default_dir, Duration::from_secs(30), |db| {
+                Database::with_locked(&default_dir, Duration::from_secs(10), |db| {
                     Ok::<_, TestError>(db.connection().path().map(PathBuf::from))
                 })
                 .unwrap()
             })
         };
-        // 待っている間に、アプリがロックを持ったまま保存先を移し、閉じる
-        thread::sleep(Duration::from_millis(200));
+        // CLI がロックを待つところまで進むのを待つ（時間で待つので、遅い環境では CLI が
+        // 移した後に読み始めることもある。そのときも結果は同じなので、テストは失敗しない）
+        thread::sleep(Duration::from_millis(300));
+        // アプリがロックを持っているので、CLI は終わっていない（ロックを待っている）
+        assert!(!cli.is_finished());
+        // 待っている間に、アプリがロックを持ったまま閉じて、保存先を移す
         let lock = app_db.close_keeping_lock().unwrap();
         change_data_dir(&lock, &new_dir).unwrap();
         drop(lock);

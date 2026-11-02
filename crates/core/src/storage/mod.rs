@@ -72,7 +72,8 @@ impl Database {
     /// 接続を閉じ、ロックを離す。閉じるのに失敗したら（WAL の書き戻しの失敗など）エラーを返す。
     /// 閉じずに手放した（drop した）ときは、閉じるときの失敗は捨てられる。
     pub fn close(self) -> Result<(), StorageError> {
-        // 接続を閉じてから、ロックを離す
+        // 閉じたらロックを離す。失敗したときは、返ってきたデータベースを手放す
+        // （接続を閉じてからロックが離れる）
         self.close_keeping_lock().map(drop).map_err(|e| e.error)
     }
 
