@@ -64,7 +64,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | carry_count | INTEGER | 持ち越された回数（0 から。持ち越すたびに元項目の値＋1） |
 | carried_from_id | TEXT NULL | 持ち越し元（前回の日）の項目の id |
 | split_from_id | TEXT NULL | 分割元の項目の id（分割で作った子項目のみ） |
-| resolution_note | TEXT NULL | 障害の解消メモ |
+| resolution_note | TEXT NULL | 障害の解消メモ（未解消に戻しても残す。操作仕様書 2章） |
 | origin | TEXT | `human` / `agent` / `note`（ノートから送った） / `external` |
 | agent_client_id | TEXT NULL | エージェントが作成した場合の識別 |
 | external_ref_id | TEXT NULL | 外部課題との紐付け |
