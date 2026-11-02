@@ -70,9 +70,9 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - 応答と記録：成功の応答には `resolve_blocker` と同じ `updated`（`true` / `false`）を含める。CLI では、`--json` のときに同じ `updated` を含む JSON を出し、テキスト出力では `Completed.`（完了にした）・`Already done. Nothing changed.`（`complete_todo` で何も変えていない）、`Reopened.`（未完了に戻した）・`Already open. Nothing changed.`（`reopen_todo` で何も変えていない）を表示する。終了コードはどれも 0。何も変えなかった場合（`updated: false`）は change_log に記録しない（7章）。記録するときは、`todo.complete` / `todo.reopen` として状態と完了時刻を `before` / `after` に入れる。
 - 持ち越し済みの項目（持ち越し元。データモデル設計書 3章「持ち越し」）への書き込みは、持ち越し先へ向け直さず、何も変えずに拒む（2026-11-03 決定）。持ち越すと前の日の項目は `open` のまま残るため、そのまま受け付けると、前の日の項目だけが完了などになり、今日の持ち越しの項目は元のまま残って、利用者とエージェントの見ている状態が食い違うため。黙って向け直すと、エージェントが指定した項目とは別の項目が変わり、`edit_todo` の本文や解消メモの判定も別の項目で行われるため、向け直しはしない。
   - 対象の操作：`edit_todo`・`complete_todo`・`reopen_todo`・`resolve_blocker`。ID が持ち越し済みの項目を指す場合は、その項目の状態（完了・未完了など）にかかわらず、`conflict`（`reason: carried_over`。4.3）を返す。同じ操作を何度送っても同じ結果になり、前の日の項目は変わらない。
-  - 持ち越し先の知らせ方：エラーに、持ち越し先の項目の id `carried_to_id`（データモデル設計書 3章の定義）と、その項目の日付 `carried_to_date` を含める。持ち越しが続いている場合（前の日から次の日へ、さらに今日へ）は、送り直した先でも `carried_over` が返るので、同じようにたどる。持ち越し先が取りやめた TODO（`dropped`）であることもあり、その ID に送った操作は上の `invalid_argument` の決まりに従う。
-  - 判定の順：`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` の次に `carried_over` を確かめ、続けて `user_editing`、`note_exists` の順に確かめる（上の `resolve_blocker`・`complete_todo` の判定の順に `carried_over` を加える）。
-  - 読み取り：`get_board`・`open_board` の各項目には、持ち越し先の項目の id を `carried_to_id` として含める（持ち越し済みでなければ `null`。4.2）。エージェントは、前の日のボードを読んだときに、持ち越し済みの項目を操作の対象から外せる。
+  - 持ち越し先の知らせ方：エラーに、持ち越し先の項目の id `carried_to_id`（データモデル設計書 3章の定義）と、その項目の日付 `carried_to_date` を含める。持ち越しが続いている場合（前の日から次の日へ、さらに今日へ）は、送り直した先でも `carried_over` が返るので、同じようにたどる。持ち越し先が取りやめた TODO（`dropped`。持ち越した次の日の見直しで「やめる」などを選んだもの）であることもあり、その ID に送った `complete_todo`・`reopen_todo` は上の `invalid_argument` の決まりに従う。
+  - 判定の順：対象の4つの操作のどれでも、`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` の次に `carried_over` を確かめ、続けて `user_editing`、`note_exists` の順に確かめる（上の `resolve_blocker`・`complete_todo` の判定の順と、`edit_todo` の入力中の判定より前に `carried_over` を加える）。利用者が持ち越し済みの項目を入力中であっても `carried_over` を返す。`user_editing` を返すと、エージェントは同じ ID へのやり直しを続け、持ち越し先にたどり着かないため。
+  - 読み取り：`get_board`・`open_board` の各項目と、`search` の結果の項目には、持ち越し先の項目の id `carried_to_id` と日付 `carried_to_date` を含める（持ち越し済みでなければどちらも `null`。4.2）。エージェントは、前の日のボードを読んだときに、持ち越し済みの項目を操作の対象から外せる。
   - 持ち越し先の項目が削除された場合、元の項目は持ち越し済みでなくなり、通常どおり受け付ける（その項目が残っている唯一の写しになるため）。
   - `agent revert` で持ち越し済みの項目を戻す場合の扱いは未決（9章）。
 - A-01 のノート取得は、`get_board`（見出しと長さ）と `get_note`（本文）の組で満たす（4.2 参照）。
@@ -113,10 +113,10 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {
   "date": "2026-11-02",
   "todos": [
-    {"id": "01J...", "text": "API のレート制限を調査", "status": "open", "carry_count": 1, "origin": "human", "external_ref": null, "carried_to_id": null}
+    {"id": "01J...", "text": "API のレート制限を調査", "status": "open", "carry_count": 1, "origin": "human", "external_ref": null, "carried_to_id": null, "carried_to_date": null}
   ],
   "blockers": [
-    {"id": "01J...", "text": "ステージング環境の権限待ち", "status": "open", "carry_count": 0, "origin": "note", "external_ref": null, "resolution_note": null, "carried_to_id": null}
+    {"id": "01J...", "text": "ステージング環境の権限待ち", "status": "open", "carry_count": 0, "origin": "note", "external_ref": null, "resolution_note": null, "carried_to_id": null, "carried_to_date": null}
   ],
   "reflection": "…",
   "note": {"headings": ["10:00 定例", "14:00 設計レビュー"], "length": 2380}
