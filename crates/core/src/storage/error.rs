@@ -4,6 +4,8 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use super::LockError;
+
 /// ストレージの操作が失敗した理由。
 #[derive(Debug)]
 pub enum StorageError {
@@ -11,6 +13,9 @@ pub enum StorageError {
     Sqlite(rusqlite::Error),
     /// ファイルの操作（バックアップ用フォルダの作成など）が失敗した。
     Io(io::Error),
+    /// `yunagi.lock` のロックが取れなかった（ほかのプロセスが使っているなど）。
+    /// データベースには触れていない。
+    Lock(LockError),
     /// WAL モードにできなかった。`mode` は実際のジャーナルモード。
     WalUnavailable { mode: String },
     /// データベースのスキーマの番号を、このアプリが知らない。ふつうは新しい版で作られたもの
@@ -40,6 +45,7 @@ impl fmt::Display for StorageError {
         match self {
             Self::Sqlite(e) => write!(f, "database error: {e}"),
             Self::Io(e) => write!(f, "file error: {e}"),
+            Self::Lock(e) => write!(f, "{e}"),
             Self::WalUnavailable { mode } => {
                 write!(f, "could not enable WAL mode (journal mode is {mode})")
             }
@@ -77,6 +83,7 @@ impl std::error::Error for StorageError {
         match self {
             Self::Sqlite(e) => Some(e),
             Self::Io(e) => Some(e),
+            Self::Lock(e) => Some(e),
             Self::MigrationFailed { source, .. } | Self::RestoreFailed { source, .. } => {
                 Some(source)
             }

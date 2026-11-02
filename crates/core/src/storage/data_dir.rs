@@ -972,10 +972,11 @@ mod tests {
     #[test]
     fn moved_database_opens_in_wal_mode() {
         let d = dirs();
-        drop(super::super::Database::open(database_path(&d.default)).unwrap());
+        let lock = || super::super::DbLock::acquire(&d.default, std::time::Duration::ZERO).unwrap();
+        drop(super::super::Database::open(lock(), database_path(&d.default)).unwrap());
         let new_dir = d.root.join("new");
         change_data_dir(&d.default, &new_dir).unwrap();
-        let db = super::super::Database::open(database_path(&new_dir)).unwrap();
+        let db = super::super::Database::open(lock(), database_path(&new_dir)).unwrap();
         let mode: String = db
             .connection()
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))

@@ -208,13 +208,16 @@ pub(crate) mod test_support {
 
     use super::day;
     use crate::domain::logical_date::LogicalDate;
-    use crate::storage::Database;
+    use std::time::Duration;
+
+    use crate::storage::{Database, DbLock};
 
     /// 一時フォルダに、マイグレーションを適用したデータベースを作る。
     /// フォルダはデータベースより後に消えるよう、組にして返す。
     pub fn open() -> (Database, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(dir.path().join("yunagi.db")).unwrap();
+        let lock = DbLock::acquire(dir.path(), Duration::ZERO).unwrap();
+        let db = Database::open(lock, dir.path().join("yunagi.db")).unwrap();
         (db, dir)
     }
 
