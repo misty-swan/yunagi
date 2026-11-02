@@ -1,16 +1,15 @@
 {
   "name": "yunagi",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "tauri": "tauri",
-    "check": "pnpm run check:rust && pnpm run check:types && pnpm run check:web",
+    "check": "pnpm run check:rust && pnpm run check:app && pnpm run check:types && pnpm run check:web",
     "check:rust": "cargo test -p yunagi-core -p yunagi-cli --locked",
-    "check:app": "cargo build -p yunagi-app --locked",
+    "check:app": "cargo check -p yunagi-app --locked",
     "check:types": "svelte-check --tsconfig ./tsconfig.json --config ./svelte.config.js --fail-on-warnings && tsc -p tsconfig.node.json",
     "check:web": "vitest run"
   },
