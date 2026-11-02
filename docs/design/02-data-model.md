@@ -76,6 +76,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 - 前回の日の元項目の `status` は変更しない。持ち越し済みかどうかは、`carried_from_id` で元を指す項目があるかで判定する（`carried_to_id` は派生列またはビューで参照する）。
 - 見直しで「やめる」を選んだ TODO は、元項目を `status = dropped`、`close_reason = dropped` にする。「外部ツールへ戻す」（外部連携が有効で、外部課題と紐付いた TODO のみ）は `close_reason = returned_external` とする。
 - 「分割する」を選んだ場合は、元項目を `status = dropped`、`close_reason = split` にし、今日に作る子項目は `split_from_id` で元を指す（子項目の `carry_count` は 0）。
+- 持ち越しで作る障害には、元項目の `resolution_note`（未解消に戻した障害に残っている解消メモ。操作仕様書 2章）を写さない。解消メモは元の日の障害に残る。
 - 持ち越した項目は、今日のリストの先頭に、前回の日の順のまま入るよう `sort_key` を付ける。
 
 #### 件数の数え方
