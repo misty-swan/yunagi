@@ -1,0 +1,8 @@
+# ビルド生成物・依存パッケージ（コミットしない）
+node_modules/
+dist/
+target/
+**/src-tauri/gen/
+__pycache__/
+# 計測の生データ（RESULTS.md に要約を書く）
+results/raw/

@@ -1,0 +1,109 @@
+/*
+  Yunagi 色トークン（デザイン案D「夕凪」）
+  06 デザインガイド 3章の改訂案と1対1で対応させる。
+  値を変えたら、文字に使うトークンのコントラスト比を --bg・--side・--surface のすべてに対して再計算する
+  （本文 7:1、補助情報・状態色 4.5:1 以上。--text-faint・景色のトークンは装飾用で文字には使わない）。
+
+  テーマの切り替え
+  - 既定（data-theme なし）：OS の外観設定に合わせる。表示中の OS 側の変更にもすぐ追従する
+  - data-theme="light" / "dark"：固定
+*/
+
+/* ライト */
+:root {
+  color-scheme: light;
+  /* 面と文字 */
+  --bg: #F8F6F3;            /* 背景 */
+  --side: #F1EEEA;          /* サイドバー */
+  --surface: #FFFFFF;       /* 入力中の行、パネル、パレット */
+  --text: #25222C;          /* 本文 */
+  --text-muted: #5E5A68;    /* 補助情報、見出しラベル */
+  --text-faint: #9A95A3;    /* 区切り記号などの装飾（文字情報には使わない） */
+  --rule: #E4DCD8;          /* 罫線 */
+  --ring: #948A85;          /* チェック欄の枠 */
+  /* 意味の色 */
+  --accent: #E0904E;        /* 夕陽：完了の塗り、太陽（面・装飾） */
+  --accent-strong: #9A4F1C; /* 選択の線、フォーカス、強調の文字 */
+  --warn: #9C3A24;          /* 持ち越し3回以上、保存失敗、未解消の障害数 */
+  --done: #66616E;          /* 完了・解消の文字 */
+  --agent: #6A53AE;         /* エージェント由来 */
+  --sea: #285F77;           /* 送信済みの印、接続中などの情報 */
+  /* 景色（凪メーター） */
+  --sky-1: #F5DCC8;
+  --sky-2: #F1E8EE;
+  --sun-core: #FFE2C2;
+  --sun-glow: rgba(236, 150, 86, 0.32);
+  --sun-halo: rgba(224, 144, 78, 0.18);
+  --horizon: rgba(120, 80, 60, 0.35);
+  --wave: #5D8CA3;
+  --sea-tint: rgba(160, 190, 205, 0.25);
+  /* 重ねる色（半透明） */
+  --sel: rgba(224, 144, 78, 0.08);   /* 選択中の行 */
+  --hover: rgba(37, 34, 44, 0.05);   /* ナビの選択・ホバー */
+  --field: rgba(255, 255, 255, 0.6); /* 検索欄などの入力面 */
+  --scrim: rgba(248, 246, 243, 0.72);/* 重ねて表示する画面の背後 */
+}
+
+/* ダーク：OS がダークで、ライト固定でないとき */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0F1320;
+    --side: #0B0F19;
+    --surface: #171C2B;
+    --text: #ECE8F1;
+    --text-muted: #9BA0B5;
+    --text-faint: #6D7290;
+    --rule: #262B3D;
+    --ring: #6B7390;
+    --accent: #F0A562;
+    --accent-strong: #F0A562;
+    --warn: #F28B6E;
+    --done: #8D93AA;
+    --agent: #B9A8F4;
+    --sea: #8EC3D8;
+    --sky-1: #2A2440;
+    --sky-2: #1A1B30;
+    --sun-core: #FFD9AE;
+    --sun-glow: rgba(240, 165, 98, 0.28);
+    --sun-halo: rgba(240, 165, 98, 0.16);
+    --horizon: rgba(255, 226, 200, 0.55);
+    --wave: #8EC3D8;
+    --sea-tint: rgba(30, 44, 74, 0.55);
+    --sel: rgba(240, 165, 98, 0.07);
+    --hover: rgba(255, 255, 255, 0.06);
+    --field: rgba(255, 255, 255, 0.04);
+    --scrim: rgba(15, 19, 32, 0.72);
+  }
+}
+
+/* ダーク固定（値は上と同じ） */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0F1320;
+  --side: #0B0F19;
+  --surface: #171C2B;
+  --text: #ECE8F1;
+  --text-muted: #9BA0B5;
+  --text-faint: #6D7290;
+  --rule: #262B3D;
+  --ring: #6B7390;
+  --accent: #F0A562;
+  --accent-strong: #F0A562;
+  --warn: #F28B6E;
+  --done: #8D93AA;
+  --agent: #B9A8F4;
+  --sea: #8EC3D8;
+  --sky-1: #2A2440;
+  --sky-2: #1A1B30;
+  --sun-core: #FFD9AE;
+  --sun-glow: rgba(240, 165, 98, 0.28);
+  --sun-halo: rgba(240, 165, 98, 0.16);
+  --horizon: rgba(255, 226, 200, 0.55);
+  --wave: #8EC3D8;
+  --sea-tint: rgba(30, 44, 74, 0.55);
+  --sel: rgba(240, 165, 98, 0.07);
+  --hover: rgba(255, 255, 255, 0.06);
+  --field: rgba(255, 255, 255, 0.04);
+  --scrim: rgba(15, 19, 32, 0.72);
+}

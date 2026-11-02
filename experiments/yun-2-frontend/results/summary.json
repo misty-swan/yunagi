@@ -1,0 +1,1233 @@
+{
+  "note": "YUN-2 の計測要約（2026-11-02, Linux/Hyprland/WebKitGTK 2.54.1）。生データは results/raw/（コミットしない）。static は初版（入力欄のみ）、static_after_list は一覧を足した後",
+  "startup_visible_workspace_10runs": {
+    "svelte": {
+      "window_ms": {
+        "median": 139.96,
+        "min": 125.24,
+        "max": 164.28,
+        "n": 10
+      },
+      "ready_ms": {
+        "median": 386.96,
+        "min": 371.76,
+        "max": 431.27,
+        "n": 10
+      },
+      "setup_rust_ms": {
+        "median": 84.25,
+        "min": 79.5,
+        "max": 93.7,
+        "n": 10
+      },
+      "ready_rust_ms": {
+        "median": 359.55,
+        "min": 343.5,
+        "max": 391.4,
+        "n": 10
+      },
+      "front_ms": {
+        "median": 147.5,
+        "min": 135.0,
+        "max": 164.0,
+        "n": 10
+      },
+      "pss_mb": {
+        "median": 307.81,
+        "min": 304.75,
+        "max": 326.06,
+        "n": 10
+      }
+    },
+    "solid": {
+      "window_ms": {
+        "median": 140.99,
+        "min": 124.09,
+        "max": 157.1,
+        "n": 10
+      },
+      "ready_ms": {
+        "median": 389.25,
+        "min": 377.96,
+        "max": 460.95,
+        "n": 10
+      },
+      "setup_rust_ms": {
+        "median": 90.0,
+        "min": 79.5,
+        "max": 97.4,
+        "n": 10
+      },
+      "ready_rust_ms": {
+        "median": 364.25,
+        "min": 351.2,
+        "max": 437.5,
+        "n": 10
+      },
+      "front_ms": {
+        "median": 140.5,
+        "min": 134.0,
+        "max": 201.0,
+        "n": 10
+      },
+      "pss_mb": {
+        "median": 309.3,
+        "min": 302.39,
+        "max": 322.84,
+        "n": 10
+      }
+    }
+  },
+  "startup_hidden_workspace_10runs": {
+    "svelte": {
+      "window_ms": {
+        "median": 139.13,
+        "min": 130.8,
+        "max": 151.65,
+        "n": 10
+      },
+      "mounted_ms": {
+        "median": 300.38,
+        "min": 294.09,
+        "max": 313.48,
+        "n": 10
+      },
+      "mounted_rust_ms": {
+        "median": 259.75,
+        "min": 254.7,
+        "max": 265.9,
+        "n": 10
+      },
+      "mounted_front_ms": {
+        "median": 75.0,
+        "min": 73.0,
+        "max": 78.0,
+        "n": 10
+      },
+      "setup_rust_ms": {
+        "median": 79.25,
+        "min": 78.7,
+        "max": 81.8,
+        "n": 10
+      },
+      "ready_ms": null,
+      "pss_mb": {
+        "median": 307.39,
+        "min": 302.24,
+        "max": 312.54,
+        "n": 10
+      }
+    },
+    "solid": {
+      "window_ms": {
+        "median": 135.03,
+        "min": 132.73,
+        "max": 155.85,
+        "n": 10
+      },
+      "mounted_ms": {
+        "median": 294.07,
+        "min": 288.67,
+        "max": 317.49,
+        "n": 10
+      },
+      "mounted_rust_ms": {
+        "median": 256.7,
+        "min": 250.2,
+        "max": 265.8,
+        "n": 10
+      },
+      "mounted_front_ms": {
+        "median": 73.0,
+        "min": 72.0,
+        "max": 77.0,
+        "n": 10
+      },
+      "setup_rust_ms": {
+        "median": 79.35,
+        "min": 78.3,
+        "max": 84.2,
+        "n": 10
+      },
+      "ready_ms": null,
+      "pss_mb": {
+        "median": 304.31,
+        "min": 302.48,
+        "max": 310.89,
+        "n": 10
+      }
+    }
+  },
+  "bench_hidden_workspace_3runs": {
+    "svelte": {
+      "add_first100_ms": {
+        "median": 0.65,
+        "min": 0.63,
+        "max": 0.66,
+        "n": 3
+      },
+      "add_last100_ms": {
+        "median": 5.19,
+        "min": 5.17,
+        "max": 5.22,
+        "n": 3
+      },
+      "add_all_ms": {
+        "median": 2.89,
+        "min": 2.87,
+        "max": 2.9,
+        "n": 3
+      },
+      "toggle_ms": {
+        "median": 4.97,
+        "min": 4.81,
+        "max": 4.99,
+        "n": 3
+      },
+      "clear1000_ms": {
+        "median": 5,
+        "min": 5,
+        "max": 6,
+        "n": 3
+      },
+      "editor_ms": {
+        "median": 0.81,
+        "min": 0.8,
+        "max": 0.85,
+        "n": 3
+      },
+      "ime_logic": [
+        {
+          "composingEnterIgnored": true,
+          "keyCode229Ignored": true,
+          "enterRightAfterCompositionEndIgnored": true,
+          "laterEnterAdds": true,
+          "enterInLaterTaskAdds": true,
+          "guardModuleSane": true
+        },
+        {
+          "composingEnterIgnored": true,
+          "keyCode229Ignored": true,
+          "enterRightAfterCompositionEndIgnored": true,
+          "laterEnterAdds": true,
+          "enterInLaterTaskAdds": true,
+          "guardModuleSane": true
+        },
+        {
+          "composingEnterIgnored": true,
+          "keyCode229Ignored": true,
+          "enterRightAfterCompositionEndIgnored": true,
+          "laterEnterAdds": true,
+          "enterInLaterTaskAdds": true,
+          "guardModuleSane": true
+        }
+      ],
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+      "visibility": [
+        "visible",
+        "visible",
+        "visible"
+      ]
+    },
+    "solid": {
+      "add_first100_ms": {
+        "median": 0.73,
+        "min": 0.58,
+        "max": 0.8,
+        "n": 3
+      },
+      "add_last100_ms": {
+        "median": 5.24,
+        "min": 5.23,
+        "max": 5.49,
+        "n": 3
+      },
+      "add_all_ms": {
+        "median": 2.92,
+        "min": 2.85,
+        "max": 2.99,
+        "n": 3
+      },
+      "toggle_ms": {
+        "median": 5.03,
+        "min": 4.96,
+        "max": 5.11,
+        "n": 3
+      },
+      "clear1000_ms": {
+        "median": 4,
+        "min": 4,
+        "max": 4,
+        "n": 3
+      },
+      "editor_ms": {
+        "median": 0.81,
+        "min": 0.8,
+        "max": 0.83,
+        "n": 3
+      },
+      "ime_logic": [
+        {
+          "composingEnterIgnored": true,
+          "keyCode229Ignored": true,
+          "enterRightAfterCompositionEndIgnored": true,
+          "laterEnterAdds": true,
+          "enterInLaterTaskAdds": true,
+          "guardModuleSane": true
+        },
+        {
+          "composingEnterIgnored": true,
+          "keyCode229Ignored": true,
+          "enterRightAfterCompositionEndIgnored": true,
+          "laterEnterAdds": true,
+          "enterInLaterTaskAdds": true,
+          "guardModuleSane": true
+        },
+        {
+          "composingEnterIgnored": true,
+          "keyCode229Ignored": true,
+          "enterRightAfterCompositionEndIgnored": true,
+          "laterEnterAdds": true,
+          "enterInLaterTaskAdds": true,
+          "guardModuleSane": true
+        }
+      ],
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15",
+      "visibility": [
+        "visible",
+        "visible",
+        "visible"
+      ]
+    }
+  },
+  "static": {
+    "svelte": {
+      "chunks": {
+        "cm.js": {
+          "raw_kb": 593.0,
+          "gzip_kb": 199.0
+        },
+        "index.css": {
+          "raw_kb": 3.2,
+          "gzip_kb": 1.2
+        },
+        "index.js": {
+          "raw_kb": 41.7,
+          "gzip_kb": 16.2
+        },
+        "tauri.js": {
+          "raw_kb": 0.1,
+          "gzip_kb": 0.1
+        }
+      },
+      "js_total": {
+        "raw_kb": 634.8,
+        "gzip_kb": 215.3
+      },
+      "binary_kb": 4678.6,
+      "deb_kb": 1893.9,
+      "npm_packages": 74,
+      "node_modules_mb": 63.5,
+      "code": {
+        "src/main.ts": 6,
+        "src/App.svelte": 74,
+        "vite.config.ts": 21,
+        "index.html": 12
+      },
+      "code_total": 113
+    },
+    "solid": {
+      "chunks": {
+        "cm.js": {
+          "raw_kb": 593.0,
+          "gzip_kb": 199.0
+        },
+        "index.css": {
+          "raw_kb": 3.2,
+          "gzip_kb": 1.2
+        },
+        "index.js": {
+          "raw_kb": 23.1,
+          "gzip_kb": 9.0
+        },
+        "tauri.js": {
+          "raw_kb": 0.1,
+          "gzip_kb": 0.1
+        }
+      },
+      "js_total": {
+        "raw_kb": 616.2,
+        "gzip_kb": 208.1
+      },
+      "binary_kb": 4671.5,
+      "deb_kb": 1887.1,
+      "npm_packages": 96,
+      "node_modules_mb": 73.6,
+      "code": {
+        "src/main.tsx": 6,
+        "src/App.tsx": 91,
+        "vite.config.ts": 21,
+        "index.html": 12,
+        "tsconfig.json": 13
+      },
+      "code_total": 143
+    },
+    "shared_identical": true,
+    "shared_code_lines": {
+      "app.css": 55,
+      "bench.ts": 155,
+      "editor.ts": 32,
+      "ime-guard.ts": 41,
+      "tokens.css": 89
+    }
+  },
+  "build_times_s": [
+    "svelte clean 102.3",
+    "solid clean 98.8",
+    "svelte incremental 41.8",
+    "solid incremental 44.5",
+    ""
+  ],
+  "vite_build_ms": [
+    "svelte vite 424",
+    "svelte vite 429",
+    "svelte vite 425",
+    "svelte vite 425",
+    "svelte vite 429",
+    "solid vite 397",
+    "solid vite 402",
+    "solid vite 408",
+    "solid vite 393",
+    "solid vite 402",
+    ""
+  ],
+  "listcheck_hidden_workspace_3runs": {
+    "svelte": {
+      "errors": [],
+      "editing_all_runs": [
+        {
+          "splitMiddle": true,
+          "enterAtStartAddsAbove": true,
+          "backspaceOnEmptyDeletes": true,
+          "enterAtEndAddsBelow": true,
+          "backspaceOnNonEmptyKeepsItem": true,
+          "arrowDownUp": true,
+          "typingReachesCore": true,
+          "typingKeepsCaretAndTextNode": true,
+          "typingIntoEmptyItemOk": true,
+          "imeComposingEnterNoSplit": true,
+          "imeKeyCode229NoSplit": true,
+          "imeEnterRightAfterCompositionEndNoSplit": true,
+          "imeLaterEnterSplits": true
+        },
+        {
+          "splitMiddle": true,
+          "enterAtStartAddsAbove": true,
+          "backspaceOnEmptyDeletes": true,
+          "enterAtEndAddsBelow": true,
+          "backspaceOnNonEmptyKeepsItem": true,
+          "arrowDownUp": true,
+          "typingReachesCore": true,
+          "typingKeepsCaretAndTextNode": true,
+          "typingIntoEmptyItemOk": true,
+          "imeComposingEnterNoSplit": true,
+          "imeKeyCode229NoSplit": true,
+          "imeEnterRightAfterCompositionEndNoSplit": true,
+          "imeLaterEnterSplits": true
+        },
+        {
+          "splitMiddle": true,
+          "enterAtStartAddsAbove": true,
+          "backspaceOnEmptyDeletes": true,
+          "enterAtEndAddsBelow": true,
+          "backspaceOnNonEmptyKeepsItem": true,
+          "arrowDownUp": true,
+          "typingReachesCore": true,
+          "typingKeepsCaretAndTextNode": true,
+          "typingIntoEmptyItemOk": true,
+          "imeComposingEnterNoSplit": true,
+          "imeKeyCode229NoSplit": true,
+          "imeEnterRightAfterCompositionEndNoSplit": true,
+          "imeLaterEnterSplits": true
+        }
+      ],
+      "dom_writes_all_runs": [
+        {
+          "typingDomMutations": 1,
+          "typingIntoEmptyDomMutations": 2
+        },
+        {
+          "typingDomMutations": 1,
+          "typingIntoEmptyDomMutations": 2
+        },
+        {
+          "typingDomMutations": 1,
+          "typingIntoEmptyDomMutations": 2
+        }
+      ],
+      "reload_all_runs": [
+        {
+          "plain": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "duringComposition": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "withAgentChange": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 1,
+            "changedItems": [
+              0
+            ],
+            "focusedTextUnchanged": true
+          },
+          "autoReload": {
+            "reloaded": true,
+            "focusAndSelectionKept": true
+          }
+        },
+        {
+          "plain": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "duringComposition": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "withAgentChange": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 1,
+            "changedItems": [
+              0
+            ],
+            "focusedTextUnchanged": true
+          },
+          "autoReload": {
+            "reloaded": true,
+            "focusAndSelectionKept": true
+          }
+        },
+        {
+          "plain": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "duringComposition": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "withAgentChange": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 1,
+            "changedItems": [
+              0
+            ],
+            "focusedTextUnchanged": true
+          },
+          "autoReload": {
+            "reloaded": true,
+            "focusAndSelectionKept": true
+          }
+        }
+      ],
+      "fill1000Ms": {
+        "median": 37,
+        "min": 37,
+        "max": 37,
+        "n": 3
+      },
+      "reloadUnchanged1000Ms": {
+        "median": 7,
+        "min": 6,
+        "max": 7,
+        "n": 3
+      },
+      "reloadOneChanged1000Ms": {
+        "median": 7,
+        "min": 6,
+        "max": 7,
+        "n": 3
+      },
+      "split1000MsPerOp": {
+        "median": 6.58,
+        "min": 6.54,
+        "max": 6.6,
+        "n": 3
+      },
+      "type1000MsPerOp": {
+        "median": 5.43,
+        "min": 5.26,
+        "max": 5.45,
+        "n": 3
+      },
+      "rowsAfter": {
+        "median": 1050,
+        "min": 1050,
+        "max": 1050,
+        "n": 3
+      }
+    },
+    "solid": {
+      "errors": [],
+      "editing_all_runs": [
+        {
+          "splitMiddle": true,
+          "enterAtStartAddsAbove": true,
+          "backspaceOnEmptyDeletes": true,
+          "enterAtEndAddsBelow": true,
+          "backspaceOnNonEmptyKeepsItem": true,
+          "arrowDownUp": true,
+          "typingReachesCore": true,
+          "typingKeepsCaretAndTextNode": true,
+          "typingIntoEmptyItemOk": true,
+          "imeComposingEnterNoSplit": true,
+          "imeKeyCode229NoSplit": true,
+          "imeEnterRightAfterCompositionEndNoSplit": true,
+          "imeLaterEnterSplits": true
+        },
+        {
+          "splitMiddle": true,
+          "enterAtStartAddsAbove": true,
+          "backspaceOnEmptyDeletes": true,
+          "enterAtEndAddsBelow": true,
+          "backspaceOnNonEmptyKeepsItem": true,
+          "arrowDownUp": true,
+          "typingReachesCore": true,
+          "typingKeepsCaretAndTextNode": true,
+          "typingIntoEmptyItemOk": true,
+          "imeComposingEnterNoSplit": true,
+          "imeKeyCode229NoSplit": true,
+          "imeEnterRightAfterCompositionEndNoSplit": true,
+          "imeLaterEnterSplits": true
+        },
+        {
+          "splitMiddle": true,
+          "enterAtStartAddsAbove": true,
+          "backspaceOnEmptyDeletes": true,
+          "enterAtEndAddsBelow": true,
+          "backspaceOnNonEmptyKeepsItem": true,
+          "arrowDownUp": true,
+          "typingReachesCore": true,
+          "typingKeepsCaretAndTextNode": true,
+          "typingIntoEmptyItemOk": true,
+          "imeComposingEnterNoSplit": true,
+          "imeKeyCode229NoSplit": true,
+          "imeEnterRightAfterCompositionEndNoSplit": true,
+          "imeLaterEnterSplits": true
+        }
+      ],
+      "dom_writes_all_runs": [
+        {
+          "typingDomMutations": 1,
+          "typingIntoEmptyDomMutations": 2
+        },
+        {
+          "typingDomMutations": 1,
+          "typingIntoEmptyDomMutations": 2
+        },
+        {
+          "typingDomMutations": 1,
+          "typingIntoEmptyDomMutations": 2
+        }
+      ],
+      "reload_all_runs": [
+        {
+          "plain": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "duringComposition": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "withAgentChange": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 1,
+            "changedItems": [
+              0
+            ],
+            "focusedTextUnchanged": true
+          },
+          "autoReload": {
+            "reloaded": true,
+            "focusAndSelectionKept": true
+          }
+        },
+        {
+          "plain": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "duringComposition": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "withAgentChange": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 1,
+            "changedItems": [
+              0
+            ],
+            "focusedTextUnchanged": true
+          },
+          "autoReload": {
+            "reloaded": true,
+            "focusAndSelectionKept": true
+          }
+        },
+        {
+          "plain": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "duringComposition": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 0,
+            "changedItems": [],
+            "focusedTextUnchanged": true
+          },
+          "withAgentChange": {
+            "focusAndSelectionKept": true,
+            "sameFocusedElement": true,
+            "rowsRecreated": 0,
+            "focusedTextNodeKept": true,
+            "otherTextNodesReplaced": 1,
+            "changedItems": [
+              0
+            ],
+            "focusedTextUnchanged": true
+          },
+          "autoReload": {
+            "reloaded": true,
+            "focusAndSelectionKept": true
+          }
+        }
+      ],
+      "fill1000Ms": {
+        "median": 34,
+        "min": 31,
+        "max": 35,
+        "n": 3
+      },
+      "reloadUnchanged1000Ms": {
+        "median": 6,
+        "min": 6,
+        "max": 6,
+        "n": 3
+      },
+      "reloadOneChanged1000Ms": {
+        "median": 6,
+        "min": 6,
+        "max": 6,
+        "n": 3
+      },
+      "split1000MsPerOp": {
+        "median": 6.78,
+        "min": 6.62,
+        "max": 6.78,
+        "n": 3
+      },
+      "type1000MsPerOp": {
+        "median": 5.41,
+        "min": 5.21,
+        "max": 5.87,
+        "n": 3
+      },
+      "rowsAfter": {
+        "median": 1050,
+        "min": 1050,
+        "max": 1050,
+        "n": 3
+      }
+    }
+  },
+  "listcheck_variants_1run": {
+    "solid-A-no-reconcile": {
+      "editing": {
+        "splitMiddle": true,
+        "enterAtStartAddsAbove": true,
+        "backspaceOnEmptyDeletes": true,
+        "enterAtEndAddsBelow": true,
+        "backspaceOnNonEmptyKeepsItem": true,
+        "arrowDownUp": true,
+        "typingReachesCore": true,
+        "typingKeepsCaretAndTextNode": true,
+        "typingIntoEmptyItemOk": true,
+        "imeComposingEnterNoSplit": true,
+        "imeKeyCode229NoSplit": true,
+        "imeEnterRightAfterCompositionEndNoSplit": true,
+        "imeLaterEnterSplits": true
+      },
+      "domWrites": {
+        "typingDomMutations": 1,
+        "typingIntoEmptyDomMutations": 2
+      },
+      "reload": {
+        "plain": {
+          "focusAndSelectionKept": false,
+          "sameFocusedElement": false,
+          "rowsRecreated": 8,
+          "focusedTextNodeKept": false,
+          "otherTextNodesReplaced": 7,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "duringComposition": {
+          "focusAndSelectionKept": false,
+          "sameFocusedElement": false,
+          "rowsRecreated": 8,
+          "focusedTextNodeKept": false,
+          "otherTextNodesReplaced": 7,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "withAgentChange": {
+          "focusAndSelectionKept": false,
+          "sameFocusedElement": false,
+          "rowsRecreated": 8,
+          "focusedTextNodeKept": false,
+          "otherTextNodesReplaced": 7,
+          "changedItems": [
+            0
+          ],
+          "focusedTextUnchanged": true
+        },
+        "autoReload": {
+          "reloaded": true,
+          "focusAndSelectionKept": false
+        }
+      },
+      "timing": {
+        "fill1000Ms": 32,
+        "reloadUnchanged1000Ms": 26,
+        "reloadOneChanged1000Ms": 26,
+        "split1000MsPerOp": 6.62,
+        "type1000MsPerOp": 5.45,
+        "rowsAfter": 1050
+      },
+      "visibility": "visible"
+    },
+    "solid-B-textContent-prop": {
+      "editing": {
+        "splitMiddle": true,
+        "enterAtStartAddsAbove": true,
+        "backspaceOnEmptyDeletes": true,
+        "enterAtEndAddsBelow": true,
+        "backspaceOnNonEmptyKeepsItem": true,
+        "arrowDownUp": true,
+        "typingReachesCore": true,
+        "typingKeepsCaretAndTextNode": false,
+        "typingIntoEmptyItemOk": false,
+        "imeComposingEnterNoSplit": true,
+        "imeKeyCode229NoSplit": true,
+        "imeEnterRightAfterCompositionEndNoSplit": true,
+        "imeLaterEnterSplits": true
+      },
+      "domWrites": {
+        "typingDomMutations": 2,
+        "typingIntoEmptyDomMutations": 3
+      },
+      "reload": {
+        "plain": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "duringComposition": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "withAgentChange": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [
+            0
+          ],
+          "focusedTextUnchanged": true
+        },
+        "autoReload": {
+          "reloaded": true,
+          "focusAndSelectionKept": true
+        }
+      },
+      "timing": {
+        "fill1000Ms": 38,
+        "reloadUnchanged1000Ms": 6,
+        "reloadOneChanged1000Ms": 6,
+        "split1000MsPerOp": 7.04,
+        "type1000MsPerOp": 5.59,
+        "rowsAfter": 1050
+      },
+      "visibility": "visible"
+    },
+    "svelte-C-unkeyed-each": {
+      "editing": {
+        "splitMiddle": true,
+        "enterAtStartAddsAbove": true,
+        "backspaceOnEmptyDeletes": true,
+        "enterAtEndAddsBelow": true,
+        "backspaceOnNonEmptyKeepsItem": true,
+        "arrowDownUp": true,
+        "typingReachesCore": true,
+        "typingKeepsCaretAndTextNode": true,
+        "typingIntoEmptyItemOk": true,
+        "imeComposingEnterNoSplit": true,
+        "imeKeyCode229NoSplit": true,
+        "imeEnterRightAfterCompositionEndNoSplit": true,
+        "imeLaterEnterSplits": true
+      },
+      "domWrites": {
+        "typingDomMutations": 1,
+        "typingIntoEmptyDomMutations": 2
+      },
+      "reload": {
+        "plain": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "duringComposition": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "withAgentChange": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 1,
+          "changedItems": [
+            0
+          ],
+          "focusedTextUnchanged": true
+        },
+        "autoReload": {
+          "reloaded": true,
+          "focusAndSelectionKept": true
+        }
+      },
+      "timing": {
+        "fill1000Ms": 35,
+        "reloadUnchanged1000Ms": 7,
+        "reloadOneChanged1000Ms": 7,
+        "split1000MsPerOp": 16.7,
+        "type1000MsPerOp": 5.465,
+        "rowsAfter": 1050
+      },
+      "visibility": "visible"
+    },
+    "svelte-D-text-expression": {
+      "editing": {
+        "splitMiddle": true,
+        "enterAtStartAddsAbove": true,
+        "backspaceOnEmptyDeletes": true,
+        "enterAtEndAddsBelow": true,
+        "backspaceOnNonEmptyKeepsItem": true,
+        "arrowDownUp": true,
+        "typingReachesCore": true,
+        "typingKeepsCaretAndTextNode": false,
+        "typingIntoEmptyItemOk": false,
+        "imeComposingEnterNoSplit": true,
+        "imeKeyCode229NoSplit": true,
+        "imeEnterRightAfterCompositionEndNoSplit": true,
+        "imeLaterEnterSplits": true
+      },
+      "domWrites": {
+        "typingDomMutations": 2,
+        "typingIntoEmptyDomMutations": 3
+      },
+      "reload": {
+        "plain": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "duringComposition": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "withAgentChange": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [
+            0
+          ],
+          "focusedTextUnchanged": true
+        },
+        "autoReload": {
+          "reloaded": true,
+          "focusAndSelectionKept": true
+        }
+      },
+      "timing": {
+        "fill1000Ms": 43,
+        "reloadUnchanged1000Ms": 6,
+        "reloadOneChanged1000Ms": 5,
+        "split1000MsPerOp": 6.88,
+        "type1000MsPerOp": 5.235,
+        "rowsAfter": 1050
+      },
+      "visibility": "visible"
+    },
+    "svelte-E-no-tick": {
+      "editing": {
+        "splitMiddle": false,
+        "enterAtStartAddsAbove": false,
+        "backspaceOnEmptyDeletes": false,
+        "enterAtEndAddsBelow": false,
+        "backspaceOnNonEmptyKeepsItem": false,
+        "arrowDownUp": false,
+        "typingReachesCore": true,
+        "typingKeepsCaretAndTextNode": true,
+        "typingIntoEmptyItemOk": false,
+        "imeComposingEnterNoSplit": true,
+        "imeKeyCode229NoSplit": true,
+        "imeEnterRightAfterCompositionEndNoSplit": true,
+        "imeLaterEnterSplits": true
+      },
+      "domWrites": {
+        "typingDomMutations": 1,
+        "typingIntoEmptyDomMutations": 0
+      },
+      "reload": {
+        "plain": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "duringComposition": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 0,
+          "changedItems": [],
+          "focusedTextUnchanged": true
+        },
+        "withAgentChange": {
+          "focusAndSelectionKept": true,
+          "sameFocusedElement": true,
+          "rowsRecreated": 0,
+          "focusedTextNodeKept": true,
+          "otherTextNodesReplaced": 1,
+          "changedItems": [
+            0
+          ],
+          "focusedTextUnchanged": true
+        },
+        "autoReload": {
+          "reloaded": true,
+          "focusAndSelectionKept": true
+        }
+      },
+      "timing": {
+        "fill1000Ms": 37,
+        "reloadUnchanged1000Ms": 7,
+        "reloadOneChanged1000Ms": 6,
+        "split1000MsPerOp": 6.36,
+        "type1000MsPerOp": 5.36,
+        "rowsAfter": 1050
+      },
+      "visibility": "visible"
+    }
+  },
+  "static_after_list": {
+    "svelte": {
+      "chunks": {
+        "cm.js": {
+          "raw_kb": 593.0,
+          "gzip_kb": 199.0
+        },
+        "index.js": {
+          "raw_kb": 52.1,
+          "gzip_kb": 19.5
+        },
+        "index.css": {
+          "raw_kb": 3.7,
+          "gzip_kb": 1.3
+        },
+        "tauri.js": {
+          "raw_kb": 0.1,
+          "gzip_kb": 0.1
+        }
+      },
+      "js_total": {
+        "raw_kb": 645.2,
+        "gzip_kb": 218.6
+      },
+      "binary_kb": 4682.0,
+      "deb_kb": 1897.7,
+      "npm_packages": 74,
+      "node_modules_mb": 63.5,
+      "code": {
+        "src/main.ts": 6,
+        "src/App.svelte": 79,
+        "src/ItemList.svelte": 105,
+        "vite.config.ts": 21,
+        "index.html": 12
+      },
+      "code_total": 223
+    },
+    "solid": {
+      "chunks": {
+        "cm.js": {
+          "raw_kb": 593.0,
+          "gzip_kb": 199.0
+        },
+        "index.js": {
+          "raw_kb": 35.1,
+          "gzip_kb": 12.8
+        },
+        "index.css": {
+          "raw_kb": 3.7,
+          "gzip_kb": 1.3
+        },
+        "tauri.js": {
+          "raw_kb": 0.1,
+          "gzip_kb": 0.1
+        }
+      },
+      "js_total": {
+        "raw_kb": 628.2,
+        "gzip_kb": 211.9
+      },
+      "binary_kb": 4675.4,
+      "deb_kb": 1890.6,
+      "npm_packages": 96,
+      "node_modules_mb": 73.6,
+      "code": {
+        "src/main.tsx": 6,
+        "src/App.tsx": 96,
+        "src/ItemList.tsx": 137,
+        "vite.config.ts": 21,
+        "index.html": 12,
+        "tsconfig.json": 13
+      },
+      "code_total": 285
+    },
+    "shared_identical": true,
+    "shared_code_lines": {
+      "app.css": 61,
+      "bench.ts": 160,
+      "caret.ts": 71,
+      "core.ts": 26,
+      "editor.ts": 32,
+      "ime-guard.ts": 41,
+      "listcheck.ts": 240,
+      "tokens.css": 89
+    }
+  }
+}

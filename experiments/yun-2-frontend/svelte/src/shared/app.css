@@ -1,0 +1,64 @@
+/* 両版で同じ見た目にするための共通スタイル。色は tokens.css（prototype/tokens.css の写し）だけを使う */
+@import './tokens.css';
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, "Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+}
+#app { height: 100%; }
+.layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr) minmax(320px, 1.2fr);
+  gap: 40px;
+  padding: 24px 28px;
+  height: 100%;
+}
+.label {
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+.col { display: flex; flex-direction: column; min-height: 0; }
+.todo-input {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.todo-input:focus { outline: 2px solid var(--accent-strong); outline-offset: 0; }
+.todo-list { list-style: none; margin: 8px 0 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
+.todo-item {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 36px; padding: 0 8px; border-radius: 8px;
+}
+.todo-item input { accent-color: var(--accent); width: 16px; height: 16px; }
+.todo-item[data-done="true"] .text { text-decoration: line-through; color: var(--done); }
+.meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 12px; align-items: center; margin-top: 8px; }
+.meta button {
+  font: inherit; font-size: 13px; color: var(--text); background: transparent;
+  border: 1px solid var(--rule); border-radius: 8px; padding: 2px 10px; cursor: pointer;
+}
+.editor { flex: 1; min-height: 240px; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.log {
+  font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--text-muted);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+  height: 160px; overflow: auto; margin: 8px 0 0; padding: 6px 8px; white-space: pre-wrap;
+}
+/* その場で編集する項目の一覧（prototype の .item に相当） */
+.item-list { list-style: none; margin: 8px 0 0; padding: 0; overflow: auto; flex: 1; min-height: 0; }
+.item-row { min-height: 36px; display: flex; align-items: center; padding: 0 8px 0 10px; border-radius: 8px; }
+.item-row:focus-within { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent-strong); }
+.item-row .txt { flex: 1; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.65em; }
+.item-row .txt:empty::before { content: '（空の項目）'; color: var(--text-muted); }
+.meta label { display: inline-flex; align-items: center; gap: 4px; }
