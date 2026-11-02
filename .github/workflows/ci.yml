@@ -1,0 +1,73 @@
+# 開発用 CI：PR と main への push のたびに、手元と同じ `pnpm check` を走らせる。
+# 配布用のビルド（docs/release/07-build-and-distribution.md 3章）とは別のもの。
+# 検査の中身は package.json の `check` にだけ書き、ここには書かない（手元と CI をずらさないため）。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同じ PR で新しい push があったら、古い実行は止める。
+# main への push はコミットごとに別のグループにして、どの push も取り消さずに検査する。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: pnpm check (Linux)
+    # macOS・Windows は 5. 配布で追加する
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri（yunagi-app）のコンパイルに要る Linux のライブラリ
+      # https://v2.tauri.app/start/prerequisites/#linux
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # 版と clippy・rustfmt は rust-toolchain.toml から読む
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # target/ と cargo の取得物をキャッシュする（Cargo.lock や Rust の版が変わると作り直す）。
+      # 保存は main だけで行い（PR は main のキャッシュを使う）、容量の上限を PR ごとの分で埋めない。
+      # 検査が失敗しても、時間のかかるビルド結果は保存する。
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      # 版は package.json の packageManager から読む
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          # 版は .node-version から読む（手元の nvm・fnm・mise なども同じファイルを読む）
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm check
+        run: pnpm check

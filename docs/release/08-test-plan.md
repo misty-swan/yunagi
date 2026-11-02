@@ -14,6 +14,8 @@ MVP の機能要件（F-01〜F-12、A-01〜A-08、Vimモード）と非機能要
 | 手動 | IME、グローバルショートカット、インストール、更新、macOS の E2E 主要シナリオ | チェックリスト | リリース前 |
 | 性能 | 起動、入力応答、検索 | 計測スクリプト | 週次・リリース前 |
 
+「毎コミット」の層は、開発用 CI（GitHub Actions の `.github/workflows/ci.yml`）で、PR と main への push のたびに走らせる。検査するのは push の時点の最新のコミットで、1回の push に含まれる途中のコミットは個別には検査しない。CI は手元の検査コマンド `pnpm check`（`package.json`）をそのまま実行し、Rust の書式の検査（`cargo fmt --check`）・ワークスペース全体のテスト（`cargo test --workspace`）・clippy（警告も失敗として扱う）・画面の型チェックとテストを行う。結合の層のテストは、`pnpm check` に入れて毎回走らせるか、別の手順で走らせるかを、結合テストを作るときに所要時間を見て決める。失敗は PR の検査結果に表示される。まずは Linux だけで走らせ、macOS・Windows は配布用 CI（07-build-and-distribution.md 3章）を作るときに追加する。
+
 ## 3. 対象環境
 
 | OS | 版 | アーキテクチャ | 備考 |
