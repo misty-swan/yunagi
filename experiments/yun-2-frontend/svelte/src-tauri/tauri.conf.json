@@ -10,7 +10,7 @@
     "beforeBuildCommand": "pnpm build"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "yun-2 Svelte", "width": 1100, "height": 720 }],
+    "windows": [{ "label": "main", "title": "yun-2 Svelte", "width": 1400, "height": 720 }],
     "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
   },
   "bundle": {

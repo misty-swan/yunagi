@@ -2,6 +2,7 @@ import { For, createSignal, onCleanup, onMount } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { createImeGuard, describeEvent, loggingEnabled } from './shared/ime-guard';
 import { createEditor } from './shared/editor';
+import ItemList from './ItemList';
 
 type Todo = { id: number; text: string; done: boolean };
 
@@ -88,6 +89,10 @@ export default function App() {
           Event log
         </h2>
         <pre class="log">{log().join('\n')}</pre>
+      </section>
+      <section class="col">
+        <h2 class="label">Board</h2>
+        <ItemList onLog={record} />
       </section>
       <section class="col">
         <h2 class="label">Note</h2>

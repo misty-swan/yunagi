@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { createImeGuard, describeEvent, loggingEnabled } from './shared/ime-guard';
   import { createEditor } from './shared/editor';
+  import ItemList from './ItemList.svelte';
 
   type Todo = { id: number; text: string; done: boolean };
 
@@ -73,6 +74,10 @@
     </div>
     <h2 class="label" style="margin-top:16px">Event log</h2>
     <pre class="log">{log.join('\n')}</pre>
+  </section>
+  <section class="col">
+    <h2 class="label">Board</h2>
+    <ItemList onlog={record} />
   </section>
   <section class="col">
     <h2 class="label">Note</h2>

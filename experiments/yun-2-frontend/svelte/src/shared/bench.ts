@@ -10,6 +10,7 @@
 //    結果を `report` コマンドで Rust 側に渡す（描画を待たないので、見えないウィンドウでも動く）。
 import { invoke } from '@tauri-apps/api/core';
 import { createImeGuard } from './ime-guard';
+import { runListCheck } from './listcheck';
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 const nextTask = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -31,6 +32,11 @@ export async function signalReady() {
     // 起動直後の揺れを避けて少し待つ
     await new Promise((r) => setTimeout(r, 500));
     const result = await runBench();
+    await invoke('report', { json: JSON.stringify(result) });
+  } else if (mode === 'listcheck') {
+    // 「その場で編集する項目の一覧」の自動チェック（listcheck.ts）
+    await new Promise((r) => setTimeout(r, 500));
+    const result = await runListCheck().catch((e) => ({ error: String(e && e.stack ? e.stack : e) }));
     await invoke('report', { json: JSON.stringify(result) });
   }
 }

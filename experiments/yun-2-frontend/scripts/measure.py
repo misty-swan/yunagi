@@ -4,6 +4,7 @@
 使い方（experiments/yun-2-frontend で）:
     python3 scripts/measure.py startup --runs 10   # 起動時間とメモリ
     python3 scripts/measure.py bench --runs 3      # 入力反応（WebView 内で合成イベント）
+    python3 scripts/measure.py listcheck --runs 3  # その場で編集する一覧の自動チェック（合成イベント）
 
 前提: 両版を `pnpm tauri build` 済み（src-tauri/target/release/<名前> があること）。
 アプリは Hyprland の見えない特別ワークスペース special:yunagi-bench に開く
@@ -126,7 +127,7 @@ def run_once(app, mode, timeout=120.0):
     res = {"app": app}
     buf_ev, seen = b"", 0
     deadline = t0 + timeout
-    want = "BENCH" if mode == "bench" else "MOUNTED"
+    want = "BENCH" if mode in ("bench", "listcheck") else "MOUNTED"
     pid = None
     try:
         while time.perf_counter() < deadline:
@@ -205,7 +206,7 @@ def summarize(values):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=["startup", "bench"])
+    ap.add_argument("what", choices=["startup", "bench", "listcheck"])
     ap.add_argument("--runs", type=int, default=10)
     args = ap.parse_args()
     RAW.mkdir(parents=True, exist_ok=True)
@@ -213,7 +214,7 @@ def main():
         if not path.exists():
             sys.exit(f"{path} がありません。先に pnpm tauri build してください")
 
-    mode = "bench" if args.what == "bench" else ""
+    mode = {"bench": "bench", "listcheck": "listcheck"}.get(args.what, "")
     runs = {a: [] for a in APPS}
     # 1回ずつ捨て回し（ディスクキャッシュを温める）。その後は交互に起動して時間帯の偏りを避ける
     for app in APPS:
@@ -232,6 +233,15 @@ def main():
             out["summary"][app] = {
                 k: summarize([r.get(k) for r in rs])
                 for k in ["window_ms", "mounted_ms", "mounted_rust_ms", "mounted_front_ms", "setup_rust_ms", "ready_ms", "pss_mb"]
+            }
+        elif args.what == "listcheck":
+            b = [r["bench"] for r in rs if "bench" in r]
+            t = [x["timing"] for x in b if "timing" in x]
+            out["summary"][app] = {
+                "errors": [x["error"] for x in b if "error" in x],
+                "editing_all_runs": [x.get("editing") for x in b],
+                "reload_all_runs": [x.get("reload") for x in b],
+                **{k: summarize([x[k] for x in t]) for k in (t[0] if t else {})},
             }
         else:
             b = [r["bench"] for r in rs if "bench" in r]
