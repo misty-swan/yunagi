@@ -4366,6 +4366,8 @@ dependencies = [
  "getrandom 0.4.3",
  "jiff",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
