@@ -106,7 +106,7 @@ pub fn get(conn: &Connection, id: Ulid) -> Result<Option<ChangeLog>, StorageErro
         .optional()?)
 }
 
-/// 同じ対象の記録を、記録した順（id の順）で返す。
+/// 同じ対象の記録を、id の順（おおよそ記録した順。[`Ulid`] を参照）で返す。
 pub fn list_by_target(
     conn: &Connection,
     target_type: TargetType,
@@ -145,7 +145,7 @@ mod tests {
 
     fn log(target_id: &str) -> ChangeLog {
         ChangeLog {
-            id: Ulid::new(),
+            id: Ulid::generate(),
             actor: Actor::Agent,
             agent_client_id: Some(CLI_ID),
             operation: "todo.add".into(),
@@ -181,7 +181,7 @@ mod tests {
             insert(conn, l).unwrap();
         }
         assert_eq!(get(conn, revert.id).unwrap(), Some(revert.clone()));
-        assert_eq!(get(conn, Ulid::new()).unwrap(), None);
+        assert_eq!(get(conn, Ulid::generate()).unwrap(), None);
         assert_eq!(
             list_by_target(conn, TargetType::Item, "A").unwrap(),
             [first, revert]
@@ -222,8 +222,8 @@ mod tests {
         let saved = get(conn, l.id).unwrap().unwrap();
         assert_eq!(saved.reverted_at, Some(at("2026-11-03T02:00:00Z")));
         assert_eq!(saved.seen_at, Some(at("2026-11-03T03:00:00Z")));
-        assert!(!set_reverted_at(conn, Ulid::new(), at("2026-11-03T02:00:00Z")).unwrap());
-        assert!(!set_seen_at(conn, Ulid::new(), at("2026-11-03T02:00:00Z")).unwrap());
+        assert!(!set_reverted_at(conn, Ulid::generate(), at("2026-11-03T02:00:00Z")).unwrap());
+        assert!(!set_seen_at(conn, Ulid::generate(), at("2026-11-03T02:00:00Z")).unwrap());
     }
 
     #[test]
@@ -236,7 +236,7 @@ mod tests {
         };
         assert!(insert(conn, &bad_json).is_err());
         let unknown_client = ChangeLog {
-            agent_client_id: Some(Ulid::new()),
+            agent_client_id: Some(Ulid::generate()),
             ..log("A")
         };
         assert!(insert(conn, &unknown_client).is_err());

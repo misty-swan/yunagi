@@ -6,6 +6,8 @@
 //!
 //! このプロセスの中で作る ULID は、必ず前に作ったものより大きくする（同じミリ秒の中では
 //! 乱数の部分を 1 ずつ増やす。時計が戻ったときも前の時刻を使い続ける）。
+//! 別のプロセス（アプリと `yunagi` など）が同じミリ秒に作ったものどうしや、時計のずれた
+//! 端末どうしの順序は保証しない。id の順は、ミリ秒の単位でおおよそ作った順になる。
 
 use std::fmt;
 use std::str::FromStr;
@@ -34,10 +36,13 @@ static LAST: Mutex<u128> = Mutex::new(0);
 impl Ulid {
     /// いまの時刻で新しい ULID を作る。
     ///
+    /// 呼ぶたびに違う値になるので、`Default` は実装しない（`unwrap_or_default` などで
+    /// 気づかずに、どこも指さない id ができないようにするため）。
+    ///
     /// # Panics
     ///
     /// OS から乱数を得られなかったとき（ふつうは起きない）。
-    pub fn new() -> Self {
+    pub fn generate() -> Self {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis());
@@ -66,12 +71,6 @@ impl Ulid {
     /// 時刻の部分（UNIX 時刻、ミリ秒）。
     pub const fn timestamp_ms(self) -> u64 {
         (self.0 >> 80) as u64
-    }
-}
-
-impl Default for Ulid {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -165,7 +164,7 @@ mod tests {
 
     #[test]
     fn is_26_characters_and_round_trips() {
-        let id = Ulid::new();
+        let id = Ulid::generate();
         let s = id.to_string();
         assert_eq!(s.len(), 26);
         assert!(s.bytes().all(|b| ALPHABET.contains(&b)));
@@ -184,7 +183,7 @@ mod tests {
 
     #[test]
     fn parses_lowercase() {
-        let id = Ulid::new();
+        let id = Ulid::generate();
         assert_eq!(id.to_string().to_lowercase().parse::<Ulid>(), Ok(id));
     }
 
@@ -209,7 +208,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let id = Ulid::new();
+        let id = Ulid::generate();
         let after = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -225,7 +224,7 @@ mod tests {
 
     #[test]
     fn increases_strictly_even_within_the_same_millisecond() {
-        let ids: Vec<Ulid> = (0..10_000).map(|_| Ulid::new()).collect();
+        let ids: Vec<Ulid> = (0..10_000).map(|_| Ulid::generate()).collect();
         assert!(ids.windows(2).all(|w| w[0] < w[1]));
         // 文字列でも同じ順に並ぶ
         let strings: Vec<String> = ids.iter().map(Ulid::to_string).collect();

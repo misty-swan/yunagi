@@ -163,16 +163,19 @@ pub fn list_carried_from(conn: &Connection, id: Ulid) -> Result<Vec<Item>, Stora
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// 行の `id`・`date`・`created_at` 以外の列を `item` の値で書き換える。行が無ければ `false`。
+/// 行の `id`・`date`・`created_at`・`deleted_at` 以外の列を `item` の値で書き換える。
+/// 行が無いか、論理削除済みなら何もせず `false`。
 ///
-/// 欄ごとの書き込み（アーキテクチャ設計書 4.1）は項目の操作の課題で作る。
+/// `deleted_at` は書かない（削除は [`soft_delete`]、戻すのは [`restore`]）。削除の前に読んだ
+/// 古い値で書いても、削除が取り消されないようにするため。欄ごとの書き込み
+/// （アーキテクチャ設計書 4.1）は項目の操作の課題で作る。
 pub fn update(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
     let n = conn.execute(
         "UPDATE item SET kind = ?2, text = ?3, status = ?4, close_reason = ?5, sort_key = ?6, \
          carry_count = ?7, carried_from_id = ?8, split_from_id = ?9, resolution_note = ?10, \
          origin = ?11, agent_client_id = ?12, external_ref_id = ?13, completed_at = ?14, \
-         updated_at = ?15, deleted_at = ?16 \
-         WHERE id = ?1",
+         updated_at = ?15 \
+         WHERE id = ?1 AND deleted_at IS NULL",
         params![
             item.id,
             item.kind,
@@ -189,7 +192,6 @@ pub fn update(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
             item.external_ref_id,
             opt_time(item.completed_at),
             format_time(item.updated_at),
-            opt_time(item.deleted_at),
         ],
     )?;
     Ok(n == 1)
@@ -205,6 +207,16 @@ pub fn soft_delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<bool, 
     Ok(n == 1)
 }
 
+/// 論理削除を戻す（`deleted_at` を NULL にし、`updated_at` に `now` を入れる）。削除の取り消しに使う。
+/// 行が無いか、削除されていなければ何もせず `false`。
+pub fn restore(conn: &Connection, id: Ulid, now: Timestamp) -> Result<bool, StorageError> {
+    let n = conn.execute(
+        "UPDATE item SET deleted_at = NULL, updated_at = ?2 WHERE id = ?1 AND deleted_at IS NOT NULL",
+        params![id, format_time(now)],
+    )?;
+    Ok(n == 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +226,7 @@ mod tests {
     fn todo(date: LogicalDate, text: &str, sort_key: &str) -> Item {
         let now = at("2026-11-03T01:00:00Z");
         Item {
-            id: Ulid::new(),
+            id: Ulid::generate(),
             date,
             kind: ItemKind::Todo,
             text: text.into(),
@@ -253,7 +265,7 @@ mod tests {
             resolution_note: Some("解消メモ".into()),
             origin: Origin::Agent,
             agent_client_id: Some(agent_client::CLI_ID),
-            external_ref_id: Some(Ulid::new()),
+            external_ref_id: Some(Ulid::generate()),
             completed_at: Some(at("2026-11-03T02:00:00.250Z")),
             updated_at: at("2026-11-03T02:00:00.250Z"),
             deleted_at: Some(at("2026-11-03T03:00:00Z")),
@@ -261,7 +273,7 @@ mod tests {
         };
         insert(conn, &item).unwrap();
         assert_eq!(get(conn, item.id).unwrap(), Some(item));
-        assert_eq!(get(conn, Ulid::new()).unwrap(), None);
+        assert_eq!(get(conn, Ulid::generate()).unwrap(), None);
     }
 
     #[test]
@@ -279,7 +291,7 @@ mod tests {
         let (db, _dir) = open();
         let d = ensure_day(&db, "2026-11-03");
         let item = Item {
-            agent_client_id: Some(Ulid::new()),
+            agent_client_id: Some(Ulid::generate()),
             ..todo(d, "x", "a0")
         };
         assert!(insert(db.connection(), &item).is_err());
@@ -343,6 +355,7 @@ mod tests {
             updated_at: at("2026-11-03T04:00:00Z"),
             date: other,
             created_at: at("2026-11-04T00:00:00Z"),
+            deleted_at: Some(at("2026-11-04T00:00:00Z")),
             ..item.clone()
         };
         assert!(update(conn, &changed).unwrap());
@@ -351,6 +364,7 @@ mod tests {
             Some(Item {
                 date: item.date,
                 created_at: item.created_at,
+                deleted_at: None,
                 ..changed
             })
         );
@@ -371,7 +385,7 @@ mod tests {
         let deleted = get(conn, item.id).unwrap().unwrap();
         assert_eq!(deleted.deleted_at, Some(now));
         assert_eq!(deleted.updated_at, now);
-        assert!(!soft_delete(conn, Ulid::new(), now).unwrap());
+        assert!(!soft_delete(conn, Ulid::generate(), now).unwrap());
     }
 
     #[test]
@@ -426,5 +440,45 @@ mod tests {
             Ok(CloseReason::ReturnedExternal)
         );
         assert!("Open".parse::<ItemStatus>().is_err());
+    }
+
+    #[test]
+    fn update_of_a_deleted_item_does_not_undo_the_delete() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = ensure_day(&db, "2026-11-03");
+        let stale = todo(d, "before", "a");
+        insert(conn, &stale).unwrap();
+        let deleted_at = at("2026-11-03T05:00:00Z");
+        assert!(soft_delete(conn, stale.id, deleted_at).unwrap());
+
+        // 削除の前に読んだ値で書いても、何も変わらない
+        let edited = Item {
+            text: "after".into(),
+            ..stale.clone()
+        };
+        assert!(!update(conn, &edited).unwrap());
+        let saved = get(conn, stale.id).unwrap().unwrap();
+        assert_eq!(saved.deleted_at, Some(deleted_at));
+        assert_eq!(saved.text, "before");
+    }
+
+    #[test]
+    fn restore_undoes_a_soft_delete() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = ensure_day(&db, "2026-11-03");
+        let item = todo(d, "x", "a");
+        insert(conn, &item).unwrap();
+        assert!(!restore(conn, item.id, at("2026-11-03T05:00:00Z")).unwrap());
+        soft_delete(conn, item.id, at("2026-11-03T05:00:00Z")).unwrap();
+
+        let now = at("2026-11-03T06:00:00Z");
+        assert!(restore(conn, item.id, now).unwrap());
+        let restored = get(conn, item.id).unwrap().unwrap();
+        assert_eq!(restored.deleted_at, None);
+        assert_eq!(restored.updated_at, now);
+        assert_eq!(list_by_date(conn, d).unwrap(), [restored]);
+        assert!(!restore(conn, Ulid::generate(), now).unwrap());
     }
 }

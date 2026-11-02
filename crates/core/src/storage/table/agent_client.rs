@@ -6,7 +6,7 @@
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use super::{format_time, get_opt_time, get_time, text_enum};
+use super::{format_time, get_opt_time, get_time, opt_time, text_enum};
 use crate::storage::{StorageError, Ulid};
 
 /// `cli` クライアントの id（migrations/0001_initial.sql と同じ値）。
@@ -40,40 +40,45 @@ pub struct AgentClient {
 
 const COLUMNS: &str = "id, name, scopes, created_at, last_seen_at";
 
-/// 行を読む。`scopes` は JSON の文字列のまま返し、[`decode`] で読む。
-fn from_row(row: &Row<'_>) -> rusqlite::Result<(AgentClient, String)> {
-    Ok((
-        AgentClient {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            scopes: Vec::new(),
-            created_at: get_time(row, 3)?,
-            last_seen_at: get_opt_time(row, 4)?,
-        },
-        row.get(2)?,
-    ))
+fn from_row(row: &Row<'_>) -> rusqlite::Result<AgentClient> {
+    let scopes: String = row.get(2)?;
+    Ok(AgentClient {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        scopes: decode(&scopes).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
+        })?,
+        created_at: get_time(row, 3)?,
+        last_seen_at: get_opt_time(row, 4)?,
+    })
 }
 
-/// `scopes` の JSON（文字列の配列）を読んで行に入れる。読むのは SQLite の JSON 関数に任せる。
-fn decode(
-    conn: &Connection,
-    (mut client, json): (AgentClient, String),
-) -> Result<AgentClient, StorageError> {
-    let mut stmt = conn.prepare_cached("SELECT value, type FROM json_each(?1) ORDER BY key")?;
-    let mut rows = stmt.query([&json])?;
-    while let Some(row) = rows.next()? {
-        let ty: String = row.get(1)?;
-        if ty != "text" {
-            return Err(rusqlite::Error::FromSqlConversionFailure(
-                2,
-                rusqlite::types::Type::Text,
-                format!("scopes must be an array of strings: {json}").into(),
-            )
-            .into());
-        }
-        client.scopes.push(row.get(0)?);
+/// `scopes` の JSON（スコープの名前の文字列の配列）を読む。[`encode`] で書いた形のほか、
+/// 区切りの前後の空白も受け付ける。スコープの名前にはエスケープの要る文字が無いので、
+/// エスケープを含む文字列や、配列でないもの、知らない名前は誤りとする。
+fn decode(json: &str) -> Result<Vec<Scope>, String> {
+    let invalid = || format!("scopes must be a JSON array of scope names: {json}");
+    let inner = json
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or_else(invalid)?
+        .trim();
+    if inner.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(client)
+    inner
+        .split(',')
+        .map(|item| {
+            let name = item
+                .trim()
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .filter(|s| !s.contains(['"', '\\']))
+                .ok_or_else(invalid)?;
+            name.parse().map_err(|e: super::UnknownValue| e.to_string())
+        })
+        .collect()
 }
 
 /// スコープを保存する形（JSON の文字列の配列）にする。スコープの名前は英小文字と `_` だけなので、
@@ -95,7 +100,7 @@ pub fn insert(conn: &Connection, client: &AgentClient) -> Result<(), StorageErro
             client.name,
             encode(&client.scopes),
             format_time(client.created_at),
-            client.last_seen_at.map(format_time),
+            opt_time(client.last_seen_at),
         ],
     )?;
     Ok(())
@@ -108,9 +113,8 @@ pub fn get(conn: &Connection, id: Ulid) -> Result<Option<AgentClient>, StorageEr
         [id],
         from_row,
     )
-    .optional()?
-    .map(|raw| decode(conn, raw))
-    .transpose()
+    .optional()
+    .map_err(Into::into)
 }
 
 /// 識別子（`name`）の行。無ければ `None`。
@@ -120,18 +124,15 @@ pub fn get_by_name(conn: &Connection, name: &str) -> Result<Option<AgentClient>,
         [name],
         from_row,
     )
-    .optional()?
-    .map(|raw| decode(conn, raw))
-    .transpose()
+    .optional()
+    .map_err(Into::into)
 }
 
 /// すべての行を、登録した順（id の順。固定の `cli`・`unknown` が先）で返す。
 pub fn list(conn: &Connection) -> Result<Vec<AgentClient>, StorageError> {
     let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM agent_client ORDER BY id"))?;
-    let raws = stmt
-        .query_map([], from_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    raws.into_iter().map(|raw| decode(conn, raw)).collect()
+    let rows = stmt.query_map([], from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// 許可するスコープを書き換える。行が無ければ `false`。
@@ -198,7 +199,7 @@ mod tests {
         let (db, _dir) = open();
         let conn = db.connection();
         let client = AgentClient {
-            id: Ulid::new(),
+            id: Ulid::generate(),
             name: "claude-code".into(),
             scopes: vec![Scope::Read],
             created_at: at("2026-11-03T01:00:00Z"),
@@ -210,7 +211,7 @@ mod tests {
             Some(client.clone())
         );
         assert_eq!(get_by_name(conn, "codex").unwrap(), None);
-        assert_eq!(get(conn, Ulid::new()).unwrap(), None);
+        assert_eq!(get(conn, Ulid::generate()).unwrap(), None);
 
         let scopes = [
             Scope::Read,
@@ -234,8 +235,8 @@ mod tests {
         assert!(update_scopes(conn, client.id, &[]).unwrap());
         assert!(get(conn, client.id).unwrap().unwrap().scopes.is_empty());
 
-        assert!(!update_scopes(conn, Ulid::new(), &scopes).unwrap());
-        assert!(!update_last_seen(conn, Ulid::new(), at("2026-11-03T02:00:00Z")).unwrap());
+        assert!(!update_scopes(conn, Ulid::generate(), &scopes).unwrap());
+        assert!(!update_last_seen(conn, Ulid::generate(), at("2026-11-03T02:00:00Z")).unwrap());
         assert_eq!(list(conn).unwrap().len(), 3);
     }
 
@@ -243,7 +244,7 @@ mod tests {
     fn names_are_unique() {
         let (db, _dir) = open();
         let client = AgentClient {
-            id: Ulid::new(),
+            id: Ulid::generate(),
             name: "cli".into(),
             scopes: vec![Scope::Read],
             created_at: at("2026-11-03T01:00:00Z"),
@@ -256,7 +257,7 @@ mod tests {
     fn scopes_that_are_not_known_strings_are_errors() {
         let (db, _dir) = open();
         let conn = db.connection();
-        for bad in [r#"["read","admin"]"#, r#"["read",1]"#] {
+        for bad in [r#"["read","admin"]"#, r#"["read",1]"#, r#"["re\u0061d"]"#] {
             conn.execute(
                 "UPDATE agent_client SET scopes = ?1 WHERE id = ?2",
                 params![bad, CLI_ID],
@@ -264,13 +265,43 @@ mod tests {
             .unwrap();
             assert!(get(conn, CLI_ID).is_err(), "{bad}");
         }
-        // JSON でない値は表に入らない
-        assert!(
-            conn.execute(
-                "UPDATE agent_client SET scopes = 'read' WHERE id = ?1",
-                [CLI_ID]
-            )
-            .is_err()
+        // JSON の配列でない値は表に入らない
+        for bad in ["read", r#""todo""#, r#"{"x":"note_edit"}"#] {
+            assert!(
+                conn.execute(
+                    "UPDATE agent_client SET scopes = ?1 WHERE id = ?2",
+                    params![bad, CLI_ID]
+                )
+                .is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_reads_what_encode_writes_and_tolerates_spaces() {
+        let all = [
+            Scope::Read,
+            Scope::Todo,
+            Scope::Blocker,
+            Scope::Append,
+            Scope::NoteEdit,
+        ];
+        assert_eq!(decode(&encode(&all)), Ok(all.to_vec()));
+        assert_eq!(decode(&encode(&[])), Ok(Vec::new()));
+        assert_eq!(
+            decode(r#" [ "read" , "todo" ] "#),
+            Ok(vec![Scope::Read, Scope::Todo])
         );
+        for bad in [
+            "",
+            "[",
+            r#"["read",]"#,
+            r#"["read""todo"]"#,
+            r#"[read]"#,
+            r#""read""#,
+        ] {
+            assert!(decode(bad).is_err(), "{bad}");
+        }
     }
 }

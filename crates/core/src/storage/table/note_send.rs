@@ -62,7 +62,7 @@ pub fn get(conn: &Connection, id: Ulid) -> Result<Option<NoteSend>, StorageError
         .optional()?)
 }
 
-/// その日のノートから送った記録を、送った順（id の順）で返す。
+/// その日のノートから送った記録を、id の順（おおよそ送った順。[`Ulid`] を参照）で返す。
 pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<NoteSend>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLUMNS} FROM note_send WHERE date = ?1 ORDER BY id"
@@ -71,7 +71,7 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<NoteSend
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// その項目へ送った記録を、送った順（id の順）で返す。
+/// その項目へ送った記録を、id の順（おおよそ送った順。[`Ulid`] を参照）で返す。
 pub fn list_by_item(conn: &Connection, item_id: Ulid) -> Result<Vec<NoteSend>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLUMNS} FROM note_send WHERE item_id = ?1 ORDER BY id"
@@ -89,7 +89,7 @@ mod tests {
     fn insert_item(db: &crate::storage::Database, date: LogicalDate) -> Ulid {
         let now = at("2026-11-03T01:00:00Z");
         let item = Item {
-            id: Ulid::new(),
+            id: Ulid::generate(),
             date,
             kind: ItemKind::Todo,
             text: "x".into(),
@@ -114,7 +114,7 @@ mod tests {
 
     fn send(date: LogicalDate, item_id: Ulid, line: &str) -> NoteSend {
         NoteSend {
-            id: Ulid::new(),
+            id: Ulid::generate(),
             date,
             line_text: line.into(),
             line_fingerprint: format!("fp:{line}"),
@@ -141,7 +141,7 @@ mod tests {
         }
 
         assert_eq!(get(conn, first.id).unwrap(), Some(first.clone()));
-        assert_eq!(get(conn, Ulid::new()).unwrap(), None);
+        assert_eq!(get(conn, Ulid::generate()).unwrap(), None);
         assert_eq!(
             list_by_date(conn, d).unwrap(),
             [first.clone(), second.clone(), third.clone()]
@@ -157,6 +157,6 @@ mod tests {
     fn insert_requires_the_item() {
         let (db, _dir) = open();
         let d = ensure_day(&db, "2026-11-03");
-        assert!(insert(db.connection(), &send(d, Ulid::new(), "x")).is_err());
+        assert!(insert(db.connection(), &send(d, Ulid::generate(), "x")).is_err());
     }
 }

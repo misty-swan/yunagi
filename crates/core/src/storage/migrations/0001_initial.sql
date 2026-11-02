@@ -6,7 +6,7 @@
 -- - id は ULID（26 文字）。
 -- - 状態などの値（kind・status など）は、検査（CHECK）を付けずにコアの型で確かめる。
 --   値を足すたびに表を作り直さずに済むようにするため。
--- - JSON の列は、正しい JSON であることだけを確かめる。
+-- - JSON の列は、正しい JSON であること（scopes は配列であること）だけを確かめる。
 -- - external_ref は MVP 後の機能のため、まだ作らない（item.external_ref_id は参照先を持たない列）。
 
 CREATE TABLE day (
@@ -21,7 +21,7 @@ CREATE TABLE day (
 CREATE TABLE agent_client (
     id           TEXT NOT NULL PRIMARY KEY,
     name         TEXT NOT NULL UNIQUE,
-    scopes       TEXT NOT NULL CHECK (json_valid(scopes)),
+    scopes       TEXT NOT NULL CHECK (json_valid(scopes) AND json_type(scopes) = 'array'),
     created_at   TEXT NOT NULL,
     last_seen_at TEXT
 ) STRICT;
@@ -97,6 +97,8 @@ CREATE TABLE change_log (
 
 -- 項目の行頭の菱形（その項目を指す記録があるか）と、取り消し前の確認
 CREATE INDEX change_log_target ON change_log (target_type, target_id);
+-- エージェントによる未確認の変更（上部のバーとサイドバーの件数）。確認すると索引から外れる
+CREATE INDEX change_log_unseen_agent ON change_log (id) WHERE actor = 'agent' AND seen_at IS NULL;
 
 CREATE TABLE setting (
     key   TEXT NOT NULL PRIMARY KEY,

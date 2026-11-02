@@ -59,23 +59,39 @@ pub fn get(conn: &Connection, date: LogicalDate) -> Result<Option<Day>, StorageE
         .optional()?)
 }
 
-/// 持ち越しの状態（3つの時刻）を書き換える。行が無ければ `false`。
-pub fn update_carryover(
+/// 持ち越しの状態を表す時刻のどれか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CarryoverMark {
+    /// 持ち越し処理を終えた（`carryover_done_at`）。
+    Done,
+    /// 後回しにした（`carryover_postponed_at`）。
+    Postponed,
+    /// 後回しにしたものを自動で再表示した（`carryover_reshown_at`）。
+    Reshown,
+}
+
+impl CarryoverMark {
+    /// 列の名前。SQL に埋め込むので、決まった文字列だけを返す。
+    const fn column(self) -> &'static str {
+        match self {
+            Self::Done => "carryover_done_at",
+            Self::Postponed => "carryover_postponed_at",
+            Self::Reshown => "carryover_reshown_at",
+        }
+    }
+}
+
+/// 持ち越しの状態の時刻を1つだけ書く（`None` なら NULL に戻す）。ほかの2つには触れない。
+/// 行が無ければ `false`。
+pub fn set_carryover(
     conn: &Connection,
     date: LogicalDate,
-    done_at: Option<Timestamp>,
-    postponed_at: Option<Timestamp>,
-    reshown_at: Option<Timestamp>,
+    mark: CarryoverMark,
+    at: Option<Timestamp>,
 ) -> Result<bool, StorageError> {
     let n = conn.execute(
-        "UPDATE day SET carryover_done_at = ?2, carryover_postponed_at = ?3, carryover_reshown_at = ?4
-         WHERE date = ?1",
-        params![
-            date,
-            opt_time(done_at),
-            opt_time(postponed_at),
-            opt_time(reshown_at)
-        ],
+        &format!("UPDATE day SET {} = ?2 WHERE date = ?1", mark.column()),
+        params![date, opt_time(at)],
     )?;
     Ok(n == 1)
 }
@@ -109,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn update_carryover_writes_the_three_times() {
+    fn set_carryover_writes_only_the_given_time() {
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
@@ -117,27 +133,30 @@ mod tests {
 
         let postponed = at("2026-11-03T01:00:00Z");
         let reshown = at("2026-11-03T02:00:00Z");
-        assert!(update_carryover(conn, d, None, Some(postponed), Some(reshown)).unwrap());
+        let done = at("2026-11-03T03:00:00Z");
+        assert!(set_carryover(conn, d, CarryoverMark::Postponed, Some(postponed)).unwrap());
+        assert!(set_carryover(conn, d, CarryoverMark::Reshown, Some(reshown)).unwrap());
+        assert!(set_carryover(conn, d, CarryoverMark::Done, Some(done)).unwrap());
         let day = get(conn, d).unwrap().unwrap();
-        assert_eq!(day.carryover_done_at, None);
+        assert_eq!(day.carryover_done_at, Some(done));
         assert_eq!(day.carryover_postponed_at, Some(postponed));
         assert_eq!(day.carryover_reshown_at, Some(reshown));
 
-        // NULL に戻せる
-        let done = at("2026-11-03T03:00:00Z");
-        assert!(update_carryover(conn, d, Some(done), None, None).unwrap());
+        // NULL に戻せる。ほかの時刻は残る
+        assert!(set_carryover(conn, d, CarryoverMark::Postponed, None).unwrap());
         let day = get(conn, d).unwrap().unwrap();
         assert_eq!(day.carryover_done_at, Some(done));
         assert_eq!(day.carryover_postponed_at, None);
-        assert_eq!(day.carryover_reshown_at, None);
+        assert_eq!(day.carryover_reshown_at, Some(reshown));
     }
 
     #[test]
-    fn update_carryover_of_a_missing_day_changes_nothing() {
+    fn set_carryover_of_a_missing_day_changes_nothing() {
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        assert!(!update_carryover(conn, d, Some(at("2026-11-03T03:00:00Z")), None, None).unwrap());
+        let done = Some(at("2026-11-03T03:00:00Z"));
+        assert!(!set_carryover(conn, d, CarryoverMark::Done, done).unwrap());
         assert_eq!(get(conn, d).unwrap(), None);
     }
 }
