@@ -5,6 +5,7 @@
 //! （スキーマを番号順に更新する手順）を自動で適用する（[`migration`] モジュール）。
 //! 開く前に `yunagi.lock` のロック（[`DbLock`]）を取る（[`lock`] モジュール）。
 
+pub mod backup;
 pub mod cloud_sync;
 pub mod data_dir;
 mod error;
