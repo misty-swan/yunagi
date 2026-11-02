@@ -181,7 +181,7 @@ macro_rules! text_enum {
         }
     };
 }
-use text_enum;
+pub(crate) use text_enum;
 
 /// [`text_enum!`] で定義した型が知らない文字列。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,7 +368,11 @@ mod tests {
         let conn = db.connection();
 
         let tables: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+            // 全文検索の表（search_index と FTS5 が作る表）は storage::search のテストで確かめる
+            .prepare(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' \
+                 AND name NOT LIKE 'search\\_index%' ESCAPE '\\' ORDER BY name",
+            )
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()

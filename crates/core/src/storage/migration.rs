@@ -38,11 +38,18 @@ pub(crate) struct Migration {
 /// 表の構造を変えなくても、保存する値の種類（item の `status`、agent_client の `scopes` など）を
 /// 足すときは、新しい番号を足す（SQL は空でもよい）。旧版は新しい番号のデータベースを開かずに
 /// 断るので、知らない値を読んで途中で止まることがない（設計書 1.1）。
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "create initial tables",
-    sql: include_str!("migrations/0001_initial.sql"),
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "create initial tables",
+        sql: include_str!("migrations/0001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "create search index",
+        sql: include_str!("migrations/0002_search_index.sql"),
+    },
+];
 
 // 番号の並びの誤りは、起動時ではなくコンパイル時に見つける
 const _: () = assert!(
