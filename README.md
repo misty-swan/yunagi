@@ -15,7 +15,7 @@ Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークス�
 
 ## 必要なもの
 
-- Rust 1.99 以上、Node.js、pnpm 12
+- Rust 1.99.1（`rust-toolchain.toml` で固定。rustup を使っていれば自動で入る）、Node.js 26（`.node-version`）、pnpm 12（`package.json` の `packageManager`）
 - Tauri 2 の動作に必要な OS のライブラリ（<https://v2.tauri.app/start/prerequisites/>）
 
 ## よく使うコマンド
@@ -29,12 +29,12 @@ cargo run -p yunagi-cli          # コンソール用バイナリ yunagi を動�
 
 `pnpm check` は次の4つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
 
-- `pnpm check:rust`：コア（`yunagi-core`）とコンソール用バイナリ（`yunagi-cli`）の単体テスト。`cargo test -p yunagi-core -p yunagi-cli --locked`（`Cargo.lock` と食い違うと失敗する）
+- `pnpm check:rust`：Rust の3つのクレート全体の単体テスト。`cargo test --workspace --locked`（`Cargo.lock` と食い違うと失敗する）
 - `pnpm check:clippy`：Rust の3つのクレート全体（テストのコードを含む）を clippy（Rust のコードの書き方の問題を指摘する検査）にかける。`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告が1つでもあれば失敗する。デスクトップアプリ（`yunagi-app`）がコンパイルできるかもこれで確かめる。Tauri と WebView のライブラリを含むため初回は1分ほどかかるが、2回目以降は変わった所だけ確かめるので速い）
 - `pnpm check:types`：画面のコードの型チェック（`svelte-check`）と、設定ファイル（`vite.config.ts`・`svelte.config.js`）の型チェック（`tsc -p tsconfig.node.json`）
 - `pnpm check:web`：`vitest run`
 
-GitHub Actions の開発用 CI（`.github/workflows/ci.yml`）は、PR と main への push のたびに、Linux（Ubuntu）で同じ `pnpm check` を走らせる。手元と CI で検査の中身がずれないよう、検査を足すときは `package.json` の `check` に足す。配布用のビルド（`docs/release/07-build-and-distribution.md` 3章）とは別のもの。
+GitHub Actions の開発用 CI（`.github/workflows/ci.yml`）は、PR と main への push のたびに、Linux（Ubuntu）で同じ `pnpm check` を走らせる。手元と CI で検査の中身がずれないよう、検査を足すときは `package.json` の `check` に足す。Rust と Node.js の版も、手元と同じ `rust-toolchain.toml`・`.node-version` から読む。配布用のビルド（`docs/release/07-build-and-distribution.md` 3章）とは別のもの。
 
 版は直下の `Cargo.toml` の `[workspace.package]` の `version` 1か所にだけ書く。3つのクレートはこれを使い、デスクトップアプリも `src-tauri/tauri.conf.json` に版を書かないことで、Tauri がアプリのクレートの版（＝ワークスペースの版）を使う。`package.json` は公開しないので版を書かない。食い違わないことは `yunagi-cli` の単体テストで確かめている。
 

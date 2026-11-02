@@ -41,10 +41,9 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
+      # 版と clippy は rust-toolchain.toml から読む
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        run: rustup toolchain install
 
       # target/ と cargo の取得物をキャッシュする（Cargo.lock が変わると作り直す）
       - name: Cache Rust build
@@ -57,7 +56,8 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 26
+          # 版は .node-version から読む（手元の nvm・fnm・mise なども同じファイルを読む）
+          node-version-file: .node-version
           cache: pnpm
 
       - name: Install dependencies

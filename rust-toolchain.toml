@@ -1,0 +1,6 @@
+# 使う Rust の版を固定する。手元（rustup）と CI がこの1か所を読むので、版がずれない。
+# 上げるときはここを書き換え、`pnpm check`（clippy を含む）が通ることを確かめる。
+[toolchain]
+channel = "1.99.1"
+components = ["clippy"]
+profile = "minimal"
