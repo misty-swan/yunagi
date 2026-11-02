@@ -12,6 +12,8 @@
 -- - item・note・reflection の追加・更新・削除のたびに、トリガーで索引をそろえる。
 --   論理削除した項目（deleted_at が NULL でないもの）は索引に入れない。
 --   更新は、本文・種類・日付・削除の有無のどれかが変わったときだけ入れ直す（状態の変更などでは触らない）。
+-- - 後のマイグレーションで item・note・reflection を作り直す（DROP TABLE する）と、ここのトリガーも
+--   消える。作り直すときは、同じマイグレーションでトリガーも作り直す（設計書 4.1）。
 
 CREATE VIRTUAL TABLE search_index USING fts5 (
     kind UNINDEXED,

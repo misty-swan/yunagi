@@ -69,14 +69,10 @@ pub fn search(conn: &Connection, query: &SearchQuery<'_>) -> Result<Vec<SearchHi
         return Ok(Vec::new());
     }
     // 種類は JSON の配列で渡し、SQL の中で json_each で開く（文を種類の数によらず1つにするため）
-    let kinds = (!query.kinds.is_empty()).then(|| {
-        let list: Vec<String> = query
-            .kinds
-            .iter()
-            .map(|k| format!("\"{}\"", k.as_str()))
-            .collect();
-        format!("[{}]", list.join(","))
-    });
+    let kinds = (!query.kinds.is_empty())
+        .then(|| serde_json::to_string(&query.kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>()))
+        .transpose()
+        .expect("a list of strings is always serialized");
     let limit = i64::try_from(query.limit).unwrap_or(i64::MAX);
 
     let (sql, pattern) = if text.chars().count() >= MIN_INDEXED_CHARS {
@@ -92,35 +88,87 @@ pub fn search(conn: &Connection, query: &SearchQuery<'_>) -> Result<Vec<SearchHi
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// 絞り込みと並び（両方の文で共通。`?2` 期間の始め、`?3` 終わり、`?4` 種類、`?5` 件数）。
-macro_rules! filter_and_order {
+// どちらの文も、`?1` が検索語、`?2` が期間の始め、`?3` が終わり、`?4` が種類（JSON の配列）、
+// `?5` が件数。ノートの本文は大きい（1日 10KB ほど）ので、並べ替えと件数の切り取りは本文を
+// 持たずに行い、残った行の本文だけを読む。
+
+/// 期間の絞り込み（`date` の列について）。
+macro_rules! date_filter {
     () => {
-        " WHERE (?2 IS NULL OR date >= ?2) AND (?3 IS NULL OR date <= ?3) \
-          AND (?4 IS NULL OR kind IN (SELECT value FROM json_each(?4))) \
-          ORDER BY date DESC, \
-          CASE kind WHEN 'todo' THEN 0 WHEN 'blocker' THEN 1 WHEN 'note' THEN 2 ELSE 3 END, \
-          ref_id \
-          LIMIT ?5"
+        "(?2 IS NULL OR date >= ?2) AND (?3 IS NULL OR date <= ?3)"
     };
 }
 
+/// 種類の絞り込み。`$kind` は種類を表す SQL の式。
+macro_rules! kind_filter {
+    ($kind:literal) => {
+        concat!(
+            "(?4 IS NULL OR ",
+            $kind,
+            " IN (SELECT value FROM json_each(?4)))"
+        )
+    };
+}
+
+/// 並び。日付の新しい順、同じ日は [`KIND_ORDER`] の順、その中は ref_id の順。
+macro_rules! order {
+    () => {
+        "date DESC, CASE kind WHEN 'todo' THEN 0 WHEN 'blocker' THEN 1 \
+         WHEN 'note' THEN 2 WHEN 'reflection' THEN 3 END, ref_id"
+    };
+}
+
+/// 同じ日の中の種類の並び（[`order!`] の CASE と同じ順。テストで食い違いを確かめる）。
+#[cfg(test)]
+const KIND_ORDER: [SearchKind; 4] = [
+    SearchKind::Todo,
+    SearchKind::Blocker,
+    SearchKind::Note,
+    SearchKind::Reflection,
+];
+
 /// 索引で探す文。`?1` は FTS5 の句（[`fts_phrase`]）。
 const INDEXED_SQL: &str = concat!(
-    "SELECT kind, ref_id, date, body FROM (",
-    "SELECT kind, ref_id, date, body FROM search_index WHERE search_index MATCH ?1",
-    ")",
-    filter_and_order!(),
+    "SELECT kind, ref_id, date, (SELECT body FROM search_index WHERE rowid = hit.id) FROM (",
+    "SELECT rowid AS id, kind, ref_id, date FROM search_index ",
+    "WHERE search_index MATCH ?1 AND ",
+    date_filter!(),
+    " AND ",
+    kind_filter!("kind"),
+    " ORDER BY ",
+    order!(),
+    " LIMIT ?5) AS hit ORDER BY ",
+    order!(),
 );
 
 /// 元の表への部分一致で探す文。`?1` は LIKE の型（[`like_pattern`]）。
+/// 絞り込みは表ごとに入れ、対象外の種類の表は読まない。
 const LIKE_SQL: &str = concat!(
-    "SELECT kind, ref_id, date, body FROM (",
-    "SELECT kind, id AS ref_id, date, text AS body FROM item ",
-    "WHERE deleted_at IS NULL AND text LIKE ?1 ESCAPE '\\' ",
-    "UNION ALL SELECT 'note', date, date, body FROM note WHERE body LIKE ?1 ESCAPE '\\' ",
-    "UNION ALL SELECT 'reflection', date, date, body FROM reflection WHERE body LIKE ?1 ESCAPE '\\'",
-    ")",
-    filter_and_order!(),
+    "SELECT kind, ref_id, date, CASE kind ",
+    "WHEN 'note' THEN (SELECT body FROM note WHERE date = hit.ref_id) ",
+    "WHEN 'reflection' THEN (SELECT body FROM reflection WHERE date = hit.ref_id) ",
+    "ELSE (SELECT text FROM item WHERE id = hit.ref_id) END FROM (",
+    // UNION ALL の ORDER BY には式を書けないので、つないだものを包んでから並べる
+    "SELECT kind, ref_id, date FROM (",
+    "SELECT kind, id AS ref_id, date FROM item WHERE deleted_at IS NULL AND ",
+    date_filter!(),
+    " AND ",
+    kind_filter!("kind"),
+    " AND text LIKE ?1 ESCAPE '\\' ",
+    "UNION ALL SELECT 'note', date, date FROM note WHERE ",
+    kind_filter!("'note'"),
+    " AND ",
+    date_filter!(),
+    " AND body LIKE ?1 ESCAPE '\\' ",
+    "UNION ALL SELECT 'reflection', date, date FROM reflection WHERE ",
+    kind_filter!("'reflection'"),
+    " AND ",
+    date_filter!(),
+    " AND body LIKE ?1 ESCAPE '\\' ",
+    ") ORDER BY ",
+    order!(),
+    " LIMIT ?5) AS hit ORDER BY ",
+    order!(),
 );
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
@@ -220,7 +268,9 @@ mod tests {
             .collect()
     }
 
-    /// 索引が元の表と食い違っていないか（FTS5 の検査）と、行番号の表と索引の件数がそろっているか。
+    /// 索引が元の表と食い違っていないか。元の表（論理削除していない項目、ノート、振り返り）の
+    /// 種類・id・日付・本文の組と、索引の組が同じで、行番号の表が索引の各行を指していること。
+    /// FTS5 の `integrity-check` で、索引そのものが壊れていないことも確かめる。
     fn assert_index_consistent(db: &Database) {
         let conn = db.connection();
         conn.execute(
@@ -228,19 +278,45 @@ mod tests {
             [],
         )
         .unwrap();
-        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
-        let expected = count("SELECT count(*) FROM item WHERE deleted_at IS NULL")
-            + count("SELECT count(*) FROM note")
-            + count("SELECT count(*) FROM reflection");
-        assert_eq!(count("SELECT count(*) FROM search_index"), expected);
-        assert_eq!(count("SELECT count(*) FROM search_index_ref"), expected);
-        assert_eq!(
-            count(
-                "SELECT count(*) FROM search_index AS s JOIN search_index_ref AS r \
-                 ON r.id = s.rowid AND r.ref_id = s.ref_id"
-            ),
-            expected
+        let rows = |sql: &str| -> Vec<String> {
+            let mut stmt = conn.prepare(sql).unwrap();
+            let mut v: Vec<String> = stmt
+                .query_map([], |r| {
+                    Ok(format!(
+                        "{} {} {} {:?}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            v.sort();
+            v
+        };
+        let source = rows(
+            "SELECT kind, id, date, text FROM item WHERE deleted_at IS NULL \
+             UNION ALL SELECT 'note', date, date, body FROM note \
+             UNION ALL SELECT 'reflection', date, date, body FROM reflection",
         );
+        assert_eq!(
+            rows("SELECT kind, ref_id, date, body FROM search_index"),
+            source
+        );
+        assert_eq!(
+            rows(
+                "SELECT s.kind, s.ref_id, s.date, s.body FROM search_index AS s \
+                 JOIN search_index_ref AS r ON r.id = s.rowid AND r.ref_id = s.ref_id \
+                 AND r.source = CASE WHEN s.kind IN ('note', 'reflection') THEN s.kind ELSE 'item' END"
+            ),
+            source
+        );
+        let refs: i64 = conn
+            .query_row("SELECT count(*) FROM search_index_ref", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(refs as usize, source.len());
     }
 
     #[test]
@@ -256,6 +332,81 @@ mod tests {
             .unwrap();
         assert!(sql.contains("USING fts5"), "{sql}");
         assert!(sql.contains("tokenize = 'trigram'"), "{sql}");
+    }
+
+    #[test]
+    fn search_tables_and_triggers_exist_after_all_migrations() {
+        // 索引はトリガーだけでそろえるので、後のマイグレーションが item・note・reflection を
+        // 作り直す（DROP TABLE する）とトリガーが黙って消える。作り直すときはトリガーも作り直す
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let names = |sql: &str| -> Vec<String> {
+            conn.prepare(sql)
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(
+            names(
+                "SELECT name || ' ' || type || CASE WHEN \"notnull\" THEN '' ELSE '?' END \
+                 || CASE WHEN pk THEN '!' ELSE '' END \
+                 FROM pragma_table_info('search_index_ref') ORDER BY cid"
+            ),
+            ["id INTEGER?!", "source TEXT", "ref_id TEXT"]
+        );
+        assert_eq!(
+            names(
+                "SELECT group_concat(ii.name, ',') FROM pragma_index_list('search_index_ref') AS il, \
+                 pragma_index_info(il.name) AS ii WHERE il.\"unique\" AND il.origin = 'u' \
+                 GROUP BY il.name"
+            ),
+            ["source,ref_id"]
+        );
+        let mut expected = Vec::new();
+        for table in ["item", "note", "reflection"] {
+            for op in ["delete", "insert", "update"] {
+                expected.push(format!("search_{table}_{op} on {table}"));
+            }
+        }
+        assert_eq!(
+            names(
+                "SELECT name || ' on ' || tbl_name FROM sqlite_schema \
+                 WHERE type = 'trigger' ORDER BY tbl_name, name"
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn kind_order_matches_the_sql() {
+        // 種類を足したら、KIND_ORDER と order! の CASE の両方に足す（足し忘れるとここで止まる）
+        for (rank, kind) in KIND_ORDER.iter().enumerate() {
+            match kind {
+                SearchKind::Todo
+                | SearchKind::Blocker
+                | SearchKind::Note
+                | SearchKind::Reflection => {}
+            }
+            let clause = format!("WHEN '{}' THEN {rank}", kind.as_str());
+            assert!(INDEXED_SQL.contains(&clause), "{clause}");
+            assert!(LIKE_SQL.contains(&clause), "{clause}");
+        }
+        let (db, _dir) = open();
+        for kind in [ItemKind::Blocker, ItemKind::Todo] {
+            add(&db, "2026-11-03", kind, "同じ日の並び");
+        }
+        save(&db, TextDoc::Reflection, "2026-11-03", "同じ日の並び");
+        save(&db, TextDoc::Note, "2026-11-03", "同じ日の並び");
+        for q in ["同じ日の並び", "並び"] {
+            let kinds: Vec<SearchKind> = search(db.connection(), &query(q))
+                .unwrap()
+                .into_iter()
+                .map(|h| h.kind)
+                .collect();
+            assert_eq!(kinds, KIND_ORDER, "{q}");
+        }
     }
 
     #[test]
@@ -678,17 +829,8 @@ mod tests {
             let mut rng = Rng(0x2026_1103);
             let conn = db.connection();
             conn.execute_batch("BEGIN").unwrap();
-            let first = date("2021-11-08");
-            for n in 0..DAYS {
-                let d: LogicalDate = first
-                    .to_string()
-                    .parse::<jiff::civil::Date>()
-                    .unwrap()
-                    .checked_add(jiff::Span::new().days(n))
-                    .unwrap()
-                    .to_string()
-                    .parse()
-                    .unwrap();
+            let mut d = date("2021-11-08");
+            for _ in 0..DAYS {
                 crate::storage::table::day::ensure(conn, d, "Asia/Tokyo", at(T0)).unwrap();
                 for i in 0..ITEMS_PER_DAY {
                     let kind = if i % 4 == 0 {
@@ -709,6 +851,7 @@ mod tests {
                     at(T0),
                 )
                 .unwrap();
+                d = d.tomorrow().unwrap();
             }
             conn.execute_batch("COMMIT").unwrap();
         }
