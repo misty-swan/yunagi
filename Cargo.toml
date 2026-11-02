@@ -24,3 +24,10 @@ rusqlite = { version = "=0.41.1", features = ["bundled", "backup"] }
 tempfile = "=3.27.0"
 # 時刻とタイムゾーン（論理日付の計算。crates/core/src/domain/logical_date.rs）
 jiff = "=0.2.38"
+# ULID（主キー）の乱数部分を OS から得る（crates/core/src/storage/ulid.rs）。
+# tempfile などが同じ版をすでに使っているので、新たに取り込むコードは増えない
+getrandom = "=0.4.3"
+# config.json の読み書き（crates/core/src/storage/data_dir.rs）。Tauri がすでに使っている版に
+# そろえ、新しく取り込むコードを増やさない
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"

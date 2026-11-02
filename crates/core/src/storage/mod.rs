@@ -5,9 +5,13 @@
 //! （スキーマを番号順に更新する手順）を自動で適用する（[`migration`] モジュール）。
 //! 開く前に `yunagi.lock` のロック（[`DbLock`]）を取る（[`lock`] モジュール）。
 
+pub mod cloud_sync;
+pub mod data_dir;
 mod error;
 mod lock;
 mod migration;
+pub mod table;
+mod ulid;
 
 use std::path::Path;
 
@@ -15,6 +19,7 @@ use rusqlite::Connection;
 
 pub use error::StorageError;
 pub use lock::{DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
+pub use ulid::{ParseUlidError, Ulid};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。
 ///
@@ -32,7 +37,7 @@ impl Database {
     /// - 適用前に、`path` と同じフォルダの `backups/` にバックアップを取る。
     ///   適用に失敗したら、バックアップに戻してから [`StorageError::MigrationFailed`] を返す。
     ///
-    /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は YUN-20）。
+    /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は [`data_dir`]）。
     ///
     /// 同じデータベースを同時に開くのは1つのプロセスだけ、という前提で動く
     /// （アーキテクチャ設計書 4章）。2つが同時にマイグレーションすると、失敗した側の復元で、
@@ -59,7 +64,7 @@ impl Database {
         let backup_dir = path
             .parent()
             .unwrap_or_else(|| Path::new(""))
-            .join("backups");
+            .join(data_dir::BACKUPS_DIR_NAME);
         migration::migrate(&mut conn, &backup_dir, migrations)?;
         Ok(Self { conn, _lock: lock })
     }
@@ -72,7 +77,7 @@ impl Database {
         conn.close().map_err(|(_, e)| StorageError::from(e))
     }
 
-    /// SQLite への接続。表の読み書きは後続の課題でこの層に作る。
+    /// SQLite への接続。表ごとの基本の読み書きは [`table`] の関数に渡して行う。
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
