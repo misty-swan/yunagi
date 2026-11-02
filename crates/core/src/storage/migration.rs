@@ -34,8 +34,11 @@ pub(crate) struct Migration {
 ///
 /// 一度配布した版に入ったものは書き換えない（利用者のデータベースには適用済みのため、
 /// 書き換えても反映されない）。スキーマを変えるときは、新しい番号を末尾に足す。
-/// 表の定義は YUN-19 で足す。
-pub(crate) const MIGRATIONS: &[Migration] = &[];
+pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "create initial tables",
+    sql: include_str!("migrations/0001_initial.sql"),
+}];
 
 // 番号の並びの誤りは、起動時ではなくコンパイル時に見つける
 const _: () = assert!(

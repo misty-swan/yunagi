@@ -6,6 +6,8 @@
 - 主キーは時刻順に並ぶ ULID とし、将来のクラウド同期で端末間の衝突を避ける。
 - 削除は論理削除（`deleted_at`）とし、変更履歴からの取り消しと同期に備える。
 - 日付は論理日付（切り替わり時刻を考慮した `YYYY-MM-DD`）で保持する。
+- 時刻は UTC の ISO 8601 で、ミリ秒までの決まった桁数で保持する（例：`2026-11-03T09:15:00.000Z`。文字列の大小が時刻の前後と一致する）。
+- 表は SQLite の STRICT テーブルとし、3章の型と違う値を入れさせない。説明に NULL と書いていない列は NOT NULL とする。`kind`・`status` などの値の種類は、検査（CHECK）を付けずにコアで確かめる（値を足すたびに表を作り直さずに済むようにするため）。JSON の列は、正しい JSON であることだけを表で確かめる。
 - スキーマはマイグレーション番号で管理し、更新時に自動適用する。適用前に必ずバックアップを取る。適用に失敗した場合は自動でバックアップに戻してデータを変更せず、旧版の再導入方法を案内する（ビルド・配布手順書 5章）。
 - `yunagi.db` は保存先（`data_dir`）に置く。保存先そのものは DB ではなく設定ファイル `config.json` に記録する（アーキテクチャ設計書 6章）。
 
@@ -66,10 +68,10 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | split_from_id | TEXT NULL | 分割元の項目の id（分割で作った子項目のみ） |
 | resolution_note | TEXT NULL | 障害の解消メモ |
 | origin | TEXT | `human` / `agent` / `note`（ノートから送った） / `external` |
-| agent_client_id | TEXT NULL | エージェントが作成した場合の識別 |
-| external_ref_id | TEXT NULL | 外部課題との紐付け |
+| agent_client_id | TEXT FK→agent_client NULL | エージェントが作成した場合の識別 |
+| external_ref_id | TEXT NULL | 外部課題との紐付け（external_ref の表は MVP 後に作るため、それまでは外部キーを付けない） |
 | completed_at | TEXT NULL | 完了・解消時刻 |
-| created_at / updated_at / deleted_at | TEXT | 監査用時刻 |
+| created_at / updated_at / deleted_at | TEXT（deleted_at は NULL） | 監査用時刻。deleted_at は論理削除した時刻 |
 
 持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
 
@@ -129,7 +131,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | agent_client_id | TEXT FK→agent_client NULL | 操作したエージェント（CLI は `name = cli` の行）。`actor = human` のときは NULL |
 | operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則）。取り消しの記録は `agent.revert` |
 | target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection`。target_id は、item なら項目の id、note・reflection なら日付（`YYYY-MM-DD`） |
-| before / after | TEXT（JSON） | 変更前後のスナップショット。item は、その操作が変えた欄だけを入れる（追加・削除では項目全体）。note・reflection は本文 |
+| before / after | TEXT（JSON）NULL | 変更前後のスナップショット。item は、その操作が変えた欄だけを入れる（追加・削除では項目全体）。note・reflection は本文。追加の before のように、無い側は NULL |
 | created_at | TEXT | 操作時刻 |
 | reverted_at | TEXT NULL | 取り消した時刻 |
 | revert_of_id | TEXT NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
@@ -148,9 +150,9 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | id | TEXT PK | ULID |
 | name | TEXT UNIQUE | 接続時の識別子（`yunagi mcp --client <name>`）。例：`claude-code`、`codex`、`cli`、`unknown`（識別子のない MCP 接続） |
 | scopes | TEXT（JSON） | `read` / `todo` / `blocker` / `append` / `note_edit` の許可。既定はどのクライアントも `read` のみ |
-| created_at / last_seen_at | TEXT | 登録・最終接続時刻 |
+| created_at / last_seen_at | TEXT（last_seen_at は NULL） | 登録・最終接続時刻。まだ接続していなければ last_seen_at は NULL |
 
-`cli` と `unknown` の行は、データベースの作成時に固定で作る。そのほかの行は、新しい識別子で初めて接続したときに作る。item・change_log の `agent_client_id` は、この表の `id`（ULID）を指す。
+`cli` と `unknown` の行は、データベースの作成時（マイグレーション 1）に固定で作る。id は固定の ULID（`cli` が `00000000000000000000000001`、`unknown` が `00000000000000000000000002`）、`scopes` は `["read"]`、`last_seen_at` は NULL とする。そのほかの行は、新しい識別子で初めて接続したときに作る。item・change_log の `agent_client_id` は、この表の `id`（ULID）を指す。
 
 ### external_ref（MVP 後の有料機能）
 
@@ -164,6 +166,11 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | fetched_at | TEXT | 最終取得時刻 |
 
 ### setting
+
+| 列 | 型 | 説明 |
+| --- | --- | --- |
+| key | TEXT PK | 設定のキー |
+| value | TEXT（JSON） | 値。行が無いキーは既定値を使う |
 
 キーと値（JSON）の組で保持する。主なキー：`day_boundary`（既定 `04:00`）、`layout`、`theme`（`system` / `light` / `dark`。既定 `system`）、`font_size`、`vim_mode`、`shortcuts`、`locale`、`carryover_review_threshold`（既定 3）、`update_check`（更新の自動確認。既定 `true`）、`meter_hours`（凪メーターの時間帯。既定 `09:00-19:00`）、`sidebar`（サイドバーの開閉の状態）、`vim_ime_restore`（挿入モードに入ったとき直前の入力状態に戻す。既定 `true`。操作仕様書 4.4）、`license`（サポーターライセンスのキーと最終確認時刻）。
 
