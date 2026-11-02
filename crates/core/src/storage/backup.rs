@@ -57,6 +57,8 @@ pub struct Backup {
     pub kind: BackupKind,
     /// 作った時刻（ファイル名に書いた UNIX 時刻。秒まで）。
     pub created_at: Timestamp,
+    /// 同じ秒に作ったものを見分ける番号（名前の `-<番号>`。無ければ 1）。
+    seq: u32,
 }
 
 /// バックアップの種類。
@@ -99,7 +101,8 @@ impl Database {
     pub fn ensure_daily_backup(&self, today: LogicalDate) -> Result<Option<Backup>, BackupError> {
         let db_path = self.file_path()?;
         let dir = backups_dir_of(&db_path);
-        let exists = list_in(&dir)?
+        let mut backups = list_in(&dir)?;
+        let exists = backups
             .iter()
             .any(|b| b.kind == BackupKind::Daily { date: today });
         let created = if exists {
@@ -112,14 +115,21 @@ impl Database {
                 &format!("{DAILY_PREFIX}{today}-{secs}"),
             )?)
         };
-        prune(&dir)?;
+        backups.extend(created.clone());
+        prune(
+            &backups,
+            Some(today),
+            created.as_ref().map(|b| b.path.as_path()),
+        );
         Ok(created)
     }
 
     /// バックアップ `backup` の内容でデータベースを置き換える。
     ///
-    /// 1. `backup` を確かめる（SQLite のデータベースとして読めて整合性があり、スキーマの番号を
-    ///    このアプリが知っている）。通らなければ、何も変えずにエラーを返す。
+    /// 1. `backup` を確かめる（SQLite のデータベースとして読めて整合性があり、スキーマの番号が
+    ///    1 以上（Yunagi のデータベース）で、このアプリが知っている範囲にある）。
+    ///    通らなければ、何も変えずにエラーを返す。開いたままのトランザクションがあるときも断る
+    ///    （書きかけの内容を黙って捨てないように）。
     /// 2. 今のデータを `backups/` に退避する（`pre-restore-*.db`）。
     /// 3. 開いている接続のまま、`backup` の内容を写し込む。`backup` のスキーマが古ければ、
     ///    続けてマイグレーションを適用する。
@@ -138,6 +148,9 @@ impl Database {
         migrations: &[Migration],
     ) -> Result<RestoreReport, BackupError> {
         let db_path = self.file_path()?;
+        if !self.conn.is_autocommit() {
+            return Err(BackupError::TransactionOpen);
+        }
         check_restorable(backup, &db_path, migrations)?;
         let dir = backups_dir_of(&db_path);
         let saved = create_backup(
@@ -159,7 +172,11 @@ impl Database {
                 },
             });
         }
-        prune(&dir)?;
+        // データはもう置き換わっているので、片付けに失敗しても復元は失敗にしない。
+        // 時計が戻っていても、退避したばかりのものは消さない
+        if let Ok(backups) = list_in(&dir) {
+            prune(&backups, None, Some(&saved.path));
+        }
         Ok(RestoreReport { saved })
     }
 
@@ -170,10 +187,6 @@ impl Database {
         backup_dir: &Path,
         migrations: &[Migration],
     ) -> Result<(), BackupError> {
-        // 開いたままのトランザクションがあると写し込めない
-        if !self.conn.is_autocommit() {
-            self.conn.execute_batch("ROLLBACK")?;
-        }
         self.conn.restore(MAIN_DB, src, NO_PROGRESS)?;
         // 写し込んでも WAL モードのままだが、開くときと同じ設定にそろえておく
         super::configure(&self.conn)?;
@@ -216,7 +229,11 @@ fn check_restorable(
             result,
         });
     }
-    migration::check_supported(&conn, migrations)?;
+    // 番号 0 は Yunagi のスキーマを1つも適用していないもの（空のファイルや、別のアプリの
+    // データベース）。写し込むと、利用者のデータが空のデータベースに置き換わってしまう
+    if migration::check_supported(&conn, migrations)? == 0 {
+        return Err(BackupError::NotYunagiDatabase(backup.to_path_buf()));
+    }
     Ok(())
 }
 
@@ -287,41 +304,60 @@ fn list_in(dir: &Path) -> Result<Vec<Backup>, BackupError> {
             backups.push(backup);
         }
     }
-    backups.sort_by(|a, b| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| b.path.cmp(&a.path))
-    });
+    backups.sort_by(|a, b| newer_first(a, b).then_with(|| b.path.cmp(&a.path)));
     Ok(backups)
 }
 
-/// 残す数を超えた古いバックアップを消す。消せなかったものは残す（次の機会にまた消す）。
-fn prune(dir: &Path) -> Result<(), BackupError> {
-    let backups = list_in(dir)?;
-    let mut daily: Vec<_> = backups
+/// 作った時刻（同じ秒なら番号）の新しいものが先になる並べ方。
+fn newer_first(a: &Backup, b: &Backup) -> std::cmp::Ordering {
+    (b.created_at, b.seq).cmp(&(a.created_at, a.seq))
+}
+
+/// 一覧 `backups` のうち、残す数を超えた古いものを消す。消せなかったものは残す
+/// （次の機会にまた消す）。
+///
+/// - 定期は日付の新しい順に残す（時計が戻って、作った時刻の順と食い違っても日付で決める）。
+///   ただし `today` より後の日付（時計が進んでいたときに作ったもの）は、いちばん古いものとして
+///   扱う（いつまでも枠を占めないように）。
+/// - `keep` は数に関係なく残す（作ったばかりのもの。時計が戻っていると、名前の時刻では
+///   いちばん古く見える）。
+fn prune(backups: &[Backup], today: Option<LogicalDate>, keep: Option<&Path>) {
+    let is_kept = |b: &Backup| Some(b.path.as_path()) == keep;
+    let mut daily: Vec<(LogicalDate, &Backup)> = backups
         .iter()
         .filter_map(|b| match b.kind {
             BackupKind::Daily { date } => Some((date, b)),
             _ => None,
         })
         .collect();
-    // 日付の新しい順（時計が戻って作った時刻の順と食い違っても、日付で決める）
-    daily.sort_by(|(da, a), (db, b)| db.cmp(da).then_with(|| b.created_at.cmp(&a.created_at)));
-    let pre_migration = backups
-        .iter()
-        .filter(|b| matches!(b.kind, BackupKind::PreMigration { .. }));
-    let pre_restore = backups.iter().filter(|b| b.kind == BackupKind::PreRestore);
+    let future = |date: LogicalDate| today.is_some_and(|t| date > t);
+    daily.sort_by(|(da, a), (db, b)| {
+        (future(*da), *db)
+            .cmp(&(future(*db), *da))
+            .then_with(|| newer_first(a, b))
+    });
+    let daily: Vec<&Backup> = daily.into_iter().map(|(_, b)| b).collect();
+    let by_kind = |pick: fn(&BackupKind) -> bool| -> Vec<&Backup> {
+        let mut list: Vec<&Backup> = backups.iter().filter(|b| pick(&b.kind)).collect();
+        list.sort_by(|a, b| newer_first(a, b));
+        list
+    };
+    let pre_migration = by_kind(|k| matches!(k, BackupKind::PreMigration { .. }));
+    let pre_restore = by_kind(|k| *k == BackupKind::PreRestore);
 
-    let old = daily
-        .into_iter()
-        .map(|(_, b)| b)
-        .skip(DAILY_KEEP)
-        .chain(pre_migration.skip(PRE_MIGRATION_KEEP))
-        .chain(pre_restore.skip(PRE_RESTORE_KEEP));
-    for b in old {
-        let _ = fs::remove_file(&b.path);
+    for (list, limit) in [
+        (daily, DAILY_KEEP),
+        (pre_migration, PRE_MIGRATION_KEEP),
+        (pre_restore, PRE_RESTORE_KEEP),
+    ] {
+        // 残すものを先頭に置いてから、残す数を超えた分を消す
+        let (mut ordered, rest): (Vec<&Backup>, Vec<&Backup>) =
+            list.into_iter().partition(|b| is_kept(b));
+        ordered.extend(rest);
+        for b in ordered.into_iter().skip(limit) {
+            let _ = fs::remove_file(&b.path);
+        }
     }
-    Ok(())
 }
 
 /// ファイル名からバックアップの種類と作った時刻を読む。形に合わなければ `None`。
@@ -350,13 +386,14 @@ fn parse(path: &Path) -> Option<Backup> {
         )
     };
     // <秒> の後に、同じ秒に作ったものを見分ける `-<番号>` が付くことがある
-    let (secs, counter) = rest.split_once('-').unwrap_or((rest, "1"));
-    parse_digits::<u32>(counter)?;
+    let (secs, seq) = rest.split_once('-').unwrap_or((rest, "1"));
+    let seq = parse_digits(seq)?;
     let created_at = Timestamp::from_second(parse_digits(secs)?).ok()?;
     Some(Backup {
         path: path.to_path_buf(),
         kind,
         created_at,
+        seq,
     })
 }
 
@@ -394,6 +431,11 @@ pub enum BackupError {
     NoDatabaseFile,
     /// 復元に選んだファイルが、データベースそのもの。
     NotABackup(PathBuf),
+    /// 復元に選んだファイルが、Yunagi のデータベースではない（スキーマの番号が 0。空のファイルや
+    /// 別のアプリのデータベース）。データベースには触れていない。
+    NotYunagiDatabase(PathBuf),
+    /// 接続にトランザクションが開いたままなので、復元しなかった。データベースには触れていない。
+    TransactionOpen,
     /// 復元に選んだバックアップの整合性の確認（`integrity_check`）が通らなかった。
     /// データベースには触れていない。
     Corrupted { path: PathBuf, result: String },
@@ -436,6 +478,12 @@ impl fmt::Display for BackupError {
             Self::NotABackup(path) => {
                 write!(f, "{} is the database itself, not a backup", path.display())
             }
+            Self::NotYunagiDatabase(path) => {
+                write!(f, "{} is not a Yunagi database", path.display())
+            }
+            Self::TransactionOpen => {
+                write!(f, "cannot restore while a transaction is open")
+            }
             Self::Corrupted { path, result } => write!(
                 f,
                 "backup {} failed the integrity check: {result}",
@@ -469,7 +517,11 @@ impl std::error::Error for BackupError {
             Self::RestoreFailed { source, .. } | Self::RollbackFailed { source, .. } => {
                 Some(source.as_ref())
             }
-            Self::NoDatabaseFile | Self::NotABackup(_) | Self::Corrupted { .. } => None,
+            Self::NoDatabaseFile
+            | Self::NotABackup(_)
+            | Self::NotYunagiDatabase(_)
+            | Self::TransactionOpen
+            | Self::Corrupted { .. } => None,
         }
     }
 }
@@ -861,24 +913,63 @@ mod tests {
         assert!(backup.path.exists());
     }
 
+    /// テスト用のマイグレーション：v1 で表を作り、v2 で列を足す。
+    const V1: Migration = Migration {
+        version: 1,
+        name: "create memo",
+        sql: "CREATE TABLE memo (body TEXT NOT NULL);",
+    };
+    const V2: Migration = Migration {
+        version: 2,
+        name: "add memo.done",
+        sql: "ALTER TABLE memo ADD COLUMN done INTEGER NOT NULL DEFAULT 0;",
+    };
+
+    /// v1 のバックアップ（memo に 'old' の1行）を `path` に作る。
+    fn v1_backup(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memo (body TEXT NOT NULL);
+             INSERT INTO memo VALUES ('old');
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+
+    fn memo(db: &Database) -> Vec<String> {
+        db.connection()
+            .prepare("SELECT body FROM memo")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn user_version(db: &Database) -> i64 {
+        db.connection()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap()
+    }
+
     #[test]
     fn restoring_an_older_schema_applies_the_migrations() {
         let env = Env::new();
-        let mut db = open(&env.db_path());
-        set(&db, "a", 1);
-        let old = env.dir.path().join("v0.db");
-        plain_db(&old, 0);
-
-        db.restore_backup(&old).unwrap();
-        let version: i64 = db
-            .connection()
-            .pragma_query_value(None, "user_version", |r| r.get(0))
+        let old = env.dir.path().join("v1.db");
+        v1_backup(&old);
+        let mut db = open_with(&env.db_path(), &[V1, V2]).unwrap();
+        db.connection()
+            .execute_batch("INSERT INTO memo (body) VALUES ('current');")
             .unwrap();
-        assert_eq!(
-            version,
-            i64::from(migration::MIGRATIONS.last().unwrap().version)
-        );
-        assert_eq!(get(db.connection(), "a"), None);
+
+        db.restore_with_migrations(&old, &[V1, V2]).unwrap();
+        assert_eq!(user_version(&db), 2);
+        assert_eq!(memo(&db), ["old"]);
+        let done: i64 = db
+            .connection()
+            .query_row("SELECT done FROM memo", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(done, 0);
     }
 
     /// 復元に使えないファイルは、何も変えず、退避もせずに断る。
@@ -900,6 +991,16 @@ mod tests {
         fs::write(&garbage, b"not a database at all, just some text").unwrap();
         let err = assert_rejected(&env, &mut db, &garbage);
         assert!(matches!(err, BackupError::Sqlite(_)), "{err:?}");
+
+        // 空のファイルや番号 0 のデータベースは、Yunagi のデータではない
+        let empty = env.dir.path().join("empty.db");
+        fs::write(&empty, b"").unwrap();
+        let err = assert_rejected(&env, &mut db, &empty);
+        assert!(matches!(err, BackupError::NotYunagiDatabase(_)), "{err:?}");
+        let v0 = env.dir.path().join("v0.db");
+        plain_db(&v0, 0);
+        let err = assert_rejected(&env, &mut db, &v0);
+        assert!(matches!(err, BackupError::NotYunagiDatabase(_)), "{err:?}");
 
         let missing = env.dir.path().join("missing.db");
         assert_rejected(&env, &mut db, &missing);
@@ -945,11 +1046,6 @@ mod tests {
 
     #[test]
     fn failed_restore_puts_the_previous_data_back() {
-        const V1: Migration = Migration {
-            version: 1,
-            name: "create memo",
-            sql: "CREATE TABLE memo (body TEXT NOT NULL);",
-        };
         const V2_FAILS: Migration = Migration {
             version: 2,
             name: "fails",
@@ -958,29 +1054,10 @@ mod tests {
         let env = Env::new();
         // 今のデータベースは v2 まで適用済み、バックアップは v1
         let old = env.dir.path().join("v1.db");
-        {
-            let conn = Connection::open(&old).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE memo (body TEXT NOT NULL);
-                 INSERT INTO memo VALUES ('old');
-                 PRAGMA user_version = 1;",
-            )
-            .unwrap();
-        }
-        let mut db = open_with(
-            &env.db_path(),
-            &[
-                V1,
-                Migration {
-                    version: 2,
-                    name: "ok",
-                    sql: "",
-                },
-            ],
-        )
-        .unwrap();
+        v1_backup(&old);
+        let mut db = open_with(&env.db_path(), &[V1, V2]).unwrap();
         db.connection()
-            .execute_batch("INSERT INTO memo VALUES ('current');")
+            .execute_batch("INSERT INTO memo (body) VALUES ('current');")
             .unwrap();
 
         // 復元したバックアップへのマイグレーションが失敗する
@@ -998,20 +1075,95 @@ mod tests {
             "{source:?}"
         );
         assert!(saved.exists());
-        let bodies: Vec<String> = db
-            .connection()
-            .prepare("SELECT body FROM memo")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
+        assert_eq!(memo(&db), ["current"]);
+        assert_eq!(user_version(&db), 2);
+    }
+
+    #[test]
+    fn refuses_to_restore_while_a_transaction_is_open() {
+        let env = Env::new();
+        let mut db = open(&env.db_path());
+        let backup = db.ensure_daily_backup(day(3)).unwrap().unwrap();
+        db.connection().execute_batch("BEGIN;").unwrap();
+        set(&db, "a", 1);
+        let before = names(&env.backups());
+        let err = db.restore_backup(&backup.path).unwrap_err();
+        assert!(matches!(err, BackupError::TransactionOpen), "{err:?}");
+        assert_eq!(names(&env.backups()), before);
+        // 書きかけの内容は捨てられていない
+        db.connection().execute_batch("COMMIT;").unwrap();
+        assert_eq!(get(db.connection(), "a"), Some(1));
+    }
+
+    #[test]
+    fn keeps_the_just_saved_copy_even_if_the_clock_went_back() {
+        let env = Env::new();
+        let mut db = open(&env.db_path());
+        set(&db, "a", 1);
+        let backup = db.ensure_daily_backup(day(3)).unwrap().unwrap();
+        set(&db, "a", 2);
+        // 時計が進んでいたときに作った、今より新しい時刻の退避が3つある
+        for secs in [4_000_000_000_u64, 4_000_000_001, 4_000_000_002] {
+            plain_db(&env.backups().join(format!("pre-restore-{secs}.db")), 1);
+        }
+        let report = db.restore_backup(&backup.path).unwrap();
+        assert!(report.saved.path.exists());
+        let saved = Connection::open(&report.saved.path).unwrap();
+        assert_eq!(get(&saved, "a"), Some(2));
+        let pre_restore = env
+            .list()
+            .iter()
+            .filter(|b| b.kind == BackupKind::PreRestore)
+            .count();
+        assert_eq!(pre_restore, PRE_RESTORE_KEEP);
+    }
+
+    #[test]
+    fn future_dated_daily_backups_do_not_hold_a_slot_forever() {
+        let env = Env::new();
+        let db = open(&env.db_path());
+        fs::create_dir_all(env.backups()).unwrap();
+        plain_db(&env.backups().join("daily-2030-01-01-1.db"), 1);
+        for d in 1..=7 {
+            db.ensure_daily_backup(day(d)).unwrap().unwrap();
+        }
+        let dates: Vec<_> = env
+            .list()
+            .iter()
+            .filter_map(|b| match b.kind {
+                BackupKind::Daily { date } => Some(date),
+                _ => None,
+            })
             .collect();
-        assert_eq!(bodies, ["current"]);
-        let version: i64 = db
-            .connection()
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(dates.len(), DAILY_KEEP);
+        assert!(!dates.contains(&LogicalDate::new(2030, 1, 1).unwrap()));
+    }
+
+    #[test]
+    fn backups_made_in_the_same_second_are_ordered_by_their_number() {
+        let env = Env::new();
+        let backups = env.backups();
+        fs::create_dir_all(&backups).unwrap();
+        for name in [
+            "pre-restore-100.db",
+            "pre-restore-100-2.db",
+            "pre-restore-100-10.db",
+        ] {
+            plain_db(&backups.join(name), 1);
+        }
+        let order: Vec<_> = env
+            .list()
+            .iter()
+            .map(|b| b.path.file_name().unwrap().to_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "pre-restore-100-10.db",
+                "pre-restore-100-2.db",
+                "pre-restore-100.db"
+            ]
+        );
     }
 
     #[test]
