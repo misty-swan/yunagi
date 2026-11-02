@@ -101,7 +101,14 @@ pub struct LogicalDate(Date);
 impl LogicalDate {
     /// 瞬間 `at` の論理日付を、タイムゾーン `tz` と切り替わり時刻 `boundary` から求める。
     pub fn at(at: Timestamp, tz: &TimeZone, boundary: DayBoundary) -> Self {
-        let calendar_date = at.to_zoned(tz.clone()).date();
+        let calendar_date = tz.to_datetime(at).date();
+        // 翌日がもう始まっていれば翌日。夏時間の終了で時計が深夜0時をまたいで前日へ戻る
+        // タイムゾーンでは、カレンダー日付が戻っても翌日はすでに始まっている
+        if let Ok(next) = calendar_date.tomorrow()
+            && day_start(next, tz, boundary).is_some_and(|start| start <= at)
+        {
+            return Self(next);
+        }
         match day_start(calendar_date, tz, boundary) {
             Some(start) if at < start => Self(prev_day(calendar_date)),
             // 求められないのは、暦の端（-9999年・9999年）だけ。カレンダー日付のままにする
@@ -114,9 +121,18 @@ impl LogicalDate {
         Self::at(zoned.timestamp(), zoned.time_zone(), boundary)
     }
 
-    /// 年・月・日から作る。存在しない日付（例 2月30日）なら `None`。
+    /// 年・月・日から作る。存在しない日付（例 2月30日）や、
+    /// `YYYY-MM-DD` で書けない年（1〜9999年の外）なら `None`。
     pub fn new(year: i16, month: i8, day: i8) -> Option<Self> {
+        if !(1..=9999).contains(&year) {
+            return None;
+        }
         Date::new(year, month, day).ok().map(Self)
+    }
+
+    /// 翌日の論理日付。9999-12-31 の翌日は無いので `None`。
+    pub fn tomorrow(self) -> Option<Self> {
+        self.0.tomorrow().ok().map(Self)
     }
 
     /// 前日の論理日付。
@@ -130,21 +146,11 @@ impl LogicalDate {
     }
 }
 
-impl From<LogicalDate> for Date {
-    fn from(d: LogicalDate) -> Self {
-        d.0
-    }
-}
-
 impl fmt::Display for LogicalDate {
+    /// `YYYY-MM-DD`。1〜9999年は [`FromStr`] で読み戻せる
+    /// （[`LogicalDate::at`] が暦の端で求めた日付だけは、jiff の拡張した年の書式になる）。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{:04}-{:02}-{:02}",
-            self.0.year(),
-            self.0.month(),
-            self.0.day()
-        )
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -201,10 +207,9 @@ impl FromStr for DateSpec {
         match s {
             "today" => Ok(Self::Today),
             "yesterday" => Ok(Self::Yesterday),
-            _ => s
-                .parse()
-                .map(Self::Date)
-                .map_err(|_| ParseError::DateSpec(s.to_owned())),
+            // 形は YYYY-MM-DD だが存在しない日付（2026-02-30 など）は、ParseError::Date のまま返す
+            _ if looks_like_date(s) => s.parse().map(Self::Date),
+            _ => Err(ParseError::DateSpec(s.to_owned())),
         }
     }
 }
@@ -242,11 +247,15 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-/// 端末のタイムゾーン。決められなければ UTC（jiff の既定の扱い）。
+/// 端末のタイムゾーン。
 ///
-/// `day.tz` に保存する名前は [`TimeZone::iana_name`] で得る。
-pub fn system_time_zone() -> TimeZone {
-    TimeZone::system()
+/// 決められないとき（`/etc/localtime` が読めない、`TZ` が解釈できないなど）は誤りを返す。
+/// 黙って UTC にすると、日付が気づかれずにずれるため。どうするかは呼び出し側が決める。
+///
+/// IANA の名前（`Asia/Tokyo` など）は [`TimeZone::iana_name`] で得られるが、
+/// POSIX 形式の `TZ` などでは名前が無い（`None`）。
+pub fn system_time_zone() -> Result<TimeZone, jiff::Error> {
+    TimeZone::try_system()
 }
 
 /// カレンダー日 `date` の論理日付が始まる瞬間（その日の切り替わり時刻）。
@@ -273,6 +282,19 @@ fn day_start(date: Date, tz: &TimeZone, boundary: DayBoundary) -> Option<Timesta
 /// 前日。暦の最初の日（-9999-01-01）だけはそのまま返す。
 fn prev_day(d: Date) -> Date {
     d.yesterday().unwrap_or(d)
+}
+
+/// `YYYY-MM-DD` の形（数字と `-` の並び）をしているか。日付として存在するかは見ない。
+fn looks_like_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
 }
 
 fn two_digits(b: &[u8]) -> Option<u8> {
@@ -500,12 +522,31 @@ mod tests {
                 let cur = LogicalDate::at(at, &ny, b);
                 assert!(cur >= prev, "went back at {at} with boundary {b}");
                 if cur != prev {
-                    assert_eq!(cur, prev.as_date().tomorrow().map(LogicalDate).unwrap());
+                    assert_eq!(Some(cur), prev.tomorrow());
                     changes += 1;
                 }
                 prev = cur;
             }
             assert_eq!(changes, 2, "48 hours from {start} with boundary {b}");
+        }
+    }
+
+    #[test]
+    fn dst_fold_across_midnight_does_not_go_back() {
+        // 夏時間が 0:30 に終わり、前日の 23:30 に戻る規則（POSIX 形式。実在の例は少ないので作る）。
+        // 2026-10-25 0:00（+04:00）＝ 2026-10-24T20:00Z に 10/25 が始まり、
+        // 0:30（20:30Z）に時計が 10/24 23:30（+03:00）へ戻っても 10/25 のまま
+        let zone = TimeZone::posix("XST-3XDT,M3.5.0/0,M10.5.0/0:30").unwrap();
+        let b = boundary("00:00");
+        let at = |s: &str| s.parse::<Timestamp>().unwrap();
+        for (utc, expected) in [
+            ("2026-10-24T19:59:00Z", "2026-10-24"),
+            ("2026-10-24T20:00:00Z", "2026-10-25"),
+            ("2026-10-24T20:30:00Z", "2026-10-25"), // 壁時計は 10/24 23:30
+            ("2026-10-24T20:59:00Z", "2026-10-25"), // 壁時計は 10/24 23:59
+            ("2026-10-24T21:00:00Z", "2026-10-25"),
+        ] {
+            assert_eq!(LogicalDate::at(at(utc), &zone, b), date(expected), "{utc}");
         }
     }
 
@@ -584,14 +625,28 @@ mod tests {
             "20261102",
             "2026-11-02T00:00",
             "+2026-11-02",
-            "2026-02-30",
-            "2026-13-01",
-            "2026-00-10",
-            "2026-11-00",
+            "2026-11-0a",
         ] {
             assert_eq!(
                 s.parse::<DateSpec>(),
                 Err(ParseError::DateSpec(s.to_owned())),
+                "{s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn date_spec_reports_nonexistent_date_as_date_error() {
+        for s in [
+            "2026-02-30",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-11-00",
+            "0000-01-01",
+        ] {
+            assert_eq!(
+                s.parse::<DateSpec>(),
+                Err(ParseError::Date(s.to_owned())),
                 "{s:?}"
             );
         }
@@ -603,6 +658,11 @@ mod tests {
             assert_eq!(date(s).to_string(), s);
         }
         assert!("2027-02-29".parse::<LogicalDate>().is_err());
+        assert!("0000-12-31".parse::<LogicalDate>().is_err());
+        assert_eq!(LogicalDate::new(0, 1, 1), None);
+        assert_eq!(LogicalDate::new(-1, 1, 1), None);
+        assert_eq!(date("2026-12-31").tomorrow(), Some(date("2027-01-01")));
+        assert_eq!(date("9999-12-31").tomorrow(), None);
     }
 
     #[test]
