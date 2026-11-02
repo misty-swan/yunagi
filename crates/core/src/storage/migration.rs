@@ -5,14 +5,17 @@
 //! - 起動時（[`super::Database::open`]）に、記録より大きい番号のものを順に適用する。
 //! - 適用の前に、保存先の `backups/` にバックアップを取る。1つでも失敗したら、
 //!   それまでに適用したものも含めてバックアップに戻し、データを適用前のままにする。
-//! - 記録がこのアプリの知る最新より大きい（新しい版で作られた）データベースには触れない。
+//! - 記録がこのアプリの知る最新より大きい（新しい版で作られた）データベースは、
+//!   スキーマもデータも変えずにエラーとする。
+//! - 適用中は外部キーの検査を止め（表の作り直しのため）、各マイグレーションの確定前に
+//!   `foreign_key_check` で参照が壊れていないことを確かめる（SQLite の推奨する手順）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::backup::NO_PROGRESS;
-use rusqlite::{Connection, MAIN_DB};
+use rusqlite::{Connection, MAIN_DB, ffi};
 
 use super::StorageError;
 
@@ -22,7 +25,8 @@ pub(crate) struct Migration {
     pub version: u32,
     /// 何をするかの短い説明（失敗したときの表示に使う）。
     pub name: &'static str,
-    /// 実行する SQL。番号の記録と同じトランザクションの中で実行する。
+    /// 実行する SQL。番号の記録と同じトランザクションの中で、外部キーの検査を止めて実行する。
+    /// 確定の前に参照の壊れた行が見つかれば失敗にする。
     pub sql: &'static str,
 }
 
@@ -32,6 +36,12 @@ pub(crate) struct Migration {
 /// 書き換えても反映されない）。スキーマを変えるときは、新しい番号を末尾に足す。
 /// 表の定義は YUN-19 で足す。
 pub(crate) const MIGRATIONS: &[Migration] = &[];
+
+// 番号の並びの誤りは、起動時ではなくコンパイル時に見つける
+const _: () = assert!(
+    is_sequential(MIGRATIONS),
+    "MIGRATIONS must be numbered 1, 2, 3, ... in order"
+);
 
 /// 未適用のマイグレーションを適用する。`backup_dir` はバックアップを置くフォルダ。
 pub(super) fn migrate(
@@ -57,41 +67,68 @@ pub(super) fn migrate(
         return Ok(());
     }
 
+    // 番号 0 で表も無いデータベースは、新しく作ったもので、戻す意味のあるデータが無い
+    let was_empty = current == 0 && schema_is_empty(conn)?;
     let backup = create_backup(conn, backup_dir, current, latest)?;
+
+    // 外部キーの検査はトランザクションの中では切り替えられないので、外で止めて、最後に戻す
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let result = apply_all(conn, pending, &backup);
+    let reenabled = conn.pragma_update(None, "foreign_keys", "ON");
+    result?;
+    reenabled?;
+
+    // 新しく作ったデータベースのバックアップは、成功したら消す（消せなくても害はない）
+    if was_empty {
+        let _ = fs::remove_file(&backup);
+    }
+    Ok(())
+}
+
+/// 順に適用し、失敗したらバックアップに戻す。
+fn apply_all(
+    conn: &mut Connection,
+    pending: &[Migration],
+    backup: &Path,
+) -> Result<(), StorageError> {
     for m in pending {
         if let Err(source) = apply(conn, m) {
-            return Err(match restore(conn, &backup) {
+            return Err(match restore(conn, backup) {
                 Ok(()) => StorageError::MigrationFailed {
                     version: m.version,
                     name: m.name,
                     source,
-                    backup,
+                    backup: backup.to_path_buf(),
                 },
                 Err(restore_error) => StorageError::RestoreFailed {
                     version: m.version,
                     name: m.name,
                     source,
                     restore_error: Box::new(restore_error),
-                    backup,
+                    backup: backup.to_path_buf(),
                 },
             });
         }
-    }
-
-    // 番号 0 のデータベース（新しく作ったもの）には、このアプリのデータが無い。
-    // 戻す先として残す意味が無いので、成功したら消す（消せなくても害はない）
-    if current == 0 {
-        let _ = fs::remove_file(&backup);
     }
     Ok(())
 }
 
 /// 番号が 1, 2, 3, … と並んでいるか。
-fn is_sequential(migrations: &[Migration]) -> bool {
-    migrations
-        .iter()
-        .enumerate()
-        .all(|(i, m)| m.version as usize == i + 1)
+const fn is_sequential(migrations: &[Migration]) -> bool {
+    let mut i = 0;
+    while i < migrations.len() {
+        if migrations[i].version as usize != i + 1 {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// 表・索引などが1つも無いか。
+fn schema_is_empty(conn: &Connection) -> Result<bool, StorageError> {
+    let count: i64 = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
+    Ok(count == 0)
 }
 
 /// 適用済みの番号（`user_version`）。
@@ -103,6 +140,19 @@ fn schema_version(conn: &Connection) -> Result<u32, StorageError> {
 fn apply(conn: &mut Connection, m: &Migration) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(m.sql)?;
+    let broken: Option<String> = tx
+        .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    if let Some(table) = broken {
+        return Err(rusqlite::Error::SqliteFailure(
+            ffi::Error::new(ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+            Some(format!("foreign key violation in table {table}")),
+        ));
+    }
     tx.pragma_update(None, "user_version", m.version)?;
     tx.commit()
 }
@@ -418,6 +468,95 @@ mod tests {
         ));
         assert_eq!(snapshot(&Connection::open(&path).unwrap()), before);
         assert_eq!(backups(&dir), backups_before);
+    }
+
+    #[test]
+    fn foreign_keys_are_enforced_after_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(db_path(&dir)).unwrap();
+        let on: i64 = db
+            .connection()
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(on, 1);
+    }
+
+    const PARENT_CHILD: Migration = Migration {
+        version: 1,
+        name: "parent and child",
+        sql: "CREATE TABLE parent (id INTEGER PRIMARY KEY, label TEXT);
+              CREATE TABLE child (id INTEGER PRIMARY KEY,
+                                  parent_id INTEGER NOT NULL REFERENCES parent(id) ON DELETE CASCADE);",
+    };
+
+    fn create_parent_child_with_rows(path: &Path) {
+        let db = Database::open_with_migrations(path, &[PARENT_CHILD]).unwrap();
+        db.connection()
+            .execute_batch("INSERT INTO parent VALUES (1, 'a'); INSERT INTO child VALUES (10, 1);")
+            .unwrap();
+    }
+
+    #[test]
+    fn migration_can_rebuild_a_referenced_table() {
+        // 参照されている表の作り直し（新しい表に写して、古い表を消し、名前を変える）。
+        // 外部キーの検査が効いたままだと、古い表を消したときに child の行が消える
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        create_parent_child_with_rows(&path);
+        let rebuild = Migration {
+            version: 2,
+            name: "rebuild parent",
+            sql: "CREATE TABLE parent_new (id INTEGER PRIMARY KEY, label TEXT NOT NULL DEFAULT '');
+                  INSERT INTO parent_new SELECT id, label FROM parent;
+                  DROP TABLE parent;
+                  ALTER TABLE parent_new RENAME TO parent;",
+        };
+        let db = Database::open_with_migrations(&path, &[PARENT_CHILD, rebuild]).unwrap();
+        let children: i64 = db
+            .connection()
+            .query_row("SELECT count(*) FROM child", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(children, 1);
+        let on: i64 = db
+            .connection()
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(on, 1);
+    }
+
+    #[test]
+    fn migration_that_breaks_references_is_rolled_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        create_parent_child_with_rows(&path);
+        let before = snapshot(&Connection::open(&path).unwrap());
+        let breaks = Migration {
+            version: 2,
+            name: "orphan a child",
+            sql: "DELETE FROM parent;",
+        };
+        let err = Database::open_with_migrations(&path, &[PARENT_CHILD, breaks])
+            .err()
+            .expect("migration should fail");
+        assert!(
+            matches!(err, StorageError::MigrationFailed { version: 2, .. }),
+            "{err}"
+        );
+        assert_eq!(snapshot(&Connection::open(&path).unwrap()), before);
+    }
+
+    #[test]
+    fn keeps_the_backup_of_a_non_empty_database_at_version_0() {
+        // 番号の記録が無くても中身のあるデータベース（別の道具で作られたものなど）は、
+        // 新しく作ったものとはみなさず、バックアップを残す
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE other (x); INSERT INTO other VALUES (1);")
+            .unwrap();
+        Database::open_with_migrations(&path, &[V1]).unwrap();
+        assert_eq!(backups(&dir).len(), 1);
     }
 
     #[test]

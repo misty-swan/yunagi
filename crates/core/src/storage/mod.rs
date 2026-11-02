@@ -26,6 +26,10 @@ impl Database {
     ///   適用に失敗したら、バックアップに戻してから [`StorageError::MigrationFailed`] を返す。
     ///
     /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は YUN-20）。
+    ///
+    /// 同じデータベースを同時に開くのは1つのプロセスだけ、という前提で動く
+    /// （呼び出し側が `yunagi.lock` を取ってから開く。アーキテクチャ設計書 4章）。
+    /// 2つが同時にマイグレーションすると、失敗した側の復元で、もう一方の書き込みが消えうる。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         Self::open_with_migrations(path.as_ref(), migration::MIGRATIONS)
     }
@@ -60,7 +64,9 @@ fn connect(path: &Path) -> Result<Connection, StorageError> {
     if !mode.eq_ignore_ascii_case("wal") {
         return Err(StorageError::WalUnavailable { mode });
     }
-    // synchronous は接続ごとの設定（ファイルには残らない）なので、開くたびに設定する
+    // synchronous と foreign_keys は接続ごとの設定（ファイルには残らない）なので、開くたびに設定する
     conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // SQLite は、接続ごとに有効にしない限り外部キー（REFERENCES）を確かめない
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     Ok(conn)
 }
