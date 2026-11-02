@@ -1,0 +1,9 @@
+[package]
+name = "yunagi-core"
+description = "Yunagi のコア（ドメイン層・ストレージ）。GUI とコンソール用バイナリ yunagi が共有する"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

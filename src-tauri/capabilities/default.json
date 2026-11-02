@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "メインウィンドウに許可する機能",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
