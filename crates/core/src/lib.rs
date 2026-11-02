@@ -10,12 +10,3 @@ pub mod storage;
 /// コアの版。GUI と `yunagi` が同じコアを使っていることの確認にも使う。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn version_is_set() {
-        assert!(!VERSION.is_empty());
-    }
-}

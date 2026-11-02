@@ -29,8 +29,12 @@ cargo run -p yunagi-cli          # コンソール用バイナリ yunagi を動�
 
 `pnpm check` は次の3つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
 
-- `pnpm check:rust`：`cargo test --workspace --locked`（`Cargo.lock` と食い違うと失敗する）
-- `pnpm check:types`：`svelte-check`
+- `pnpm check:rust`：コア（`yunagi-core`）とコンソール用バイナリ（`yunagi-cli`）の単体テスト。`cargo test -p yunagi-core -p yunagi-cli --locked`（`Cargo.lock` と食い違うと失敗する）
+- `pnpm check:types`：画面のコードの型チェック（`svelte-check`）と、設定ファイル（`vite.config.ts`・`svelte.config.js`）の型チェック（`tsc -p tsconfig.node.json`）
 - `pnpm check:web`：`vitest run`
+
+デスクトップアプリ（`yunagi-app`）は Tauri と WebView のライブラリを含み、ビルドに時間がかかるため `pnpm check` には入れていない。ビルドできることは `pnpm check:app`（`cargo build -p yunagi-app --locked`）で確かめる。
+
+型チェックの設定は2つに分けている。`tsconfig.json` は画面（`src/`。ブラウザで動く）用、`tsconfig.node.json` は設定ファイル（Node.js で動く）用。
 
 `experiments/`（技術選定の試作）と `prototype/`（画面の見本）は本番のコードではなく、上のコマンドの対象にも入れていない。

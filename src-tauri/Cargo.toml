@@ -7,8 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build.workspace = true
 
 [dependencies]
 yunagi-core.workspace = true
-tauri = { version = "2", features = [] }
+tauri.workspace = true

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/core", "crates/cli", "src-tauri"]
+# 技術選定の試作（experiments/）は、それぞれ独立したプロジェクトとしてビルドする
+exclude = ["experiments"]
 
 [workspace.package]
 version = "0.0.0"
@@ -10,3 +12,7 @@ publish = false
 
 [workspace.dependencies]
 yunagi-core = { path = "crates/core" }
+# Tauri は正確な版で固定する。画面側の @tauri-apps/api・@tauri-apps/cli（package.json）と
+# 版の 2.12 系をそろえる（Tauri は major.minor が食い違うと警告する）
+tauri = { version = "=2.12.5", features = [] }
+tauri-build = { version = "=2.7.4", features = [] }
