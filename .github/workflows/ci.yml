@@ -8,9 +8,10 @@ on:
   push:
     branches: [main]
 
-# 同じ PR（またはブランチ）で新しい push があったら、古い実行は止める
+# 同じ PR で新しい push があったら、古い実行は止める。
+# main への push はコミットごとに別のグループにして、どの push も取り消さずに検査する。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -45,9 +46,14 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install
 
-      # target/ と cargo の取得物をキャッシュする（Cargo.lock が変わると作り直す）
+      # target/ と cargo の取得物をキャッシュする（Cargo.lock や Rust の版が変わると作り直す）。
+      # 保存は main だけで行い（PR は main のキャッシュを使う）、容量の上限を PR ごとの分で埋めない。
+      # 検査が失敗しても、時間のかかるビルド結果は保存する。
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
 
       # 版は package.json の packageManager から読む
       - name: Install pnpm

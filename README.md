@@ -15,7 +15,7 @@ Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークス�
 
 ## 必要なもの
 
-- Rust 1.99.1（`rust-toolchain.toml` で固定。rustup を使っていれば自動で入る）、Node.js 26（`.node-version`）、pnpm 12（`package.json` の `packageManager`）
+- Rust 1.99.1（`rust-toolchain.toml` で固定。rustup を使っていれば自動で入る。`Cargo.toml` の `rust-version = "1.99"` はコンパイルできる最低の版の宣言で、検査は固定した 1.99.1 で行う）、Node.js 26.8.2（`.node-version` で固定）、pnpm 12（`package.json` の `packageManager`）
 - Tauri 2 の動作に必要な OS のライブラリ（<https://v2.tauri.app/start/prerequisites/>）
 
 ## よく使うコマンド
@@ -30,8 +30,8 @@ cargo run -p yunagi-cli          # コンソール用バイナリ yunagi を動�
 `pnpm check` は次の5つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
 
 - `pnpm check:fmt`：Rust のコードの書式が rustfmt（Rust の標準の整形ツール）の形にそろっているかを確かめる。`cargo fmt --all --check`（ファイルは書き換えない。ずれていたら `cargo fmt --all` で直す）
-- `pnpm check:rust`：Rust の3つのクレート全体の単体テスト。`cargo test --workspace --locked`（`Cargo.lock` と食い違うと失敗する）
-- `pnpm check:clippy`：Rust の3つのクレート全体（テストのコードを含む）を clippy（Rust のコードの書き方の問題を指摘する検査）にかける。`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告が1つでもあれば失敗する。デスクトップアプリ（`yunagi-app`）がコンパイルできるかもこれで確かめる。Tauri と WebView のライブラリを含むため初回は1分ほどかかるが、2回目以降は変わった所だけ確かめるので速い）
+- `pnpm check:rust`：Rust の3つのクレート全体の単体テスト。`cargo test --workspace --locked`（`Cargo.lock` と食い違うと失敗する）。デスクトップアプリ（`yunagi-app`）もテスト用に実際にビルドするので、Tauri と WebView のライブラリを含む初回は数分かかる。2回目以降は変わった所だけビルドするので速い
+- `pnpm check:clippy`：Rust の3つのクレート全体（テストのコードを含む）を clippy（Rust のコードの書き方の問題を指摘する検査）にかける。`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告が1つでもあれば失敗する。型の確認までで、実行ファイルは作らない）
 - `pnpm check:types`：画面のコードの型チェック（`svelte-check`）と、設定ファイル（`vite.config.ts`・`svelte.config.js`）の型チェック（`tsc -p tsconfig.node.json`）
 - `pnpm check:web`：`vitest run`
 
