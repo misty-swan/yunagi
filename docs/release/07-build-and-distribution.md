@@ -48,7 +48,7 @@ curl -fsSL https://<公式サイト>/install.sh | sh
 1. OS とアーキテクチャを判定する。未対応の組み合わせは明確なメッセージで終了する。
 2. 最新版（または `YUNAGI_VERSION` で指定した版）の配布物と `.sha256` を取得する。
 3. ハッシュを照合し、一致しなければ中止する。
-4. macOS：`~/Applications/Yunagi.app` に展開する（`/Applications` は権限が必要なため既定にしない）。Linux：`~/.local/opt/yunagi/Yunagi.AppImage` に AppImage を、`~/.local/opt/yunagi/bin/yunagi` に CLI を置き、デスクトップエントリを `~/.local/share/applications/` に作成する。アプリ本体の配置先は、データディレクトリ（アーキテクチャ設計書 6章。Linux は `~/.local/share/yunagi/`）とは別にする。
+4. macOS：`~/Applications/Yunagi.app` に展開する（`/Applications` は権限が必要なため既定にしない）。Linux：`~/.local/opt/yunagi/Yunagi.AppImage` に AppImage を、`~/.local/opt/yunagi/bin/yunagi` に CLI を置き、デスクトップエントリを `~/.local/share/applications/io.github.misty-swan.yunagi.desktop` に作成する（ファイル名はアプリの識別子にそろえる。アーキテクチャ設計書 6.1）。アプリ本体の配置先は、データディレクトリ（アーキテクチャ設計書 6章。Linux は `~/.local/share/yunagi/`）とは別にする。
 5. CLI を `~/.local/bin/yunagi` にリンクし、PATH に含まれていなければ追記方法を案内する。
 6. 何をどこに置いたかを最後に一覧表示する。
 
