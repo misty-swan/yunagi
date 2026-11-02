@@ -22,3 +22,5 @@ tauri-build = { version = "=2.7.4", features = [] }
 rusqlite = { version = "=0.41.1", features = ["bundled", "backup"] }
 # テストで使う一時フォルダ（テストが終わると消える）
 tempfile = "=3.27.0"
+# 時刻とタイムゾーン（論理日付の計算。crates/core/src/domain/logical_date.rs）
+jiff = "=0.2.38"
