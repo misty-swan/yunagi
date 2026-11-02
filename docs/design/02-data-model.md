@@ -130,7 +130,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則）。取り消しの記録は `agent.revert` |
 | target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection`。target_id は、item なら項目の id、note・reflection なら日付（`YYYY-MM-DD`） |
 | before / after | TEXT（JSON） | 変更前後のスナップショット。item は、その操作が変えた欄だけを入れる（追加・削除では項目全体）。note・reflection は本文 |
-| created_at | TEXT | 操作時刻 |
+| created_at | TEXT | 操作時刻（ミリ秒まで。画面の操作との前後をこの値で比べる。アーキテクチャ設計書 4.1） |
 | reverted_at | TEXT NULL | 取り消した時刻 |
 | revert_of_id | TEXT NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
 | seen_at | TEXT NULL | 利用者が変更履歴画面で確認した時刻 |
