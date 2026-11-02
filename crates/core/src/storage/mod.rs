@@ -3,8 +3,10 @@
 //!
 //! データベースは [`Database::open`] で開く。開くときに、未適用のマイグレーション
 //! （スキーマを番号順に更新する手順）を自動で適用する（[`migration`] モジュール）。
+//! 開く前に `yunagi.lock` のロック（[`DbLock`]）を取る（[`lock`] モジュール）。
 
 mod error;
+mod lock;
 mod migration;
 
 use std::path::Path;
@@ -12,10 +14,15 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub use error::StorageError;
+pub use lock::{DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。
+///
+/// `yunagi.lock` のロックを持っている。閉じる（drop する）と、接続を閉じてからロックを離す。
 pub struct Database {
     conn: Connection,
+    // フィールドは書いた順に drop される。接続を閉じてからロックを離すよう、conn より後に置く
+    _lock: DbLock,
 }
 
 impl Database {
@@ -28,14 +35,20 @@ impl Database {
     /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は YUN-20）。
     ///
     /// 同じデータベースを同時に開くのは1つのプロセスだけ、という前提で動く
-    /// （呼び出し側が `yunagi.lock` を取ってから開く。アーキテクチャ設計書 4章）。
-    /// 2つが同時にマイグレーションすると、失敗した側の復元で、もう一方の書き込みが消えうる。
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        Self::open_with_migrations(path.as_ref(), migration::MIGRATIONS)
+    /// （アーキテクチャ設計書 4章）。2つが同時にマイグレーションすると、失敗した側の復元で、
+    /// もう一方の書き込みが消えうる。そこで、取った `yunagi.lock` のロック（`lock`）を
+    /// 受け取らないと開けないようにしている。開いている間は `Database` がロックを持ち、
+    /// 開けなかったときはロックを離してからエラーを返す。
+    ///
+    /// アプリは起動時に [`DbLock::acquire`] でロックを取ってから開く。直接モードの
+    /// CLI・MCP は、操作ごとに [`Database::with_locked`] を使う。
+    pub fn open(lock: DbLock, path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::open_with_migrations(lock, path.as_ref(), migration::MIGRATIONS)
     }
 
     /// マイグレーションの一覧を指定して開く。テストで失敗を模擬するために分けている。
     fn open_with_migrations(
+        lock: DbLock,
         path: &Path,
         migrations: &[migration::Migration],
     ) -> Result<Self, StorageError> {
@@ -48,7 +61,7 @@ impl Database {
             .unwrap_or_else(|| Path::new(""))
             .join("backups");
         migration::migrate(&mut conn, &backup_dir, migrations)?;
-        Ok(Self { conn })
+        Ok(Self { conn, _lock: lock })
     }
 
     /// SQLite への接続。表の読み書きは後続の課題でこの層に作る。

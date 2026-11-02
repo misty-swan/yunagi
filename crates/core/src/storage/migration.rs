@@ -250,7 +250,9 @@ fn sync_dir(dir: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Database;
+    use std::time::Duration;
+
+    use super::super::{Database, DbLock, LOCK_FILE_NAME};
     use super::*;
 
     /// テスト用のマイグレーション。本番の一覧（MIGRATIONS）とは別。
@@ -281,6 +283,18 @@ mod tests {
 
     fn db_path(dir: &tempfile::TempDir) -> PathBuf {
         dir.path().join("yunagi.db")
+    }
+
+    /// `path` の隣の `yunagi.lock` を取ってから、マイグレーションの一覧を指定して開く。
+    fn open_with(path: &Path, migrations: &[Migration]) -> Result<Database, StorageError> {
+        let lock = DbLock::acquire(path.with_file_name(LOCK_FILE_NAME), Duration::ZERO).unwrap();
+        Database::open_with_migrations(lock, path, migrations)
+    }
+
+    /// `path` の隣の `yunagi.lock` を取ってから、本番の一覧で開く。
+    fn open_default(path: &Path) -> Result<Database, StorageError> {
+        let lock = DbLock::acquire(path.with_file_name(LOCK_FILE_NAME), Duration::ZERO).unwrap();
+        Database::open(lock, path)
     }
 
     fn backups(dir: &tempfile::TempDir) -> Vec<PathBuf> {
@@ -328,7 +342,7 @@ mod tests {
 
     /// v1 まで適用し、行を入れたデータベースを作る（旧版で作ったデータの代わり）。
     fn create_v1_with_rows(path: &Path) {
-        let db = Database::open_with_migrations(path, &[V1]).unwrap();
+        let db = open_with(path, &[V1]).unwrap();
         db.connection()
             .execute_batch("INSERT INTO memo (body) VALUES ('first'), ('second');")
             .unwrap();
@@ -337,7 +351,7 @@ mod tests {
     #[test]
     fn opens_in_wal_mode_with_synchronous_normal() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_path(&dir)).unwrap();
+        let db = open_default(&db_path(&dir)).unwrap();
         let conn = db.connection();
         let mode: String = conn
             .pragma_query_value(None, "journal_mode", |r| r.get(0))
@@ -360,7 +374,7 @@ mod tests {
     fn fts5_is_available() {
         // 全文検索（FTS5）が同梱の SQLite に入っていること（アーキテクチャ設計書 3章）
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_path(&dir)).unwrap();
+        let db = open_default(&db_path(&dir)).unwrap();
         db.connection()
             .execute_batch("CREATE VIRTUAL TABLE t USING fts5(body);")
             .unwrap();
@@ -369,7 +383,7 @@ mod tests {
     #[test]
     fn new_database_gets_all_migrations_without_leaving_a_backup() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open_with_migrations(&db_path(&dir), &[V1, V2]).unwrap();
+        let db = open_with(&db_path(&dir), &[V1, V2]).unwrap();
         assert_eq!(schema_version(db.connection()).unwrap(), 2);
         assert!(backups(&dir).is_empty());
     }
@@ -380,7 +394,7 @@ mod tests {
         let path = db_path(&dir);
         create_v1_with_rows(&path);
 
-        let db = Database::open_with_migrations(&path, &[V1, V2]).unwrap();
+        let db = open_with(&path, &[V1, V2]).unwrap();
         assert_eq!(schema_version(db.connection()).unwrap(), 2);
         let bodies: Vec<String> = db
             .connection()
@@ -411,10 +425,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = db_path(&dir);
         create_v1_with_rows(&path);
-        drop(Database::open_with_migrations(&path, &[V1, V2]).unwrap());
+        drop(open_with(&path, &[V1, V2]).unwrap());
         let before = backups(&dir);
 
-        let db = Database::open_with_migrations(&path, &[V1, V2]).unwrap();
+        let db = open_with(&path, &[V1, V2]).unwrap();
         assert_eq!(schema_version(db.connection()).unwrap(), 2);
         assert_eq!(backups(&dir), before, "no new backup when nothing to apply");
     }
@@ -427,7 +441,7 @@ mod tests {
         let before = snapshot(&Connection::open(&path).unwrap());
 
         // v2 は成功して書き込まれ、v3 が途中で失敗する。v2 の分も戻ること
-        let err = Database::open_with_migrations(&path, &[V1, V2, V3_FAILS])
+        let err = open_with(&path, &[V1, V2, V3_FAILS])
             .err()
             .expect("migration should fail");
         let StorageError::MigrationFailed {
@@ -449,7 +463,7 @@ mod tests {
         drop(conn);
 
         // 直した版（v3 を修正）なら、同じデータベースに適用できる
-        let db = Database::open_with_migrations(&path, &[V1, V2, V3_OK]).unwrap();
+        let db = open_with(&path, &[V1, V2, V3_OK]).unwrap();
         assert_eq!(schema_version(db.connection()).unwrap(), 3);
     }
 
@@ -462,7 +476,7 @@ mod tests {
             name: "broken",
             sql: "CREATE TABLE a (id INTEGER); NOT VALID SQL;",
         };
-        let err = Database::open_with_migrations(&path, &[failing_v1])
+        let err = open_with(&path, &[failing_v1])
             .err()
             .expect("migration should fail");
         assert!(matches!(
@@ -478,12 +492,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = db_path(&dir);
         create_v1_with_rows(&path);
-        drop(Database::open_with_migrations(&path, &[V1, V2]).unwrap());
+        drop(open_with(&path, &[V1, V2]).unwrap());
         let before = snapshot(&Connection::open(&path).unwrap());
         let backups_before = backups(&dir);
 
         // v2 のデータベースを、v1 までしか知らない（古い版の）アプリで開く
-        let err = Database::open_with_migrations(&path, &[V1])
+        let err = open_with(&path, &[V1])
             .err()
             .expect("should refuse a newer schema");
         assert!(matches!(
@@ -500,7 +514,7 @@ mod tests {
     #[test]
     fn foreign_keys_are_enforced_after_open() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(db_path(&dir)).unwrap();
+        let db = open_default(&db_path(&dir)).unwrap();
         let on: i64 = db
             .connection()
             .pragma_query_value(None, "foreign_keys", |r| r.get(0))
@@ -517,7 +531,7 @@ mod tests {
     };
 
     fn create_parent_child_with_rows(path: &Path) {
-        let db = Database::open_with_migrations(path, &[PARENT_CHILD]).unwrap();
+        let db = open_with(path, &[PARENT_CHILD]).unwrap();
         db.connection()
             .execute_batch("INSERT INTO parent VALUES (1, 'a'); INSERT INTO child VALUES (10, 1);")
             .unwrap();
@@ -538,7 +552,7 @@ mod tests {
                   DROP TABLE parent;
                   ALTER TABLE parent_new RENAME TO parent;",
         };
-        let db = Database::open_with_migrations(&path, &[PARENT_CHILD, rebuild]).unwrap();
+        let db = open_with(&path, &[PARENT_CHILD, rebuild]).unwrap();
         let children: i64 = db
             .connection()
             .query_row("SELECT count(*) FROM child", [], |r| r.get(0))
@@ -562,7 +576,7 @@ mod tests {
             name: "orphan a child",
             sql: "DELETE FROM parent;",
         };
-        let err = Database::open_with_migrations(&path, &[PARENT_CHILD, breaks])
+        let err = open_with(&path, &[PARENT_CHILD, breaks])
             .err()
             .expect("migration should fail");
         assert!(
@@ -582,7 +596,7 @@ mod tests {
             .unwrap()
             .execute_batch("CREATE TABLE other (x); INSERT INTO other VALUES (1);")
             .unwrap();
-        Database::open_with_migrations(&path, &[V1]).unwrap();
+        open_with(&path, &[V1]).unwrap();
         assert_eq!(backups(&dir).len(), 1);
     }
 
@@ -596,7 +610,7 @@ mod tests {
             .execute_batch("CREATE TABLE x (a); PRAGMA user_version = 9;")
             .unwrap();
         let bytes = fs::read(&path).unwrap();
-        let err = Database::open_with_migrations(&path, &[V1])
+        let err = open_with(&path, &[V1])
             .err()
             .expect("should refuse a newer schema");
         assert!(matches!(
@@ -615,9 +629,7 @@ mod tests {
             .unwrap()
             .execute_batch("PRAGMA user_version = -1;")
             .unwrap();
-        let err = Database::open_with_migrations(&path, &[V1])
-            .err()
-            .expect("should refuse");
+        let err = open_with(&path, &[V1]).err().expect("should refuse");
         assert!(
             matches!(err, StorageError::UnsupportedSchema { found: -1, .. }),
             "{err}"
@@ -634,7 +646,7 @@ mod tests {
         fs::write(&stale, b"half written").unwrap();
 
         // 失敗して復元する（バックアップを開いて読む）ところまで通す
-        Database::open_with_migrations(&path, &[V1, V2, V3_FAILS])
+        open_with(&path, &[V1, V2, V3_FAILS])
             .err()
             .expect("migration should fail");
 
@@ -652,6 +664,6 @@ mod tests {
     #[should_panic(expected = "migration versions")]
     fn rejects_out_of_order_migrations() {
         let dir = tempfile::tempdir().unwrap();
-        let _ = Database::open_with_migrations(&db_path(&dir), &[V2, V1]);
+        let _ = open_with(&db_path(&dir), &[V2, V1]);
     }
 }
