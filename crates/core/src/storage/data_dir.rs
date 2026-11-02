@@ -14,7 +14,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::backup::NO_PROGRESS;
+use rusqlite::{Connection, MAIN_DB, OpenFlags};
 use serde::{Deserialize, Serialize};
 
 /// 設定ファイルの名前。既定ディレクトリに置く。
@@ -70,14 +71,8 @@ pub fn default_dir_for(
     platform: Platform,
     env: impl Fn(&str) -> Option<OsString>,
 ) -> Result<PathBuf, DataDirError> {
-    // 空の値と相対パスは、無いものとして扱う（XDG Base Directory の決まりでは、
-    // 相対パスの XDG_DATA_HOME は無視する）
-    let absolute = |name: &str| {
-        env(name)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-    };
+    // XDG Base Directory の決まりでは、相対パスの XDG_DATA_HOME は無視する
+    let absolute = |name: &str| absolute_env(&env, name);
     let missing = |var: &'static str| DataDirError::NoDefaultDir { var };
     match platform {
         Platform::MacOs => {
@@ -98,6 +93,36 @@ pub fn default_dir_for(
     }
 }
 
+/// 環境変数 `name` を `env` で引き、絶対パスなら返す。空の値と相対パスは無いものとする。
+pub(super) fn absolute_env(env: impl Fn(&str) -> Option<OsString>, name: &str) -> Option<PathBuf> {
+    env(name)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
+/// シンボリックリンクを辿った実体のパス。`path` がまだ無いときは、あるところまでの親の実体に、
+/// 残りをつなげる。どこも辿れなければ `path` のまま。
+pub(super) fn resolve(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut cur = path;
+    loop {
+        if let Ok(real) = fs::canonicalize(cur) {
+            return rest
+                .iter()
+                .rev()
+                .fold(real, |p, c: &&std::ffi::OsStr| p.join(c));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                cur = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// 保存先 `data_dir` の `yunagi.db` のパス。
 pub fn database_path(data_dir: &Path) -> PathBuf {
     data_dir.join(DATABASE_FILE_NAME)
@@ -111,7 +136,7 @@ pub fn backups_dir(data_dir: &Path) -> PathBuf {
 /// `config.json` の中身。
 ///
 /// このアプリが知らない項目（新しい版で足されたもの）は `other` に入れたまま書き戻し、消さない。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Config {
     /// 保存先。絶対パス。
     pub data_dir: PathBuf,
@@ -119,10 +144,20 @@ pub struct Config {
     other: serde_json::Map<String, serde_json::Value>,
 }
 
+/// 読むときの `config.json`。`data_dir` は無くてもよい（保存先を変えていない設定ファイル）。
+#[derive(Deserialize)]
+struct StoredConfig {
+    #[serde(default)]
+    data_dir: Option<PathBuf>,
+    #[serde(flatten)]
+    other: serde_json::Map<String, serde_json::Value>,
+}
+
 impl Config {
     /// 既定ディレクトリ `default_dir` の `config.json` を読む。
     ///
-    /// ファイルが無ければ、保存先を `default_dir` とした設定を返す（ファイルは作らない）。
+    /// ファイルが無いか、`data_dir` の項目が無ければ、保存先を `default_dir` とする
+    /// （ファイルは作らない）。
     /// 読めない・JSON として壊れている・`data_dir` が絶対パスでないときはエラーにする
     /// （黙って既定の保存先で開くと、データが消えたように見え、別の場所に新しいデータベースを
     /// 作ってしまうため）。
@@ -138,12 +173,16 @@ impl Config {
             }
             Err(source) => return Err(DataDirError::io("read", &path, source)),
         };
-        let config: Self = serde_json::from_str(&text)
+        let stored: StoredConfig = serde_json::from_str(&text)
             .map_err(|source| DataDirError::InvalidConfig { path, source })?;
-        if !config.data_dir.is_absolute() {
-            return Err(DataDirError::NotAbsolute(config.data_dir));
+        let data_dir = stored.data_dir.unwrap_or_else(|| default_dir.to_path_buf());
+        if !data_dir.is_absolute() {
+            return Err(DataDirError::NotAbsolute(data_dir));
         }
-        Ok(config)
+        Ok(Self {
+            data_dir,
+            other: stored.other,
+        })
     }
 
     /// 既定ディレクトリ `default_dir` に `config.json` を書く（フォルダが無ければ作る）。
@@ -191,8 +230,9 @@ pub struct ChangeReport {
 ///
 /// 手順（途中で失敗しても元のデータが残るように、元のファイルは最後まで消さない）：
 ///
-/// 1. `new_dir` を確かめる。絶対パスでないとき、今の保存先と同じとき、すでに
-///    データベース（`yunagi.db` とその `-wal`・`-shm`）か、空でない `backups/` があるときは断る。
+/// 1. `new_dir` を確かめる。絶対パスでないとき、`config.json` に書けない（UTF-8 でない）とき、
+///    今の保存先と同じとき、今の保存先の `backups/` の中のとき、すでにデータベース
+///    （`yunagi.db` とその `-wal`・`-shm`）か、空でない `backups/` があるときは断る。
 /// 2. `new_dir` を作り、`backups/` を写す。
 /// 3. データベースを SQLite のオンラインバックアップで一時ファイルに写し（WAL にだけある
 ///    書き込みも含めて写る）、整合性を確かめてから `yunagi.db` に名前を変える。
@@ -212,10 +252,20 @@ pub fn change_data_dir(default_dir: &Path, new_dir: &Path) -> Result<ChangeRepor
     if !new_dir.is_absolute() {
         return Err(DataDirError::NotAbsolute(new_dir.to_path_buf()));
     }
+    // JSON の文字列は UTF-8 なので、写し終えてから記録で失敗しないよう、先に確かめる
+    if new_dir.to_str().is_none() {
+        return Err(DataDirError::NotUtf8(new_dir.to_path_buf()));
+    }
     let mut config = Config::load(default_dir)?;
     let old_dir = config.data_dir.clone();
-    if same_dir(&old_dir, new_dir) {
+    let new_real = resolve(new_dir);
+    if resolve(&old_dir) == new_real {
         return Err(DataDirError::SameDirectory(new_dir.to_path_buf()));
+    }
+    // backups/ の中に移すと、backups/ を自分の中へ写し続け、元の backups/ を消すときに
+    // 新しい保存先も消してしまう
+    if new_real.starts_with(resolve(&backups_dir(&old_dir))) {
+        return Err(DataDirError::InsideBackups(new_dir.to_path_buf()));
     }
     check_target(new_dir)?;
 
@@ -232,14 +282,6 @@ pub fn change_data_dir(default_dir: &Path, new_dir: &Path) -> Result<ChangeRepor
     Ok(ChangeReport {
         leftovers: remove_old_data(&old_dir),
     })
-}
-
-/// 2つのフォルダが同じか。どちらも存在するときは、実体（シンボリックリンクを辿った先）で比べる。
-fn same_dir(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
 }
 
 /// 移動先に、上書きしてしまうデータが無いことを確かめる。
@@ -281,26 +323,33 @@ fn with_side_files(db: &Path) -> Vec<PathBuf> {
 
 /// 移動の途中で作ったもの。失敗したときに、作った順の逆に消す。
 #[derive(Default)]
-struct Created(Vec<PathBuf>);
+struct Created(Vec<(PathBuf, Kind)>);
+
+/// 作ったものの種類。
+#[derive(Clone, Copy)]
+enum Kind {
+    /// ファイル（シンボリックリンクを含む）。
+    File,
+    Dir,
+}
 
 impl Created {
     fn file(&mut self, path: PathBuf) {
-        self.0.push(path);
+        self.0.push((path, Kind::File));
     }
 
     fn dir(&mut self, path: PathBuf) {
-        self.0.push(path);
+        self.0.push((path, Kind::Dir));
     }
 
     /// 作ったものを消す。消せなくても元のデータには関係ないので、続ける。
     /// フォルダは空のときだけ消える（利用者が置いたものは消さない）。
     fn remove_all(self) {
-        for path in self.0.into_iter().rev() {
-            if path.is_dir() {
-                let _ = fs::remove_dir(&path);
-            } else {
-                let _ = fs::remove_file(&path);
-            }
+        for (path, kind) in self.0.into_iter().rev() {
+            let _ = match kind {
+                Kind::File => fs::remove_file(&path),
+                Kind::Dir => fs::remove_dir(&path),
+            };
         }
     }
 }
@@ -362,14 +411,17 @@ fn copy_tree(from: &Path, to: &Path, created: &mut Created) -> Result<(), DataDi
         let entry = entry.map_err(|e| DataDirError::io("read directory", from, e))?;
         let src = entry.path();
         let dst = to.join(entry.file_name());
+        // file_type はシンボリックリンクを辿らない
         let kind = entry
             .file_type()
             .map_err(|e| DataDirError::io("read", &src, e))?;
-        if kind.is_dir() {
+        // 移動先の backups/ は空であることを確かめてあるので、作ったものを消しても
+        // 利用者のファイルは消さない。写す前に記録する（途中まで書いたものも、失敗したら消す）
+        if kind.is_symlink() {
+            copy_symlink(&src, &dst, created)?;
+        } else if kind.is_dir() {
             copy_tree(&src, &dst, created)?;
         } else {
-            // 写す前に記録する（途中まで書いたファイルも、失敗したら消す）。
-            // 移動先の backups/ は空であることを確かめてあるので、利用者のファイルは消さない
             created.file(dst.clone());
             copy_file_synced(&src, &dst).map_err(|e| DataDirError::io("copy", &src, e))?;
         }
@@ -378,29 +430,54 @@ fn copy_tree(from: &Path, to: &Path, created: &mut Created) -> Result<(), DataDi
     Ok(())
 }
 
+/// シンボリックリンク `from` を `to` に写す。
+///
+/// Unix 系では、リンクのまま写す（リンク先の中身は写さない。元の backups/ を消しても、
+/// リンク先は消えない）。Windows では、リンクを作るのに権限が要ることがあるので、
+/// リンク先を辿って中身を写す。
+fn copy_symlink(from: &Path, to: &Path, created: &mut Created) -> Result<(), DataDirError> {
+    #[cfg(unix)]
+    {
+        let target = fs::read_link(from).map_err(|e| DataDirError::io("read link", from, e))?;
+        std::os::unix::fs::symlink(&target, to)
+            .map_err(|e| DataDirError::io("create link", to, e))?;
+        created.file(to.to_path_buf());
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        if from.is_dir() {
+            copy_tree(from, to, created)
+        } else {
+            created.file(to.to_path_buf());
+            copy_file_synced(from, to).map_err(|e| DataDirError::io("copy", from, e))
+        }
+    }
+}
+
 /// データベース `from` を `to` に写し、写したものの整合性を確かめる。
 fn copy_database(from: &Path, to: &Path) -> Result<(), DataDirError> {
-    // オンラインバックアップは、WAL にだけある（まだ本体に書き戻していない）書き込みも含めて写す
-    // 無いファイルを作らないよう、作成の指定なしで開く
-    let src = Connection::open_with_flags(from, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-    let mut dst = Connection::open(to)?;
-    rusqlite::backup::Backup::new(&src, &mut dst)?.run_to_completion(
-        1024,
-        std::time::Duration::ZERO,
-        None,
-    )?;
+    // オンラインバックアップは、WAL にだけある（まだ本体に書き戻していない）書き込みも含めて写す。
+    // 元は読み取り専用で開く（元のファイルに書かず、閉じるときに WAL を書き戻すこともしない）。
+    // Connection::backup は、元が使用中なら間を置いて再試行する（マイグレーションのバックアップと同じ）
+    let src = Connection::open_with_flags(from, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    src.backup(MAIN_DB, to, NO_PROGRESS)?;
     drop(src);
     // 写しは元の WAL モードを引き継ぐ。WAL のままだと、閉じた後に開くたび -wal・-shm が
     // 横にでき、名前を変えるのは本体だけなので取り残される。そこで写しを1つのファイルに
     // まとめる（開くときに Database::open が WAL に戻す）
+    let dst = Connection::open(to)?;
     dst.pragma_update(None, "journal_mode", "DELETE")?;
     let result: String = dst.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     drop(dst);
     if result != "ok" {
         return Err(DataDirError::CopyCorrupted { result });
     }
-    // 名前を変える前にディスクに反映する（電源が落ちても、写しが途中にならないように）
-    fs::File::open(to)
+    // 名前を変える前にディスクに反映する（電源が落ちても、写しが途中にならないように）。
+    // Windows では書き込みできる形で開かないと反映できない
+    fs::OpenOptions::new()
+        .write(true)
+        .open(to)
         .and_then(|f| f.sync_all())
         .map_err(|e| DataDirError::io("sync", to, e))?;
     Ok(())
@@ -468,8 +545,12 @@ pub enum DataDirError {
     },
     /// 保存先が絶対パスでない。
     NotAbsolute(PathBuf),
+    /// 保存先が UTF-8 で表せない（`config.json` に書けない）。
+    NotUtf8(PathBuf),
     /// 新しい保存先が、今の保存先と同じ。
     SameDirectory(PathBuf),
+    /// 新しい保存先が、今の保存先の `backups/` の中にある。
+    InsideBackups(PathBuf),
     /// 新しい保存先に、すでにデータベースのファイルがある（上書きしない）。
     TargetHasDatabase(PathBuf),
     /// 新しい保存先に、空でない `backups/` がある（上書きしない）。
@@ -512,6 +593,16 @@ impl fmt::Display for DataDirError {
                     path.display()
                 )
             }
+            Self::NotUtf8(path) => write!(
+                f,
+                "data directory path is not valid UTF-8: {}",
+                path.display()
+            ),
+            Self::InsideBackups(path) => write!(
+                f,
+                "the new data directory is inside the current backups folder: {}",
+                path.display()
+            ),
             Self::SameDirectory(path) => {
                 write!(f, "{} is already the data directory", path.display())
             }
@@ -698,6 +789,21 @@ mod tests {
     }
 
     #[test]
+    fn config_without_data_dir_means_default_dir() {
+        let d = dirs();
+        fs::write(d.default.join(CONFIG_FILE_NAME), r#"{"theme": "dark"}"#).unwrap();
+        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        // 保存先を変えても、ほかの項目は残る
+        let new_dir = d.root.join("new");
+        change_data_dir(&d.default, &new_dir).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap())
+                .unwrap();
+        assert_eq!(saved["theme"], "dark");
+        assert_eq!(resolve_data_dir(&d.default).unwrap(), new_dir);
+    }
+
+    #[test]
     fn broken_or_relative_config_is_an_error() {
         let d = dirs();
         let path = d.default.join(CONFIG_FILE_NAME);
@@ -752,6 +858,37 @@ mod tests {
         assert!(!new_dir.join(CONFIG_FILE_NAME).exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_in_backups_are_copied_as_links() {
+        let d = dirs();
+        let outside = d.root.join("archive");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("old.db"), b"archived").unwrap();
+        fs::create_dir(backups_dir(&d.default)).unwrap();
+        std::os::unix::fs::symlink(&outside, backups_dir(&d.default).join("archive")).unwrap();
+
+        let new_dir = d.root.join("new");
+        change_data_dir(&d.default, &new_dir).unwrap();
+        let link = backups_dir(&new_dir).join("archive");
+        assert_eq!(fs::read_link(&link).unwrap(), outside);
+        // 元の backups/ を消しても、リンク先は残る
+        assert_eq!(fs::read(outside.join("old.db")).unwrap(), b"archived");
+    }
+
+    #[test]
+    fn source_database_is_not_modified() {
+        let d = dirs();
+        let conn = make_db_with_wal(&d.default);
+        let wal = with_side_files(&database_path(&d.default))[1].clone();
+        let before = fs::read(&wal).unwrap();
+        // 記録で失敗させ、元が残る場合に、元の WAL が書き戻されていないことを確かめる
+        fs::create_dir(d.default.join("config.json.tmp")).unwrap();
+        assert!(change_data_dir(&d.default, &d.root.join("new")).is_err());
+        assert_eq!(fs::read(&wal).unwrap(), before);
+        drop(conn);
+    }
+
     #[test]
     fn moved_database_opens_in_wal_mode() {
         let d = dirs();
@@ -804,6 +941,31 @@ mod tests {
             change_data_dir(&d.default, &d.default),
             Err(DataDirError::SameDirectory(_))
         ));
+
+        for inside in [
+            backups_dir(&d.default),
+            backups_dir(&d.default).join("moved"),
+        ] {
+            assert!(
+                matches!(
+                    change_data_dir(&d.default, &inside),
+                    Err(DataDirError::InsideBackups(_))
+                ),
+                "{inside:?}"
+            );
+        }
+        assert!(!backups_dir(&d.default).exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let bad = d.root.join(std::ffi::OsStr::from_bytes(b"bad\xff"));
+            assert!(matches!(
+                change_data_dir(&d.default, &bad),
+                Err(DataDirError::NotUtf8(_))
+            ));
+            assert!(!bad.exists());
+        }
 
         let has_wal = d.root.join("has_wal");
         fs::create_dir(&has_wal).unwrap();
