@@ -1,0 +1,15 @@
+{
+  // module・moduleResolution・strict・skipLibCheck などは @tsconfig/svelte の設定を使う。
+  // ここには、それと違うもの・足すものだけを書く
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
+}

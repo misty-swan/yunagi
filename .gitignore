@@ -4,3 +4,9 @@
 # OS が作るファイル
 .DS_Store
 Thumbs.db
+
+# ビルドで作られるもの
+node_modules/
+dist/
+target/
+src-tauri/gen/
