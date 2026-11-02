@@ -69,7 +69,9 @@ MVP の機能要件（F-01〜F-12、A-01〜A-08、Vimモード）と非機能要
 - 本文を入力中の項目への `edit_todo` が `conflict`（`reason: user_editing`）になり、入力が終わって 10 秒たつと受け付けられること。解消メモを入力中の障害への `edit_todo` は受け付けられること。入力中の項目への `complete_todo` は、本文の入力を壊さずに反映されること（アーキテクチャ設計書 4.1）。
 - 項目に入力した直後（自動保存の前）にフォーカスを外した、またはアプリを前面から外した場合、保存が書き込まれるまでは `edit_todo` が `conflict`（`reason: user_editing`）になり、書き込みの後は受け付けられること。どちらの場合も、利用者の入力が失われないこと。
 - 書き込みに失敗して再試行している間は、エージェントの書き込み（項目への `edit_todo`・`complete_todo`、`append_note`・`edit_note`、`append_reflection`）が、まだ保存できていない入力がある対象かどうかに関係なくすべて `storage_unavailable` になり（`user_editing` を返し続けない）、読み取りは成功すること。保存が成功した後は通常どおり扱われること。どちらの間も、利用者の入力（項目・ノート・振り返り）が失われないこと。
-- 障害を解消して解消メモを入力している間に、同じ障害への `resolve_blocker` を受けても、入力中の解消メモが失われないこと（解消済みの障害への `resolve_blocker` の結果そのものは未決。アーキテクチャ設計書 9章）。
+- 障害を解消して解消メモを入力している間に、同じ障害への `--note` 付きの `resolve_blocker` が `conflict`（`reason: user_editing`）になり、`--note` の無い `resolve_blocker` は何も変えずに成功すること。どちらでも入力中の解消メモが失われないこと（アーキテクチャ設計書 4.1）。
+- 解消済みの障害への `resolve_blocker` が、エラーにならず、状態・解消時刻・解消メモを変えずに成功し、change_log に記録されないこと。同じ `resolve_blocker` を何度送っても、結果と変更履歴が1回目の後と同じであること（MCP・CLI 仕様書 3章）。
+- 解消済みの障害への `--note` 付きの `resolve_blocker` で、解消メモが空なら書き込まれ、解消メモの欄だけが `blocker.resolve` として記録されること。同じ本文がすでにあれば何も変わらず成功すること。別の本文があれば `conflict`（`reason: note_exists`。終了コード 5）になり、利用者の解消メモが上書きも追記もされないこと。未解消の障害でも、別の解消メモがあるときの `--note` 付きの操作は、解消にもならないこと。`--note` に空の文字列を渡すと `invalid_argument` になること。
 - ノートの入力中（IME の変換中を含む）に `append_note`・`edit_note` を受けても、カーソル・選択範囲・変換中の文字が保たれ、取り込んだ変更が Mod+Z で取り消されないこと。振り返りの入力中の `append_reflection` も同じであること。
 - カーソルのある行への `edit_note` が `conflict`（`reason: user_editing`）になること。カーソル行より上にまだ保存していない行を足した状態でも、カーソル行の判定が保存済みの本文の行番号で正しく行われること（隣の行を書き換える `edit_note` は受け付けられ、カーソル行への `edit_note` は `conflict` になること）。カーソル行の保護は、最後の入力から 10 秒たつか、フォーカスが外れるか、アプリが前面から外れると終わり、カーソル行への `edit_note` が受け付けられること。保存済みの行を書き換えてまだ保存していない状態で、カーソルを別の行へ移した後でも、その行への `edit_note`（書き換え・削除・移動）が `conflict`（`reason: user_editing`）になること。
 - `--expect` の不一致による `conflict` が `reason: changed` になり、入力中による `conflict`（`reason: user_editing`）と区別できること。両方に当たる `edit_note` は `reason: changed` になること（MCP・CLI 仕様書 3章・4.3）。
