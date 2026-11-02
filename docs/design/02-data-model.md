@@ -23,7 +23,7 @@
 | external_ref | 外部ツールの課題との紐付け（MVP 後の有料機能。ロードマップ参照） |
 | setting | 設定値 |
 
-## 3. テーブル定義（案）
+## 3. テーブル定義
 
 ### day
 
@@ -31,8 +31,14 @@
 | --- | --- | --- |
 | date | TEXT PK | 論理日付 `YYYY-MM-DD` |
 | tz | TEXT | 記録時のタイムゾーン |
-| carryover_done_at | TEXT NULL | その日の持ち越し処理を終えた時刻 |
+| carryover_done_at | TEXT NULL | その日の持ち越し処理を終えた時刻（「選んだものを持ち越す」「すべて持ち越す」「持ち越さない」のいずれかを選んだ時刻） |
+| carryover_postponed_at | TEXT NULL | 持ち越しを後回し（Esc）にした時刻 |
+| carryover_reshown_at | TEXT NULL | 後回しにした持ち越しを、前面に出したときに自動で再表示した時刻（自動の再表示は1回だけ。画面設計書 5章） |
 | created_at | TEXT | 作成時刻（ISO 8601） |
+
+day の行は、その日に最初の書き込み（項目・ノート・振り返りの作成、または持ち越しの状態の記録）が起きたときに作る。表示しただけでは作らない。`tz` は行を作った時点の端末のタイムゾーンとする。
+
+その日の持ち越しを表示するかは、`carryover_done_at` が NULL で、前回の日に未完了の TODO または未解消の障害があるかで判定する。`carryover_postponed_at` が設定済みで `carryover_reshown_at` が NULL なら、次に前面に出したとき1回だけ再表示し、`carryover_reshown_at` を記録する。アプリを再起動しても、この判定は保たれる。
 
 ### item
 
@@ -55,11 +61,26 @@
 | completed_at | TEXT NULL | 完了・解消時刻 |
 | created_at / updated_at / deleted_at | TEXT | 監査用時刻 |
 
-持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
+持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
 
 - 前回の日の元項目の `status` は変更しない。持ち越し済みかどうかは、`carried_from_id` で元を指す項目があるかで判定する（`carried_to_id` は派生列またはビューで参照する）。
 - 見直しで「やめる」を選んだ TODO は、元項目を `status = dropped`、`close_reason = dropped` にする。「外部ツールへ戻す」（外部連携が有効で、外部課題と紐付いた TODO のみ）は `close_reason = returned_external` とする。
 - 「分割する」を選んだ場合は、元項目を `status = dropped`、`close_reason = split` にし、今日に作る子項目は `split_from_id` で元を指す（子項目の `carry_count` は 0）。
+- 持ち越した項目は、今日のリストの先頭に、前回の日の順のまま入るよう `sort_key` を付ける。
+
+#### 件数の数え方
+
+画面（凪メーター、サイドバー、ふりかえり）と MCP・CLI で使う件数は、次の定義で数える。どれも `deleted_at` が NULL の項目だけを対象にする。
+
+| 件数 | 定義 |
+| --- | --- |
+| TODO 数 | その日の `kind = todo` のうち、`status` が `dropped` でないもの |
+| 完了数（Done） | その日の `kind = todo` かつ `status = done` |
+| 残り（LEFT） | その日の `kind = todo` かつ `status = open` と、`kind = blocker` かつ `status = open` の合計 |
+| 解消数（Resolved） | その日の `kind = blocker` かつ `status = resolved` |
+| 持ち越し数（Carried） | その日の項目のうち、`carried_from_id` が NULL でないもの（前の日から持ち越してきた数） |
+
+過去の日の項目は持ち越しても `status` を変えないため、過去の日の「残り」には、翌日以降へ持ち越した項目も含まれる（その日の終わりの状態を表す）。
 
 ### note / reflection
 
@@ -76,7 +97,7 @@
 | 列 | 型 | 説明 |
 | --- | --- | --- |
 | id | TEXT PK | ULID |
-| date | TEXT | ノートの日付 |
+| date | TEXT FK→day | ノートの日付 |
 | line_text | TEXT | 送った時点の行の本文 |
 | line_fingerprint | TEXT | 行の位置変化に追随するための指紋（本文のハッシュと前後の行の情報） |
 | item_id | TEXT FK→item | 送り先の項目 |
@@ -84,33 +105,39 @@
 
 送信済みの印は、表示時に本文の各行を `line_fingerprint` と照合して付ける。本文が一致すれば行の位置が変わっても印を保つ。本文を編集して一致しなくなった場合は印を外す（送り先の項目は残る）。この挙動は、人による編集とエージェントの `edit_note` で同じとする。複数行を選んで送った場合は、1行ごとに1件の項目と1件の note_send を作る。
 
+- 送り先の項目は、ノートと同じ日に作る（過去の日のノートから送った場合も、その日に作る）。
+- 送り先の項目が削除された（`deleted_at` が設定された）場合は、印を外す。
+- 項目がどのノートの行から来たかは、次の順でたどる。まずその項目を `item_id` に持つ note_send を探し、無ければ `carried_from_id`、`split_from_id` で元の項目へさかのぼって同じく探す。持ち越しや分割をした TODO でも、依頼文の書き出し（MCP・CLI 仕様書 5章）で元のノートの行を使えるようにするため。見つかった note_send の行が、いまのノート本文で `line_fingerprint` と一致しない場合は、ノートから来ていないものとして扱う。
+
 ### change_log
 
 | 列 | 型 | 説明 |
 | --- | --- | --- |
 | id | TEXT PK | ULID |
 | actor | TEXT | `agent` / `human`（取り消しを人が実行した場合などは `human`） |
-| agent_client_id | TEXT FK NULL | 操作したエージェント（CLI は `cli`）。`actor = human` のときは NULL |
-| operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則） |
-| target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection` |
+| agent_client_id | TEXT FK→agent_client NULL | 操作したエージェント（CLI は `name = cli` の行）。`actor = human` のときは NULL |
+| operation | TEXT | `<名詞>.<動詞>` 形式。例：`todo.add`、`todo.complete`、`note.edit`（MCP・CLI 仕様書 3章の命名規則）。取り消しの記録は `agent.revert` |
+| target_type / target_id | TEXT | 対象。target_type は `item` / `note` / `reflection`。target_id は、item なら項目の id、note・reflection なら日付（`YYYY-MM-DD`） |
 | before / after | TEXT（JSON） | 変更前後のスナップショット |
 | created_at | TEXT | 操作時刻 |
 | reverted_at | TEXT NULL | 取り消した時刻 |
 | revert_of_id | TEXT NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
 | seen_at | TEXT NULL | 利用者が変更履歴画面で確認した時刻 |
 
-取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。対象がその後に人によって変更されている場合は、取り消し前に差分を示して確認を求める。
+取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、対象の現在の状態と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
 
-画面の「エージェントによる未確認の変更」の印（上部のバーの印・項目の行頭の菱形）は、`seen_at` が NULL の記録がある項目に付ける。
+画面の「エージェントによる未確認の変更」は、`actor = agent` かつ `seen_at` が NULL の記録で表す。上部のバーとサイドバーの件数はその記録の数、項目の行頭の菱形は `target_type = item` でその項目を指す記録があるときに付ける。
 
 ### agent_client
 
 | 列 | 型 | 説明 |
 | --- | --- | --- |
 | id | TEXT PK | ULID |
-| name | TEXT | 例：`claude-code`、`codex`、`cli`、`unknown`（識別子のない MCP 接続） |
+| name | TEXT UNIQUE | 接続時の識別子（`yunagi mcp --client <name>`）。例：`claude-code`、`codex`、`cli`、`unknown`（識別子のない MCP 接続） |
 | scopes | TEXT（JSON） | `read` / `todo` / `blocker` / `append` / `note_edit` の許可。既定はどのクライアントも `read` のみ |
 | created_at / last_seen_at | TEXT | 登録・最終接続時刻 |
+
+`cli` と `unknown` の行は、データベースの作成時に固定で作る。そのほかの行は、新しい識別子で初めて接続したときに作る。item・change_log の `agent_client_id` は、この表の `id`（ULID）を指す。
 
 ### external_ref（MVP 後の有料機能）
 
@@ -125,7 +152,11 @@
 
 ### setting
 
-キーと値（JSON）の組で保持する。主なキー：`day_boundary`（既定 `04:00`）、`layout`、`theme`（`system` / `light` / `dark`。既定 `system`）、`font_size`、`vim_mode`、`shortcuts`、`locale`、`carryover_review_threshold`（既定 3）、`update_check`（更新の自動確認。既定 `true`）、`meter_hours`（凪メーターの時間帯。既定 `09:00-19:00`）、`sidebar`（サイドバーの開閉の状態）。
+キーと値（JSON）の組で保持する。主なキー：`day_boundary`（既定 `04:00`）、`layout`、`theme`（`system` / `light` / `dark`。既定 `system`）、`font_size`、`vim_mode`、`shortcuts`、`locale`、`carryover_review_threshold`（既定 3）、`update_check`（更新の自動確認。既定 `true`）、`meter_hours`（凪メーターの時間帯。既定 `09:00-19:00`）、`sidebar`（サイドバーの開閉の状態）、`vim_ime_restore`（挿入モードに入ったとき直前の入力状態に戻す。既定 `true`。操作仕様書 4.4）、`license`（サポーターライセンスのキーと最終確認時刻）。
+
+- `shortcuts` には、利用者が初期割当から変えたものだけを持つ。初期割当は操作仕様書 2章に従い、Vimモードの有無で変わる割当（Windows・Linux の前日・翌日へ移動など）も、変えていなければ初期割当に従う。
+- バックアップの世代数は設定に持たない。MVP では直近7日分に固定する（アーキテクチャ設計書 6章）。
+- ローカル API は設定で止められるものとはせず、設定画面では状態の表示だけを行う。
 
 保存先（`data_dir`）は DB には持たず、設定ファイル `config.json` で管理する（アーキテクチャ設計書 6章）。エージェントの権限は agent_client テーブルで管理する。
 
@@ -139,5 +170,4 @@ FTS5 の仮想テーブル `search_index(kind, ref_id, date, body)` を用意し
 
 ## 6. 未決事項
 
-- バックアップ設定（世代数など）を setting に持つか（要件 F-12 の「バックアップ」の範囲）
 - クラウド同期で採用されなかった競合内容の保存先（同期用の新しい表を設けるか、change_log を人・同期操作にも広げるか。クラウド同期仕様書と合わせて決める）
