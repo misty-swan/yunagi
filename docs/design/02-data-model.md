@@ -64,11 +64,11 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | carry_count | INTEGER | 持ち越された回数（0 から。持ち越すたびに元項目の値＋1） |
 | carried_from_id | TEXT NULL | 持ち越し元（前回の日）の項目の id |
 | split_from_id | TEXT NULL | 分割元の項目の id（分割で作った子項目のみ） |
-| resolution_note | TEXT NULL | 障害の解消メモ（未解消に戻しても残す。操作仕様書 2章） |
+| resolution_note | TEXT NULL | 障害の解消メモ（未解消に戻しても残す。持ち越しで作る項目には写さない。操作仕様書 2章） |
 | origin | TEXT | `human` / `agent` / `note`（ノートから送った） / `external` |
 | agent_client_id | TEXT NULL | エージェントが作成した場合の識別 |
 | external_ref_id | TEXT NULL | 外部課題との紐付け |
-| completed_at | TEXT NULL | 完了・解消時刻 |
+| completed_at | TEXT NULL | 完了・解消時刻（未完了・未解消に戻すと NULL。すでに完了・解消済みへのやり直しでは変えない。操作仕様書 2章、MCP・CLI 仕様書 3章） |
 | created_at / updated_at / deleted_at | TEXT | 監査用時刻 |
 
 持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
