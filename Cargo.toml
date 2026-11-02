@@ -16,5 +16,11 @@ yunagi-core = { path = "crates/core" }
 # 版の 2.12 系をそろえる（Tauri は major.minor が食い違うと警告する）
 tauri = { version = "=2.12.5", features = [] }
 tauri-build = { version = "=2.7.4", features = [] }
+# SQLite（docs/design/01-architecture.md 3章）。bundled で SQLite 本体（FTS5 を含む）を
+# 同梱してビルドし、OS ごとの SQLite の版の違いに左右されないようにする。
+# backup はマイグレーション前のバックアップと失敗時の復元に使う（SQLite のオンラインバックアップ）
+rusqlite = { version = "=0.41.1", features = ["bundled", "backup"] }
+# テストで使う一時フォルダ（テストが終わると消える）
+tempfile = "=3.27.0"
 # 時刻とタイムゾーン（論理日付の計算。crates/core/src/domain/logical_date.rs）
 jiff = "=0.2.38"
