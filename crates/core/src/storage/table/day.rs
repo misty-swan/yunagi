@@ -11,7 +11,8 @@ use crate::storage::StorageError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Day {
     pub date: LogicalDate,
-    /// 行を作ったときの端末のタイムゾーン（IANA の名前。例：`Asia/Tokyo`）。
+    /// 行を作ったときの端末のタイムゾーン（例：`Asia/Tokyo`）。IANA の名前が取れないときの形も含め、
+    /// 文字列は `crate::domain::logical_date::time_zone_record` で作る。
     pub tz: String,
     pub carryover_done_at: Option<Timestamp>,
     pub carryover_postponed_at: Option<Timestamp>,
@@ -35,6 +36,9 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Day> {
 
 /// その日の行が無ければ作る（持ち越しの状態はすべて未設定）。作ったら `true`。
 /// すでにあれば何も変えずに `false`（`tz` と `created_at` は最初に作ったときのまま）。
+///
+/// `tz` は記録する文字列をそのまま入れる。端末のタイムゾーンから行を作るときは
+/// `crate::domain::day::ensure` を使う。
 pub fn ensure(
     conn: &Connection,
     date: LogicalDate,

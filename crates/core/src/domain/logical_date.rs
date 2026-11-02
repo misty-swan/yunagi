@@ -28,11 +28,15 @@
 //!
 //! 端末のタイムゾーンは `TimeZone::try_system()` で得る。`TimeZone::system()` は
 //! 決められないとき黙って UTC にし、日付が気づかれずにずれるので使わない。
+//!
+//! 日付の行（`day.tz`）に記録するタイムゾーンの文字列は [`time_zone_record`] で作り、
+//! [`parse_time_zone_record`] で読み戻す（データモデル設計書 3章 day）。
 
 use std::fmt;
 use std::str::FromStr;
 
 use jiff::civil::{Date, Time};
+use jiff::fmt::temporal::{DateTimeParser, DateTimePrinter};
 use jiff::tz::{AmbiguousOffset, TimeZone};
 use jiff::{Timestamp, Zoned};
 
@@ -229,6 +233,42 @@ impl FromStr for DateSpec {
     }
 }
 
+/// 日付の行（`day.tz`）に記録する、タイムゾーン `tz` の文字列（データモデル設計書 3章 day）。
+///
+/// 次のうち最初に当てはまる形にする。どれも [`parse_time_zone_record`] で読み戻せる。
+///
+/// 1. IANA の名前が取れれば、その名前（`Asia/Tokyo`、`UTC`）。
+/// 2. POSIX 形式の TZ 指定（環境変数 `TZ=JST-9` など）なら、その文字列を jiff が整えた形
+///    （`JST-9`、`EST5EDT,M3.2.0,M11.1.0`）。
+/// 3. UTC からのずれが固定なら、そのずれ（`+09:00`。秒まであれば `-00:44:30`）。
+/// 4. どれでもない（名前の無いタイムゾーンデータ。`/etc/localtime` が zoneinfo へのリンクでない、
+///    `TZ` が zoneinfo の外のファイルを指す、など）なら、瞬間 `at` の UTC からのずれ（3 と同じ形）。
+///    読み戻せるのはそのずれだけで、夏時間などの規則は残らない。読み戻したもので同じに求まるのは
+///    `at` の壁時計の時刻で、論理日付は、その日の始まりから `at` までに夏時間の切り替えがあると
+///    違いうる（どの固定のずれでも、すべての瞬間の論理日付は再現できない）。
+///
+/// 1〜3 は jiff の `DateTimePrinter::time_zone_to_string` の形で、4 はそれが文字列にできない
+/// ときの代わり。`TimeZone::unknown()` は `Etc/Unknown` になる（[`TimeZone::try_system`] は返さない）。
+pub fn time_zone_record(tz: &TimeZone, at: Timestamp) -> String {
+    const PRINTER: DateTimePrinter = DateTimePrinter::new();
+    PRINTER.time_zone_to_string(tz).unwrap_or_else(|_| {
+        PRINTER
+            .time_zone_to_string(&TimeZone::fixed(tz.to_offset(at)))
+            .expect("a fixed offset time zone is always printable")
+    })
+}
+
+/// [`time_zone_record`] で記録した文字列を、タイムゾーンに読み戻す。
+///
+/// IANA の名前・UTC からのずれ（`+09:00`）・POSIX 形式の TZ 指定を受け付ける。
+/// IANA の名前は、いまのタイムゾーンデータベースで引く（無い名前は誤り）。
+pub fn parse_time_zone_record(s: &str) -> Result<TimeZone, ParseError> {
+    static PARSER: DateTimeParser = DateTimeParser::new();
+    PARSER
+        .parse_time_zone(s)
+        .map_err(|_| ParseError::TimeZone(s.to_owned()))
+}
+
 /// 文字列を読めなかったときの誤り。読めなかった文字列を持つ。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -238,6 +278,8 @@ pub enum ParseError {
     Date(String),
     /// 日付の指定が `today`・`yesterday`・`YYYY-MM-DD` のどれでもない。
     DateSpec(String),
+    /// タイムゾーンが、IANA の名前・UTC からのずれ・POSIX 形式の TZ 指定のどれでもない。
+    TimeZone(String),
 }
 
 impl fmt::Display for ParseError {
@@ -256,6 +298,10 @@ impl fmt::Display for ParseError {
                     "invalid date {s:?}: expected YYYY-MM-DD, today or yesterday"
                 )
             }
+            Self::TimeZone(s) => write!(
+                f,
+                "invalid time zone {s:?}: expected an IANA name, a UTC offset or a POSIX TZ string"
+            ),
         }
     }
 }
@@ -682,6 +728,138 @@ mod tests {
         for zone in [TimeZone::UTC, tz("Asia/Tokyo"), tz("Pacific/Kiritimati")] {
             let last = LogicalDate::at(Timestamp::MAX, &zone, b);
             assert_eq!(last.to_string().parse(), Ok(last));
+        }
+    }
+
+    // --- day.tz に記録するタイムゾーン ---
+
+    #[test]
+    fn time_zone_record_forms_and_round_trips() {
+        let at: Timestamp = "2026-07-01T00:00:00Z".parse().unwrap();
+        for (zone, expected) in [
+            (tz("Asia/Tokyo"), "Asia/Tokyo"),
+            (tz("america/NEW_YORK"), "America/New_York"),
+            (TimeZone::UTC, "UTC"),
+            (TimeZone::posix("JST-9").unwrap(), "JST-9"),
+            (
+                TimeZone::posix("EST5EDT,M3.2.0,M11.1.0").unwrap(),
+                "EST5EDT,M3.2.0,M11.1.0",
+            ),
+            (TimeZone::fixed(jiff::tz::offset(9)), "+09:00"),
+            (
+                TimeZone::fixed(jiff::tz::Offset::from_seconds(-(44 * 60 + 30)).unwrap()),
+                "-00:44:30",
+            ),
+            (TimeZone::unknown(), "Etc/Unknown"),
+        ] {
+            let record = time_zone_record(&zone, at);
+            assert_eq!(record, expected);
+            // 読み戻すと同じタイムゾーンになり、もう一度記録しても同じ文字列になる
+            let restored = parse_time_zone_record(&record).unwrap();
+            assert_eq!(restored, zone, "{record}");
+            assert_eq!(time_zone_record(&restored, at), record);
+        }
+    }
+
+    #[test]
+    fn restored_time_zone_gives_the_same_logical_dates() {
+        // 名前の無い POSIX 形式でも、読み戻したもので夏時間の前後の論理日付が同じになる
+        let b = boundary("01:30");
+        let at: Timestamp = "2026-03-07T12:00:00Z".parse().unwrap();
+        for zone in [
+            tz("America/New_York"),
+            TimeZone::posix("EST5EDT,M3.2.0,M11.1.0").unwrap(),
+        ] {
+            let restored = parse_time_zone_record(&time_zone_record(&zone, at)).unwrap();
+            let mut t = at;
+            // 2026-03-07 から 2026-11-02 まで、15分ずつ
+            while t < "2026-11-02T12:00:00Z".parse().unwrap() {
+                assert_eq!(
+                    LogicalDate::at(t, &restored, b),
+                    LogicalDate::at(t, &zone, b)
+                );
+                t = t.checked_add(jiff::SignedDuration::from_mins(15)).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn time_zone_record_rejects_unknown_forms() {
+        for s in [
+            "",
+            "Does/Not/Exist",
+            "05:00",
+            "Z",
+            "+09:00:00.5",
+            " Asia/Tokyo",
+        ] {
+            assert_eq!(
+                parse_time_zone_record(s),
+                Err(ParseError::TimeZone(s.to_owned())),
+                "{s:?}"
+            );
+        }
+    }
+
+    /// 子プロセスに、記録されるはずの文字列を渡す環境変数。
+    #[cfg(unix)]
+    const CHILD_EXPECTED: &str = "YUNAGI_TEST_TZ_RECORD_EXPECTED";
+
+    /// 端末のタイムゾーン（`TimeZone::try_system()`）を、環境変数 `TZ` を変えた子プロセスで記録する。
+    /// 環境変数はプロセス全体で共有され、テストは並行に走るので、このプロセスの `TZ` は変えない。
+    #[cfg(unix)]
+    #[test]
+    fn records_system_time_zone_without_iana_name() {
+        // zoneinfo の外にコピーした TZif ファイルは、名前の無いタイムゾーンとして読まれる
+        let dir = tempfile::tempdir().unwrap();
+        let unnamed = dir.path().join("localtime");
+        std::fs::copy("/usr/share/zoneinfo/America/New_York", &unnamed).unwrap();
+        for (tz_env, expected) in [
+            ("Asia/Tokyo", "Asia/Tokyo"),
+            ("JST-9", "JST-9"),
+            ("EST5EDT,M3.2.0,M11.1.0", "EST5EDT,M3.2.0,M11.1.0"),
+            // 子プロセスで記録する瞬間（2026-07-01）は夏時間
+            (unnamed.to_str().unwrap(), "-04:00"),
+        ] {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "domain::logical_date::tests::system_time_zone_record_in_child",
+                    "--test-threads=1",
+                ])
+                .env("TZ", tz_env)
+                .env(CHILD_EXPECTED, expected)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "TZ={tz_env}\n{stdout}\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    /// [`records_system_time_zone_without_iana_name`] が子プロセスで走らせる。ふだんは何もしない。
+    #[cfg(unix)]
+    #[test]
+    fn system_time_zone_record_in_child() {
+        let Ok(expected) = std::env::var(CHILD_EXPECTED) else {
+            return;
+        };
+        let zone = TimeZone::try_system().unwrap();
+        assert!(zone.iana_name().is_none_or(|name| name == expected));
+        let at: Timestamp = "2026-07-01T00:00:00Z".parse().unwrap();
+        let record = time_zone_record(&zone, at);
+        assert_eq!(record, expected);
+        // 読み戻したもので、記録した瞬間の時刻と論理日付が同じになる
+        let restored = parse_time_zone_record(&record).unwrap();
+        assert_eq!(restored.to_datetime(at), zone.to_datetime(at));
+        for b in ["00:00", "04:00", "23:59"] {
+            assert_eq!(
+                LogicalDate::at(at, &restored, boundary(b)),
+                LogicalDate::at(at, &zone, boundary(b))
+            );
         }
     }
 
