@@ -71,7 +71,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | agent_client_id | TEXT FK→agent_client NULL | エージェントが作成した場合の識別 |
 | external_ref_id | TEXT NULL | 外部課題との紐付け（external_ref の表は MVP 後に作るため、それまでは外部キーを付けない） |
 | completed_at | TEXT NULL | 完了・解消時刻（未完了・未解消に戻すと NULL。すでに完了・解消済みへのやり直しでは変えない。操作仕様書 2章、MCP・CLI 仕様書 3章） |
-| created_at / updated_at / deleted_at | TEXT（deleted_at は NULL） | 監査用時刻。deleted_at は論理削除した時刻 |
+| created_at / updated_at / deleted_at | TEXT（deleted_at は NULL） | 監査用時刻。deleted_at は論理削除した時刻。何も変えずに成功を返した操作（すでに目的の状態の `complete_todo`・`reopen_todo`・`resolve_blocker`、今と同じ本文の `edit_todo`。MCP・CLI 仕様書 3章）では updated_at を変えない |
 
 持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
 
