@@ -48,7 +48,7 @@ impl Database {
         let backup_dir = path
             .parent()
             .unwrap_or_else(|| Path::new(""))
-            .join("backups");
+            .join(data_dir::BACKUPS_DIR_NAME);
         migration::migrate(&mut conn, &backup_dir, migrations)?;
         Ok(Self { conn })
     }

@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use rusqlite::backup::NO_PROGRESS;
 use rusqlite::{Connection, MAIN_DB, OpenFlags};
@@ -230,7 +230,7 @@ pub struct ChangeReport {
 ///
 /// 手順（途中で失敗しても元のデータが残るように、元のファイルは最後まで消さない）：
 ///
-/// 1. `new_dir` を確かめる。絶対パスでないとき、`config.json` に書けない（UTF-8 でない）とき、
+/// 1. `new_dir` を確かめる。絶対パスでないとき、`..`・`.` を含むとき、`config.json` に書けない（UTF-8 でない）とき、
 ///    今の保存先と同じとき、今の保存先の `backups/` の中のとき、すでにデータベース
 ///    （`yunagi.db` とその `-wal`・`-shm`）か、空でない `backups/` があるときは断る。
 /// 2. `new_dir` を作り、`backups/` を写す。
@@ -251,6 +251,14 @@ pub struct ChangeReport {
 pub fn change_data_dir(default_dir: &Path, new_dir: &Path) -> Result<ChangeReport, DataDirError> {
     if !new_dir.is_absolute() {
         return Err(DataDirError::NotAbsolute(new_dir.to_path_buf()));
+    }
+    // `..` は、まだ無いフォルダの後にあると実体を求められず、下の「同じフォルダ」
+    // 「backups/ の中」の確認をすり抜ける（作った後で元の保存先を指し、元のデータを消してしまう）
+    if new_dir
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
+        return Err(DataDirError::NotNormalized(new_dir.to_path_buf()));
     }
     // JSON の文字列は UTF-8 なので、写し終えてから記録で失敗しないよう、先に確かめる
     if new_dir.to_str().is_none() {
@@ -299,8 +307,8 @@ fn check_target(new_dir: &Path) -> Result<(), DataDirError> {
             }
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        // backups がファイルなど、読めないときは、写すときに失敗する
-        Err(_) => {}
+        // 読めない（権限が無いなど）ときは、空とみなさない（利用者のファイルを上書きしうる）
+        Err(e) => return Err(DataDirError::io("read directory", &backups, e)),
     }
     Ok(())
 }
@@ -439,6 +447,15 @@ fn copy_symlink(from: &Path, to: &Path, created: &mut Created) -> Result<(), Dat
     #[cfg(unix)]
     {
         let target = fs::read_link(from).map_err(|e| DataDirError::io("read link", from, e))?;
+        // 相対パスのリンクは、リンク先の実体の絶対パスにする（移した先から辿ると別の場所になり、
+        // 元の場所からの道筋（元の backups/ を通る）は、元の backups/ を消すと辿れなくなるため）。
+        // リンク先が無いリンクは、元の場所から見たパスにする
+        let target = match from.parent() {
+            Some(parent) if target.is_relative() => {
+                fs::canonicalize(from).unwrap_or_else(|_| parent.join(target))
+            }
+            _ => target,
+        };
         std::os::unix::fs::symlink(&target, to)
             .map_err(|e| DataDirError::io("create link", to, e))?;
         created.file(to.to_path_buf());
@@ -511,9 +528,21 @@ fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// ファイルを写し、写した先をディスクに反映する。
+///
+/// 写した先は自分で作って書く（`fs::copy` は元の権限を写すので、読み取り専用のファイルだと、
+/// 反映のために書き込める形で開き直せない。Windows では書き込める形でないと反映できない）。
+/// 反映してから、元の権限をつける。
 fn copy_file_synced(from: &Path, to: &Path) -> io::Result<()> {
-    fs::copy(from, to)?;
-    fs::OpenOptions::new().write(true).open(to)?.sync_all()
+    let mut src = fs::File::open(from)?;
+    let permissions = src.metadata()?.permissions();
+    let mut dst = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)?;
+    io::copy(&mut src, &mut dst)?;
+    dst.sync_all()?;
+    drop(dst);
+    fs::set_permissions(to, permissions)
 }
 
 /// フォルダの中の名前の変更・追加をディスクに反映する。Unix 系だけで行う
@@ -545,6 +574,8 @@ pub enum DataDirError {
     },
     /// 保存先が絶対パスでない。
     NotAbsolute(PathBuf),
+    /// 保存先に `..`・`.` が含まれる。
+    NotNormalized(PathBuf),
     /// 保存先が UTF-8 で表せない（`config.json` に書けない）。
     NotUtf8(PathBuf),
     /// 新しい保存先が、今の保存先と同じ。
@@ -593,6 +624,11 @@ impl fmt::Display for DataDirError {
                     path.display()
                 )
             }
+            Self::NotNormalized(path) => write!(
+                f,
+                "data directory must not contain `.` or `..`: {}",
+                path.display()
+            ),
             Self::NotUtf8(path) => write!(
                 f,
                 "data directory path is not valid UTF-8: {}",
@@ -867,13 +903,57 @@ mod tests {
         fs::write(outside.join("old.db"), b"archived").unwrap();
         fs::create_dir(backups_dir(&d.default)).unwrap();
         std::os::unix::fs::symlink(&outside, backups_dir(&d.default).join("archive")).unwrap();
+        // 相対パスのリンクは、元の場所から見た先を指したまま写る
+        std::os::unix::fs::symlink("../../archive", backups_dir(&d.default).join("rel")).unwrap();
 
         let new_dir = d.root.join("new");
         change_data_dir(&d.default, &new_dir).unwrap();
         let link = backups_dir(&new_dir).join("archive");
         assert_eq!(fs::read_link(&link).unwrap(), outside);
+        assert_eq!(fs::read(link.join("old.db")).unwrap(), b"archived");
+        let rel = backups_dir(&new_dir).join("rel");
+        assert_eq!(fs::read(rel.join("old.db")).unwrap(), b"archived");
         // 元の backups/ を消しても、リンク先は残る
         assert_eq!(fs::read(outside.join("old.db")).unwrap(), b"archived");
+    }
+
+    #[test]
+    fn read_only_backups_are_copied_with_their_permissions() {
+        let d = dirs();
+        fs::create_dir(backups_dir(&d.default)).unwrap();
+        let file = backups_dir(&d.default).join("a.db");
+        fs::write(&file, b"backup").unwrap();
+        let mut ro = fs::metadata(&file).unwrap().permissions();
+        ro.set_readonly(true);
+        fs::set_permissions(&file, ro).unwrap();
+
+        let new_dir = d.root.join("new");
+        change_data_dir(&d.default, &new_dir).unwrap();
+        let copied = backups_dir(&new_dir).join("a.db");
+        assert_eq!(fs::read(&copied).unwrap(), b"backup");
+        assert!(fs::metadata(&copied).unwrap().permissions().readonly());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_target_backups_is_not_treated_as_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dirs();
+        let new_dir = d.root.join("new");
+        let backups = backups_dir(&new_dir);
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("mine.db"), b"mine").unwrap();
+        fs::set_permissions(&backups, fs::Permissions::from_mode(0o300)).unwrap();
+        let readable = fs::read_dir(&backups).is_ok(); // root で動かすと読めてしまう
+        let result = change_data_dir(&d.default, &new_dir);
+        fs::set_permissions(&backups, fs::Permissions::from_mode(0o700)).unwrap();
+        if readable {
+            assert!(matches!(result, Err(DataDirError::TargetHasBackups(_))));
+        } else {
+            assert!(matches!(result, Err(DataDirError::Io { .. })), "{result:?}");
+        }
+        assert_eq!(fs::read(backups.join("mine.db")).unwrap(), b"mine");
+        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
     }
 
     #[test]
@@ -955,6 +1035,21 @@ mod tests {
             );
         }
         assert!(!backups_dir(&d.default).exists());
+
+        // まだ無いフォルダを通って元の保存先・backups/ に戻るパス
+        for sneaky in [
+            d.default.join("missing/.."),
+            d.default.join("missing/../backups/sub"),
+        ] {
+            assert!(
+                matches!(
+                    change_data_dir(&d.default, &sneaky),
+                    Err(DataDirError::NotNormalized(_))
+                ),
+                "{sneaky:?}"
+            );
+        }
+        assert!(!d.default.join("missing").exists());
 
         #[cfg(unix)]
         {
