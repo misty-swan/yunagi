@@ -10,7 +10,8 @@
   //   次の行も「- 」で始める（操作仕様書 2章「ノートの編集」）。
   // - Mod+Shift+T・B で、カーソルの行（選択範囲があればその行の全部）を TODO・障害へ送る。送った行には
   //   行末の外側に「→ TODO」「→ BLOCKER」を出し、右の Outline の下の Sent に行数を出す（src/lib/note_marks.ts）。
-  //   整理モードの項目の「← NOTE」から移ってきたら（`jump`）、送り元の行にカーソルを置く。
+  //   整理モードの項目の「← NOTE」から移ってきたら（`jump`）、送り元の行にカーソルを置く。検索パレットの
+  //   ノートの結果から移ってきたら、一致した所を選ぶ。
   // - 設定のノートの書体が等幅なら、同梱の等幅の書体を読み込み終えてから当てる（src/lib/fonts.svelte.ts）。
   //   起動時は、読み込み終えるまで（上限 FONT_WAIT_MS）ノートの文字を出さない。
   // - 保存・取り込み・入力中の状態・日の移動は、振り返りと共通（src/lib/doc_editor.ts）。
@@ -21,7 +22,8 @@
   import type { SaveStatus } from "../lib/autosave.svelte";
   import type { ItemKind, LogicalDate, NoteSource } from "../lib/bindings";
   import { core } from "../lib/core";
-  import { TextDocEditor } from "../lib/doc_editor";
+  import { selectMatch, TextDocEditor } from "../lib/doc_editor";
+  import type { NoteFind } from "../lib/palette.svelte";
   import { FONT_WAIT_MS, monoFont, type FontLoader } from "../lib/fonts.svelte";
   import { t } from "../lib/i18n";
   import { modShiftLabel, noteActionOf } from "../lib/keys";
@@ -69,8 +71,11 @@
     items: string;
     /** `items` を読んだボードの日（日を移った直後は、エディタの日とずれる）。 */
     itemsDate: LogicalDate | null;
-    /** 整理モードの項目の「← NOTE」から移る先（無ければ `null`）。移り終えたら `onJumped` を呼ぶ。 */
-    jump: NoteSource | null;
+    /**
+     * 移る先（無ければ `null`）：整理モードの項目の「← NOTE」からの送り元の行か、検索パレットの結果の
+     * 一致した所（`find`）。移り終えたら `onJumped` を呼ぶ。
+     */
+    jump: NoteSource | NoteFind | null;
     onJumped: () => void;
     /** 等幅の書体の読み込み（テストで差し替える）。 */
     font?: FontLoader;
@@ -360,12 +365,19 @@
 
   // 「← NOTE」から移る：その日の本文と印を読み終えてから、送り元の行の終わりにカーソルを置く。
   // エディタの本文（まだ保存していない入力を含む）の印で行を探し、無ければ保存済みの本文の行にする
+  // 検索パレットの結果から移るときは、本文を読み終えたら（印は待たずに）一致した所を選ぶ
   $effect(() => {
     const j = jump;
-    const ready = loaded !== null && loaded === j?.date && marked;
+    const isFind = j !== null && "find" in j;
+    const ready = loaded !== null && loaded === j?.date && (isFind || marked);
     const v = view;
     if (j === null || !ready || v === null) return;
     untrack(() => {
+      if ("find" in j) {
+        selectMatch(v, j.find);
+        onJumped();
+        return;
+      }
       const line = markedLine(v.state, j.itemId) ?? Math.min(j.line, v.state.doc.lines);
       const pos = v.state.doc.line(line).to;
       v.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
@@ -548,7 +560,13 @@
 
   $effect(() => {
     const d = date;
-    if (view !== null && d !== null) untrack(() => void editor.open(d));
+    if (view === null || d === null) return;
+    untrack(() => {
+      // 読み終えるまでは、読んだ日にしない（同じ日を読み直すときも。読んでいる途中の空の本文へ `jump` で
+      // 移らないため）
+      loaded = null;
+      void editor.open(d);
+    });
   });
 
   // ボードを読み込み直してノートの版が進んでいたら、最新を読み直して取り込む

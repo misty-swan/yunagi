@@ -25,6 +25,7 @@ import {
   type NoteMark,
   type Overview,
   type Position,
+  type SearchHit,
   type SendResult,
   type Snapshot,
   type SplitResult,
@@ -131,6 +132,8 @@ export const core = {
   /** 持ち越しを確定する。 */
   confirmCarryover: (decision: CarryoverDecision) =>
     call<CarryoverConfirmed>("confirm_carryover", { decision }),
+  /** 全日付を `text` で探す（パレット S-04）。日付の新しい順に `limit` 件まで。 */
+  search: (text: string, limit: number) => call<SearchHit[]>("search", { text, limit }),
   /**
    * 入力中の状態を知らせる（変わるたびに全体を知らせ直す）。届く順が入れ替わっても古いものが
    * 残らないよう、この画面の読み込みの印と、送るたびに増える番号を付ける。

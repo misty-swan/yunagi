@@ -37,6 +37,20 @@ export function shortDate(date: LogicalDate): string {
   return `${monthDay(date)} ${weekday(date)}`;
 }
 
+/** 年を含む日付の表示（`2026.10.28 Wed`。パレットの日付ジャンプと検索結果。画面設計書 3章・6章）。 */
+export function longDate(date: LogicalDate): string {
+  return `${date.replaceAll("-", ".")} ${weekday(date)}`;
+}
+
+/** 年・月・日（月と日は 1 始まり）が暦にある日なら、その論理日付。無ければ `null`。 */
+export function dateOf(year: number, month: number, day: number): LogicalDate | null {
+  if (![year, month, day].every(Number.isInteger) || year < 1 || year > 9999) return null;
+  const d = new Date(Date.UTC(2000, month - 1, day));
+  d.setUTCFullYear(year);
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null;
+  return format(d);
+}
+
 /** 端末の時刻 `now` の暦の日（端末のタイムゾーン）。 */
 export function calendarDate(now: Date): LogicalDate {
   const y = now.getFullYear();

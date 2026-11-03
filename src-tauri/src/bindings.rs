@@ -68,6 +68,8 @@ fn render() -> String {
         decl::<CarryoverReviewChoice>(&cfg),
         decl::<CarryoverDecision>(&cfg),
         decl::<CarryoverConfirmed>(&cfg),
+        decl::<SearchKind>(&cfg),
+        decl::<SearchHit>(&cfg),
         decl::<UiReport>(&cfg),
         decl::<EditingItem>(&cfg),
         decl::<EditorLines>(&cfg),

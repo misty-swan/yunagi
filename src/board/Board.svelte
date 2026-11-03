@@ -17,6 +17,7 @@
   import type { Notice } from "../lib/notice.svelte";
   import { prefs, type Layout } from "../lib/prefs.svelte";
   import type { Session } from "../lib/session.svelte";
+  import type { BoardTarget } from "../lib/palette.svelte";
   import type { InputTracker } from "../lib/ui_report.svelte";
   import ItemList from "./ItemList.svelte";
   import ReflectionEditor from "./ReflectionEditor.svelte";
@@ -29,6 +30,8 @@
     mac,
     tracker,
     onOpenNoteSource,
+    target = null,
+    onTargetDone = () => {},
   }: {
     session: Session;
     save: SaveStatus;
@@ -40,6 +43,9 @@
     mac: boolean;
     /** 項目の「← NOTE」：送り元のノートの行へ移る（ノートモードへ移すのは App）。 */
     onOpenNoteSource: (source: NoteSource) => void;
+    /** 検索パレットの結果から移る先（項目か、振り返りの中の一致した所）。移り終えたら `onTargetDone`。 */
+    target?: BoardTarget | null;
+    onTargetDone?: () => void;
   } = $props();
 
   const m = $derived(t());
@@ -130,25 +136,55 @@
     }
   }
 
-  // 持ち越し先の印：その日を開いて、その項目を選ぶ
-  let pendingSelect: { date: LogicalDate; id: Id } | null = null;
+  // 持ち越し先の印・検索パレットの項目の結果：その日を開いて、その項目を選ぶ。持ち越し先の印からは、
+  // 項目が一覧に入るまで待つ（読み直しと行き違って、まだ入っていない一覧が先に届くことがあるため）。
+  // パレットの結果からは、その日を読み終えて項目が無ければ（検索の後に消されたなど）、その日を開くだけに
+  // する（`mustExist`。後で戻されたときに、思わぬところでフォーカスを動かさないため。画面設計書 6章）。
+  // どちらも、選ぶ前にほかの日へ移ったら、選ぶのをやめる
+  let pendingSelect = $state<{ date: LogicalDate; id: Id; mustExist?: boolean } | null>(null);
   function openCarried(to: CarriedTo) {
     pendingSelect = { date: to.date, id: to.id };
     session.show(to.date);
   }
   $effect(() => {
+    const showing = session.showing;
+    untrack(() => {
+      if (pendingSelect !== null && showing !== pendingSelect.date) pendingSelect = null;
+    });
+  });
+  $effect(() => {
     const d = model.date;
+    const p = pendingSelect;
     void model.todos;
     void model.blockers;
     untrack(() => {
-      const p = pendingSelect;
       if (p === null || d !== p.date) return;
       const row = model.todos.find((r) => r.id === p.id) ?? model.blockers.find((r) => r.id === p.id);
-      if (row === undefined) return;
+      if (row === undefined) {
+        // 読み終えた（表示しようとしている日と表示している日がそろった）一覧に無ければ、やめる
+        if (p.mustExist && session.showing === session.date) pendingSelect = null;
+        return;
+      }
       pendingSelect = null;
       requestFocus({ key: row.key, field: "text", offset: "end" });
     });
   });
+
+  // 検索パレットの結果（日を開くのと、モードを整理モードにするのは App）
+  let lastTarget = 0;
+  $effect(() => {
+    const tg = target;
+    if (tg === null || tg.n === lastTarget) return;
+    lastTarget = tg.n;
+    untrack(() => {
+      if (!("itemId" in tg)) return;
+      // 移る先は Board が持つので、App の移る先はここで終える（その日を開くのは App）
+      pendingSelect = { date: tg.date, id: tg.itemId, mustExist: true };
+      onTargetDone();
+    });
+  });
+  /** 振り返りの中で移る先（その日の振り返りを読み終えたら、ReflectionEditor が移る）。 */
+  const reflectionFind = $derived(target !== null && "find" in target ? { date: target.date, text: target.find, n: target.n } : null);
 
   // ---- 入力中の状態 ----
 
@@ -193,6 +229,8 @@
           presence={tracker.reflection}
           rev={session.board?.reflectionRev ?? 0}
           onActivity={activity}
+          find={reflectionFind}
+          onFound={onTargetDone}
           bind:view={editor}
         />
       </div>

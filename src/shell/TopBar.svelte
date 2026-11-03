@@ -9,6 +9,7 @@
   import { keyLabel } from "../lib/keys";
   import type { Mode } from "../lib/shell.svelte";
   import type { ShellCommand } from "./commands";
+  import { untrack } from "svelte";
   import Logo from "./Logo.svelte";
 
   let {
@@ -25,6 +26,7 @@
     onToday,
     onMode,
     onCommand,
+    saveDetailRequest = 0,
   }: {
     date: LogicalDate | null;
     today: LogicalDate | null;
@@ -40,6 +42,8 @@
     onToday: () => void;
     onMode: (mode: Mode) => void;
     onCommand: (c: ShellCommand) => void;
+    /** 増えたら、保存できていない原因の表示を開く（パレットの「保存できていない理由を見る」）。 */
+    saveDetailRequest?: number;
   } = $props();
 
   const m = $derived(t());
@@ -75,6 +79,15 @@
     };
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
+  });
+
+  // パレットから開く（失敗していなければ何もしない）
+  let lastDetailRequest = untrack(() => saveDetailRequest);
+  $effect(() => {
+    const r = saveDetailRequest;
+    if (r === lastDetailRequest) return;
+    lastDetailRequest = r;
+    if (untrack(() => save.failing)) detailOpen = true;
   });
 
   // 開いたら、原因の表示へフォーカスを移す（読み上げで原因と再試行が伝わり、Esc が届くように）

@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 18] = [
+    let tests: [(&str, Test); 19] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -53,6 +53,7 @@ fn main() {
         ("text_doc_commands", text_doc_commands),
         ("note_send_commands", note_send_commands),
         ("carryover_commands", carryover_commands),
+        ("search_command", search_command),
         ("overview_counts", overview_counts),
         (
             "export_markdown_writes_one_file_per_day",
@@ -585,6 +586,57 @@ fn note_send_commands(_: &Path) {
             json!({ "date": date, "body": body, "baseRev": 1, "from": 0, "to": 1, "kind": "todo" }),
         ),
         json!({ "kind": "invalid_argument", "reason": "note_line" })
+    );
+    h.assert_no_event();
+}
+
+/// 検索パレット（S-04）の検索：全日付を新しい順に探し、種類・日付・本文全体を返す（データモデル設計書
+/// 4.1）。件数の上限を超える値は上限までにする。
+fn search_command(_: &Path) {
+    let h = Harness::opened();
+    // ほかのテストと重ならない語と日を使う
+    let old = "2030-04-01";
+    let new = "2030-04-02";
+    let todo = h.add_todo(old, "うなぎ検索の TODO");
+    h.ok(
+        "save_text_doc",
+        json!({ "doc": "note", "date": new, "body": "朝\nうなぎ検索のノート", "baseRev": 0 }),
+    );
+    h.drain();
+
+    let hits = h.ok("search", json!({ "text": "  うなぎ検索  ", "limit": 10 }));
+    let hits = hits.as_array().unwrap();
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert_eq!(hits[0]["kind"], "note");
+    assert_eq!(hits[0]["date"], new);
+    assert_eq!(hits[0]["refId"], new);
+    assert_eq!(hits[0]["body"], "朝\nうなぎ検索のノート");
+    assert_eq!(hits[0]["carriedTo"], Value::Null);
+    assert_eq!(hits[1]["kind"], "todo");
+    assert_eq!(hits[1]["refId"], todo["id"]);
+    assert_eq!(hits[1]["date"], old);
+    assert_eq!(hits[1]["resolutionNote"], Value::Null);
+    // 持ち越し先のたどり方はコア（storage::search）の単体テストで確かめる。ここは渡す形だけ
+    assert_eq!(hits[1]["carriedTo"], Value::Null);
+
+    // 件数の上限と、空の検索語
+    assert_eq!(
+        h.ok("search", json!({ "text": "うなぎ検索", "limit": 1 }))
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        h.ok("search", json!({ "text": "   ", "limit": 10 })),
+        json!([])
+    );
+    assert_eq!(
+        h.ok("search", json!({ "text": "うなぎ検索", "limit": u32::MAX }))
+            .as_array()
+            .unwrap()
+            .len(),
+        2
     );
     h.assert_no_event();
 }

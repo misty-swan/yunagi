@@ -20,7 +20,7 @@ use yunagi_core::domain::logical_date::LogicalDate;
 use yunagi_core::domain::note_body;
 use yunagi_core::domain::note_send;
 use yunagi_core::domain::text_doc::{self, TextDoc as CoreTextDoc};
-use yunagi_core::storage::Ulid;
+use yunagi_core::storage::{Ulid, search};
 
 // ---- 値 ----
 
@@ -899,6 +899,46 @@ impl From<carryover::Confirmed> for CarryoverConfirmed {
         Self {
             created: c.created.into_iter().map(Into::into).collect(),
             closed: c.closed.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+// ---- 検索 ----
+
+mirror_enum! {
+    /// 検索結果の種類（画面設計書 6章の英字ラベル TODO / BLOCKER / NOTE / REFLECTION）。
+    SearchKind <=> search::SearchKind { Todo, Blocker, Note, Reflection }
+}
+
+/// 検索結果の1件（データモデル設計書 4.1）。一致した部分の切り出しは画面が行う。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub kind: SearchKind,
+    /// 元の行：TODO・障害は項目の id、ノート・振り返りはその日の日付（`YYYY-MM-DD`）。
+    pub ref_id: String,
+    pub date: Date,
+    /// 本文の全体（項目は1行の本文、ノート・振り返りは本文すべて）。
+    pub body: String,
+    /// 解消済みの障害の解消メモ（無ければ `null`）。一致したのが本文か解消メモかは画面が見分ける。
+    pub resolution_note: Option<String>,
+    /// 項目の持ち越し先。持ち越し済みでない項目と、ノート・振り返りは `null`。
+    pub carried_to: Option<CarriedTo>,
+}
+
+impl From<search::SearchHit> for SearchHit {
+    fn from(h: search::SearchHit) -> Self {
+        Self {
+            kind: h.kind.into(),
+            ref_id: h.ref_id,
+            date: Date(h.date),
+            body: h.body,
+            resolution_note: h.resolution_note,
+            carried_to: h.carried_to.map(|c| CarriedTo {
+                id: Id(c.id),
+                date: Date(c.date),
+            }),
         }
     }
 }

@@ -17,6 +17,7 @@ import { EditorView, highlightSpecialChars, keymap, type KeyBinding, type ViewUp
 import { DocSaver, type SaveStatus } from "./autosave.svelte";
 import type { LogicalDate, Snapshot, TextDoc } from "./bindings";
 import { core } from "./core";
+import { findMatch } from "./search_match";
 import type { EditorPresence } from "./ui_report.svelte";
 
 /** 読めなかったときに読み直すまでの間（ミリ秒）。 */
@@ -60,6 +61,18 @@ export function cursorLines(state: EditorState): number[] {
     for (let n = a; n <= b; n++) out.add(n);
   }
   return [...out];
+}
+
+/**
+ * 検索パレットの結果から移ったとき：本文（まだ保存していない入力を含む）で検索語 `query` と最初に
+ * 一致した所を選び、見える所へ動かしてエディタへフォーカスを移す。一致しなければ（検索の後に書き
+ * 換えたなど）、先頭へ移る。
+ */
+export function selectMatch(v: EditorView, query: string) {
+  const m = findMatch(v.state.doc.toString(), query);
+  const sel = m === null ? { anchor: 0 } : { anchor: m.from, head: m.to };
+  v.dispatch({ selection: sel, effects: EditorView.scrollIntoView(sel.anchor, { y: "center" }) });
+  v.focus();
 }
 
 export class TextDocEditor {
