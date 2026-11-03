@@ -55,6 +55,11 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::save_text_doc,
         commands::send_note_lines,
         commands::note_marks,
+        commands::carryover_status,
+        commands::carryover_candidates,
+        commands::postpone_carryover,
+        commands::mark_carryover_reshown,
+        commands::confirm_carryover,
         commands::report_ui_state,
         commands::export_markdown,
     ]

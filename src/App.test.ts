@@ -45,13 +45,18 @@ function emptyBoard(date: string): Board {
   return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 }, reflectionRev: 0, noteRev: 0 };
 }
 
-/** 模擬のコア（今日は 11-03 Tue。TODO 9 件のうち完了 3、障害 3 件は未解消、持ち越し 4）。 */
-function mockCore() {
+/**
+ * 模擬のコア（今日は 11-03 Tue。TODO 9 件のうち完了 3、障害 3 件は未解消、持ち越し 4）。
+ * `extra` は、ほかのコマンドの答え（`undefined` なら下の既定）。
+ */
+function mockCore(extra?: (cmd: string, args: unknown) => unknown) {
   const calls: { cmd: string; args: unknown }[] = [];
   const today = counts({ todos: 9, done: 3, leftTodos: 6, leftBlockers: 3, carried: 4 });
   mockIPC(
     (cmd, args) => {
       calls.push({ cmd, args });
+      const answer = extra?.(cmd, args);
+      if (answer !== undefined) return answer;
       switch (cmd) {
         case "startup_status":
           return { state: "ready" };
@@ -62,6 +67,7 @@ function mockCore() {
         case "get_text_doc":
           return { body: "", rev: 0 };
         case "report_ui_state":
+        case "carryover_status":
           return null;
         case "get_overview": {
           const date = (args as { date: string }).date;
@@ -373,4 +379,64 @@ test("項目の「← NOTE」で、送り元の日のノートモードへ移り
   await until(() => document.activeElement?.closest(".note-ed") !== null);
   const line = document.querySelectorAll(".note-ed .cm-line")[1];
   expect(line?.textContent).toBe("- 送った");
+});
+
+test("持ち越し：前面に出したときに、今日の整理モードの上に重ねて出し、出している間は背後を操作できない", async () => {
+  let status: unknown = null;
+  const item = {
+    id: "01JC00000000000000000000A0",
+    date: "2026-11-02",
+    kind: "todo",
+    text: "残った TODO",
+    status: "open",
+    closeReason: null,
+    sortKey: "a0",
+    carryCount: 0,
+    carriedFromId: null,
+    splitFromId: null,
+    resolutionNote: null,
+    origin: "human",
+    agentClientId: null,
+    externalRefId: null,
+    completedAt: null,
+    createdAt: 0,
+    updatedAt: 0,
+    deletedAt: null,
+  };
+  const calls = mockCore((cmd) => {
+    switch (cmd) {
+      case "carryover_status":
+        return status;
+      case "carryover_candidates":
+        return { from: "2026-11-02", reviewThreshold: 3, items: [{ item, review: false }] };
+      case "confirm_carryover":
+        status = null;
+        return { created: [], closed: [] };
+    }
+    return undefined;
+  });
+  app = mount(App, { target: document.body });
+  await until(() => $("main.content")?.dataset.date === TODAY && calls.some((c) => c.cmd === "carryover_status"));
+  // 持ち越しが無ければ出さない
+  expect($("[data-carryover]")).toBeNull();
+
+  // ノートモードで前日を見ている間に日付が変わり、次に前面に出したとき
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  press({ key: "[", code: "BracketLeft", ctrlKey: true });
+  await until(() => $("main.content")?.dataset.mode === "note" && $("main.content")?.dataset.date === "2026-11-02");
+  status = { from: "2026-11-02", prompt: "show" };
+  window.dispatchEvent(new Event("focus"));
+  await until(() => $("[data-carryover]") !== null);
+  await until(() => $("main.content")?.dataset.mode === "board" && $("main.content")?.dataset.date === TODAY);
+  // 外枠を包む要素を inert にする（jsdom は属性にせず、要素の値として持つ）
+  const behind = () => ($(".shell")?.parentElement as HTMLElement & { inert: boolean }).inert;
+  expect(behind()).toBe(true);
+  // 背後の外枠のキー（Mod+J）は効かない
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect($("main.content")?.dataset.mode).toBe("board");
+
+  $("[data-act='all']")!.click();
+  await until(() => $("[data-carryover]") === null);
+  expect(behind()).toBe(false);
+  expect(calls.filter((c) => c.cmd === "confirm_carryover")).toHaveLength(1);
 });

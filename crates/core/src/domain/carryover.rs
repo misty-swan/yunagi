@@ -71,6 +71,9 @@ pub struct Candidates {
     pub from: LogicalDate,
     /// 前回の日の並び順。
     pub items: Vec<Candidate>,
+    /// 見直しの回数（[`review_threshold`]）。画面は、持ち越し回数がこれ以上の印を `--warn` にする
+    /// （障害にも。デザインガイド 6章）。
+    pub review_threshold: i64,
 }
 
 /// 持ち越しの画面に出すもの。前回の日が無ければ `None`。前回の日に出す項目が無ければ、
@@ -91,7 +94,11 @@ pub fn candidates(
                 item,
             })
             .collect();
-        Ok(Some(Candidates { from, items }))
+        Ok(Some(Candidates {
+            from,
+            items,
+            review_threshold: threshold,
+        }))
     })
 }
 
@@ -787,8 +794,16 @@ mod tests {
             ]
         );
         // 設定で変えられる。1 以上の整数でない値は既定の 3
+        let threshold = |conn: &Connection| {
+            candidates(conn, date("2026-11-03"))
+                .unwrap()
+                .unwrap()
+                .review_threshold
+        };
+        assert_eq!(threshold(conn), 3);
         setting::set(conn, REVIEW_THRESHOLD_KEY, "2").unwrap();
         assert_eq!(reviews(conn)[2], ("2回".into(), 2, true));
+        assert_eq!(threshold(conn), 2);
         assert!(!reviews(conn)[1].2);
         for bad in ["0", "-1", "\"2\"", "2.5", "null"] {
             setting::set(conn, REVIEW_THRESHOLD_KEY, bad).unwrap();

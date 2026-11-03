@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 17] = [
+    let tests: [(&str, Test); 18] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -52,6 +52,7 @@ fn main() {
         ("item_commands", item_commands),
         ("text_doc_commands", text_doc_commands),
         ("note_send_commands", note_send_commands),
+        ("carryover_commands", carryover_commands),
         ("overview_counts", overview_counts),
         (
             "export_markdown_writes_one_file_per_day",
@@ -259,6 +260,15 @@ impl Drop for Harness {
     }
 }
 
+/// ボードの一覧（`todos`・`blockers`）の本文。
+fn texts(list: &Value) -> Vec<String> {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .map(|bi| bi["item"]["text"].as_str().unwrap().to_owned())
+        .collect()
+}
+
 fn changed_by(by: &str) -> (&'static str, Value) {
     ("changed", json!({ "by": by }))
 }
@@ -403,13 +413,6 @@ fn item_commands(_: &Path) {
     assert_eq!(moved["updated"], true);
 
     let board = h.ok("get_board", json!({ "date": date }));
-    let texts = |list: &Value| -> Vec<String> {
-        list.as_array()
-            .unwrap()
-            .iter()
-            .map(|bi| bi["item"]["text"].as_str().unwrap().to_owned())
-            .collect()
-    };
     assert_eq!(texts(&board["todos"]), ["を読む", "設計書"]);
     assert_eq!(texts(&board["blockers"]), ["CI が落ちる"]);
     assert_eq!(board["todos"][0]["carriedTo"], Value::Null);
@@ -582,6 +585,162 @@ fn note_send_commands(_: &Path) {
             json!({ "date": date, "body": body, "baseRev": 1, "from": 0, "to": 1, "kind": "todo" }),
         ),
         json!({ "kind": "invalid_argument", "reason": "note_line" })
+    );
+    h.assert_no_event();
+}
+
+/// 持ち越しの画面（S-03）のコマンド：状態、一覧、後回しと1回だけの再表示、見直しを含む確定と、
+/// 確定の断り。
+fn carryover_commands(_: &Path) {
+    let h = Harness::opened();
+    let today: LogicalDate = h.today().parse().unwrap();
+    let yesterday = today.yesterday().unwrap().to_string();
+    let today = today.to_string();
+    // 前回の日（昨日）に、見直しの回数に達した TODO・ふつうの TODO・障害を置く
+    let reviewed = h.add_todo(&yesterday, "3回持ち越した");
+    h.core
+        .read(|conn| {
+            conn.execute(
+                "UPDATE item SET carry_count = 3 WHERE id = ?1",
+                [reviewed["id"].as_str().unwrap()],
+            )
+            .map_err(yunagi_core::storage::StorageError::from)
+        })
+        .unwrap();
+    let plain = h.add_todo(&yesterday, "ふつう");
+    let blocker = h.ok(
+        "add_item",
+        json!({ "date": yesterday, "kind": "blocker", "text": "権限待ち", "position": { "at": "last" } }),
+    );
+    let not_chosen = h.add_todo(&yesterday, "選ばない");
+    h.drain();
+
+    assert_eq!(
+        h.ok("carryover_status", json!({})),
+        json!({ "from": yesterday, "prompt": "show" })
+    );
+    let list = h.ok("carryover_candidates", json!({}));
+    assert_eq!(list["from"], yesterday);
+    assert_eq!(list["reviewThreshold"], 3);
+    let shown: Vec<(&str, bool)> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["item"]["text"].as_str().unwrap(),
+                c["review"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("3回持ち越した", true),
+            ("ふつう", false),
+            ("権限待ち", false),
+            ("選ばない", false),
+        ]
+    );
+
+    // 後回し（Esc）の後は、次に前面に出したとき1回だけ再表示し、以後はパレットから開く。
+    // どちらも day の行だけなので、画面には知らせない
+    h.ok("postpone_carryover", json!({}));
+    assert_eq!(
+        h.ok("carryover_status", json!({}))["prompt"],
+        "reshow_on_focus"
+    );
+    assert_eq!(h.ok("mark_carryover_reshown", json!({})), json!(true));
+    assert_eq!(h.ok("mark_carryover_reshown", json!({})), json!(false));
+    assert_eq!(h.ok("carryover_status", json!({}))["prompt"], "on_request");
+    h.ok("postpone_carryover", json!({}));
+    assert_eq!(h.ok("carryover_status", json!({}))["prompt"], "on_request");
+    h.assert_no_event();
+
+    // 見直しの誤り（障害への見直し）と、画面に出していた前回の日が違うときは、何も書かずに断る
+    assert_eq!(
+        h.err(
+            "confirm_carryover",
+            json!({ "decision": {
+                "from": yesterday,
+                "selection": { "select": "all" },
+                "reviews": [{ "id": blocker["id"], "review": { "review": "drop" } }],
+            } }),
+        ),
+        json!({ "kind": "invalid_argument", "reason": "wrong_kind" })
+    );
+    assert_eq!(
+        h.err(
+            "confirm_carryover",
+            json!({ "decision": { "from": "2000-01-01", "selection": { "select": "none" }, "reviews": [] } }),
+        ),
+        json!({ "kind": "conflict", "reason": "previous_day_changed", "previousDay": yesterday })
+    );
+    h.assert_no_event();
+
+    // 選んだものを持ち越す。見直しの「分割する」は、どのボタンでも反映する
+    let confirmed = h.ok(
+        "confirm_carryover",
+        json!({ "decision": {
+            "from": yesterday,
+            "selection": { "select": "selected", "ids": [plain["id"], blocker["id"]] },
+            "reviews": [{ "id": reviewed["id"], "review": { "review": "split", "children": ["前半", " ", "後半"] } }],
+        } }),
+    );
+    assert_eq!(h.next_event(), changed_by("screen"));
+    let created: Vec<(&str, &str, i64)> = confirmed["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["text"].as_str().unwrap(),
+                i["kind"].as_str().unwrap(),
+                i["carryCount"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        created,
+        [
+            ("前半", "todo", 0),
+            ("後半", "todo", 0),
+            ("ふつう", "todo", 1),
+            ("権限待ち", "blocker", 1),
+        ]
+    );
+    assert_eq!(confirmed["created"][0]["splitFromId"], reviewed["id"]);
+    assert_eq!(confirmed["created"][2]["carriedFromId"], plain["id"]);
+    assert_eq!(confirmed["closed"][0]["id"], reviewed["id"]);
+    assert_eq!(confirmed["closed"][0]["status"], "dropped");
+    assert_eq!(confirmed["closed"][0]["closeReason"], "split");
+
+    // 今日のボードの先頭に、前回の日の順のまま入る
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(
+        texts(&board["todos"])[..3],
+        ["前半".to_owned(), "後半".to_owned(), "ふつう".to_owned()]
+    );
+    assert_eq!(texts(&board["blockers"])[0], "権限待ち");
+    // 選ばなかった TODO は前回の日のまま
+    let past = h.ok("get_board", json!({ "date": yesterday }));
+    let left = past["todos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bi| bi["item"]["id"] == not_chosen["id"])
+        .unwrap();
+    assert_eq!(left["item"]["status"], "open");
+    assert_eq!(left["carriedTo"], Value::Null);
+
+    // 持ち越しを終えた後は、状態が null になり、二度目の確定は断る
+    assert_eq!(h.ok("carryover_status", json!({})), Value::Null);
+    assert_eq!(
+        h.err(
+            "confirm_carryover",
+            json!({ "decision": { "from": yesterday, "selection": { "select": "all" }, "reviews": [] } }),
+        ),
+        json!({ "kind": "conflict", "reason": "carryover_done" })
     );
     h.assert_no_event();
 }

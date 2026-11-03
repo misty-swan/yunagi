@@ -217,6 +217,14 @@ impl Changes for TextSave {
     }
 }
 
+impl Changes for crate::types::CarryoverConfirmed {
+    /// 項目を作らなくても（「持ち越さない」）、持ち越しを終えた記録を書くので、変えたとして知らせる
+    /// （ほかの窓は持ち越しの状態を読み直す）。
+    fn changed(&self) -> bool {
+        true
+    }
+}
+
 impl AppCore {
     /// まだデータベースを開いていないコア。知らせは `notify` に渡す。
     pub fn new(notify: Notify) -> Arc<Self> {

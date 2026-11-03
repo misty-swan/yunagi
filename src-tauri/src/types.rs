@@ -14,6 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
 use yunagi_core::domain::agent::ItemField as CoreItemField;
 use yunagi_core::domain::board;
+use yunagi_core::domain::carryover;
 use yunagi_core::domain::item::{self as core_item, CloseReason as CoreCloseReason};
 use yunagi_core::domain::logical_date::LogicalDate;
 use yunagi_core::domain::note_body;
@@ -735,6 +736,173 @@ impl From<note_send::Sent> for SendResult {
     }
 }
 
+// ---- 持ち越し ----
+
+mirror_enum! {
+    /// 持ち越しの画面を、いつ出すか（画面設計書 5章）。
+    /// - `show`：まだ後回しにしていない。表示したときに出す。
+    /// - `reshow_on_focus`：後回しにしたが、まだ再表示していない。次にアプリを前面に出したとき
+    ///   1回だけ出し、`mark_carryover_reshown` で記録する。
+    /// - `on_request`：後回しにして、再表示も済んだ。自動では出さず、パレットの「持ち越しを開く」で開く。
+    CarryoverPrompt <=> carryover::Prompt { Show, ReshowOnFocus, OnRequest }
+}
+
+/// 今日の持ち越しが残っているときの状態（`carryover_status`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CarryoverStatus {
+    /// 前回の日。
+    pub from: Date,
+    pub prompt: CarryoverPrompt,
+}
+
+impl From<carryover::Pending> for CarryoverStatus {
+    fn from(p: carryover::Pending) -> Self {
+        Self {
+            from: Date(p.from),
+            prompt: p.prompt.into(),
+        }
+    }
+}
+
+/// 持ち越しの画面に出す1件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CarryoverCandidate {
+    /// 前回の日の項目（未完了の TODO か、未解消の障害）。
+    pub item: Item,
+    /// 見直しの選択肢（分割する／やめる）を添えるか：持ち越し回数が見直しの回数（設定）以上の TODO。
+    pub review: bool,
+}
+
+/// 持ち越しの画面の中身（`carryover_candidates`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CarryoverList {
+    /// 前回の日。確定（`confirm_carryover`）にそのまま渡す。
+    pub from: Date,
+    /// 前回の日の並び順。
+    pub items: Vec<CarryoverCandidate>,
+    /// 見直しの回数（設定）。持ち越し回数がこれ以上の印を `--warn` にする（障害にも。デザインガイド 6章）。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub review_threshold: i64,
+}
+
+impl From<carryover::Candidates> for CarryoverList {
+    fn from(c: carryover::Candidates) -> Self {
+        Self {
+            from: Date(c.from),
+            items: c
+                .items
+                .into_iter()
+                .map(|c| CarryoverCandidate {
+                    item: c.item.into(),
+                    review: c.review,
+                })
+                .collect(),
+            review_threshold: c.review_threshold,
+        }
+    }
+}
+
+/// 持ち越しの画面のボタン。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "select", rename_all = "snake_case")]
+pub enum CarryoverSelection {
+    /// 「すべて持ち越す」：確定の時点で持ち越しの対象のものをすべて。
+    All,
+    /// 「選んだものを持ち越す」：チェックの付いた項目 `ids` だけ。
+    Selected { ids: Vec<Id> },
+    /// 「持ち越さない」。
+    None,
+}
+
+/// 見直しの選択。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "review", rename_all = "snake_case")]
+pub enum CarryoverReview {
+    /// やめる。
+    Drop,
+    /// 外部ツールへ戻す（外部課題と紐付いた TODO だけ）。
+    ReturnExternal,
+    /// 分割する：子の TODO の本文（書いた順）。空の子は作らず、子が無ければ見直しを選ばなかったものとする。
+    Split { children: Vec<String> },
+}
+
+/// 見直しを選んだ TODO と、その選択。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CarryoverReviewChoice {
+    pub id: Id,
+    pub review: CarryoverReview,
+}
+
+/// 持ち越しの確定の中身（`confirm_carryover`）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CarryoverDecision {
+    /// 画面に出していた前回の日（`CarryoverList` の `from`）。
+    pub from: Date,
+    pub selection: CarryoverSelection,
+    /// 見直しを選んだ TODO（どのボタンで確定しても反映する）。同じ項目が2回あれば後のものを使う。
+    pub reviews: Vec<CarryoverReviewChoice>,
+}
+
+impl From<CarryoverDecision> for carryover::Decision {
+    fn from(d: CarryoverDecision) -> Self {
+        Self {
+            from: d.from.0,
+            selection: match d.selection {
+                CarryoverSelection::All => carryover::Selection::All,
+                CarryoverSelection::Selected { ids } => {
+                    carryover::Selection::Selected(ids.into_iter().map(|id| id.0).collect())
+                }
+                CarryoverSelection::None => carryover::Selection::None,
+            },
+            reviews: d
+                .reviews
+                .into_iter()
+                .map(|c| {
+                    let review = match c.review {
+                        CarryoverReview::Drop => carryover::Review::Drop,
+                        CarryoverReview::ReturnExternal => carryover::Review::ReturnExternal,
+                        CarryoverReview::Split { children } => carryover::Review::Split(children),
+                    };
+                    (c.id.0, review)
+                })
+                .collect(),
+        }
+    }
+}
+
+/// 持ち越しを確定した結果。確定を Mod+Z で取り消すかはまだ決めていない（画面設計書 11章）。
+/// 取り消すことにしたときは、作った項目と取りやめた項目をここから取り消しの履歴に持つ。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct CarryoverConfirmed {
+    /// 今日に作った項目（持ち越した項目と分割の子）。今日の並び順。
+    pub created: Vec<Item>,
+    /// 見直しで取りやめた、前回の日の項目（操作の後）。
+    pub closed: Vec<Item>,
+}
+
+impl From<carryover::Confirmed> for CarryoverConfirmed {
+    fn from(c: carryover::Confirmed) -> Self {
+        Self {
+            created: c.created.into_iter().map(Into::into).collect(),
+            closed: c.closed.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 // ---- 画面の入力中の状態 ----
 
 /// 画面が知らせる、入力中の状態（アーキテクチャ設計書 4.1）。変わるたびに全体を知らせ直す。
@@ -1037,6 +1205,12 @@ pub enum Conflict {
     /// 障害に、違う解消メモがすでにある（エージェントの操作だけで起きる）。
     #[serde(rename_all = "camelCase")]
     NoteExists { resolution_note: String },
+    /// 持ち越しの画面に出していた前回の日が、今の前回の日と違う（その間に、より新しい日に項目か
+    /// ノートができた）。`previousDay` は今の前回の日。画面は一覧を読み直す。
+    #[serde(rename_all = "camelCase")]
+    PreviousDayChanged { previous_day: Option<Date> },
+    /// 今日の持ち越しはすでに終えている（古い画面からの二度目の確定など）。
+    CarryoverDone,
 }
 
 /// 削除を戻せない理由。
@@ -1141,6 +1315,22 @@ impl From<note_send::SendError> for CommandError {
             E::Stale { .. } => Self::Internal {
                 detail: crate::app_core::chain(&e),
             },
+        }
+    }
+}
+
+impl From<carryover::CarryoverError> for CommandError {
+    fn from(e: carryover::CarryoverError) -> Self {
+        use carryover::CarryoverError as E;
+        match e {
+            E::PreviousDayChanged { previous_day } => {
+                Self::Conflict(Conflict::PreviousDayChanged {
+                    previous_day: previous_day.map(Date),
+                })
+            }
+            E::AlreadyDone => Self::Conflict(Conflict::CarryoverDone),
+            E::InvalidArgument(a) => Self::InvalidArgument { reason: a.into() },
+            E::Storage(_) => Self::storage(&e),
         }
     }
 }

@@ -81,6 +81,7 @@ function mockCore(startup: Startup, handle: Handler = () => undefined) {
         case "get_text_doc":
           return { body: "", rev: 0 };
         case "report_ui_state":
+        case "carryover_status":
           return null;
         case "get_overview":
           return {
