@@ -269,6 +269,10 @@ impl Changes for SendOutcome {
     fn changed(&self) -> bool {
         self.changed
     }
+
+    fn committed(&self) -> bool {
+        matches!(self.result, SendResult::Sent { .. })
+    }
 }
 
 /// ノートの `from` 行目から `to` 行目まで（1始まり。両端を含む）を、1行ごとに `kind` の項目として
@@ -277,8 +281,9 @@ impl Changes for SendOutcome {
 /// 何も書かずに最新を返す（`SendResult::Stale`。画面は取り込んでから送り直す）。行の番号の誤りは
 /// `invalid_argument`（`note_line`）。
 ///
-/// 再試行を待つ入力の保存ではない（失敗しても画面は送り直さず、本文はふだんの自動保存が送る）ので、
-/// 保存の失敗中（アーキテクチャ設計書 4.1）を始めも終えもしない。
+/// エディタの本文の保存を兼ねるので、ノートの保存と同じく保存として数える（アーキテクチャ設計書 4.1
+/// 「保存に失敗している間」）：書けたら保存の失敗中を終え、保存先の問題で失敗したら始める（行送りは
+/// 送り直さないが、本文はふだんの自動保存が内容を持ったまま再試行する）。
 #[tauri::command]
 pub async fn send_note_lines(
     core: Core<'_>,
@@ -290,7 +295,7 @@ pub async fn send_note_lines(
     kind: ItemKind,
 ) -> Result<SendResult, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(ScreenWrite::Operation, |conn| {
+        core.screen_write(ScreenWrite::Save, |conn| {
             let request = note_send::SendLines {
                 date: date.0,
                 body: &body,

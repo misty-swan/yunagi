@@ -26,15 +26,18 @@ const DIFF_CELLS_LIMIT = 4_000_000;
 
 /**
  * `a` と `b` の最長共通部分列の行の組（a の位置, b の位置。前から順）を、Myers の O((N+M)D) の方法で
- * 求める（D は足した行と消した行の数）。途中の状態を覚える量が DIFF_CELLS_LIMIT を超えるほど変えた行が
- * 多ければ、求めずに `null`。
+ * 求める（D は足した行と消した行の数）。途中の状態を覚える量が、表を埋める方法の 1/4（上限
+ * DIFF_CELLS_LIMIT）を超えるほど変えた行が多ければ、求めずに `null`（表を埋める方法で求める）。
  */
 function myersPairs(a: string[], b: string[]): [number, number][] | null {
   const n = a.length;
   const m = b.length;
   const max = n + m;
   const off = max + 1;
-  const maxD = Math.min(max, Math.floor(DIFF_CELLS_LIMIT / (2 * max + 3)));
+  // 覚える量（手の数×対角線の数）を、表を埋める方法の 1/4 までにする（あきらめて表を埋めても、
+  // 両方にかかる時間が表だけのときの 1.25 倍に収まるように）
+  const budget = Math.min(DIFF_CELLS_LIMIT, Math.floor((n * m) / 4));
+  const maxD = Math.min(max, Math.floor(budget / (2 * max + 3)));
   let v = new Int32Array(2 * max + 3);
   // trace[d]：d 回目の手を指す前の、対角線 k ごとの最も進んだ x
   const trace: Int32Array[] = [];

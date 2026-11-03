@@ -42,7 +42,7 @@ interface Core {
   /** 送った行（模擬の照合：本文が同じ行に印を付ける）。 */
   sends: { text: string; kind: ItemKind; itemId: string }[];
   /** 真なら、ノートを読む・行を送る・印を求めるのに失敗する。 */
-  fail: { read?: boolean; send?: boolean; marks?: boolean };
+  fail: { read?: boolean; save?: boolean; send?: boolean; marks?: boolean };
   /** あれば、次の印の問い合わせの答えを、これが解決するまで待たせる。 */
   marksGate: Promise<void> | null;
 }
@@ -61,6 +61,7 @@ function mockCore(body: string): Core {
         return snap;
       }
       case "save_text_doc":
+        if (c.fail.save) throw { kind: "storage", detail: "x" };
         if (a.baseRev !== c.note.rev) return { result: "stale", latest: { ...c.note } };
         c.note = { body: a.body as string, rev: c.note.rev + 1 };
         return { result: "saved", rev: c.note.rev, updated: true };
@@ -117,7 +118,15 @@ const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim(
 interface Started {
   core: Core;
   view: () => EditorView;
-  props: { rev: number; visible: boolean; date: string; items: string; jump: NoteSource | null; narrow: boolean };
+  props: {
+    rev: number;
+    visible: boolean;
+    date: string;
+    items: string;
+    itemsDate: string | null;
+    jump: NoteSource | null;
+    narrow: boolean;
+  };
   notice: Notice;
 }
 
@@ -131,6 +140,7 @@ async function start(body: string, opts: { font?: FontLoader; visible?: boolean 
     visible: opts.visible ?? true,
     date: TODAY,
     items: "",
+    itemsDate: TODAY as string | null,
     jump: null as NoteSource | null,
     narrow: false,
   });
@@ -157,6 +167,9 @@ async function start(body: string, opts: { font?: FontLoader; visible?: boolean 
       notice,
       get items() {
         return props.items;
+      },
+      get itemsDate() {
+        return props.itemsDate;
       },
       get jump() {
         return props.jump;
@@ -635,4 +648,43 @@ test("時刻付き見出しの行を同じ本文で書き換えても、時刻�
   view().dispatch({ changes: { from: line.from, to: line.to, insert: line.text } });
   flushSync();
   expect(text(qa(".note-ed .cm-line")[0].querySelector(".cm-tm"))).toBe("10:00");
+});
+
+test("送信済みの印のある行を消したら、印を次の行へ移さずに外す", async () => {
+  const { core, view, props } = await start("- 送った\n- 次");
+  core.sends.push({ text: "- 送った", kind: "todo", itemId: "item-x" });
+  props.items = "item-x";
+  await until(() => sentLabels()[0] === "→ TODO");
+  core.fail.marks = true;
+  view().dispatch({ changes: { from: 0, to: view().state.doc.line(2).from } });
+  flushSync();
+  expect(sentLabels()).toEqual([""]);
+  expect(sentCounts()).toEqual(["0", "0"]);
+});
+
+test("保存に失敗している間に行送りが本文を保存したら、「保存できていません」を終える", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const { core, view } = await start("- a");
+  // 保存が失敗する
+  core.fail.save = true;
+  view().dispatch({ changes: { from: 3, insert: "b" }, selection: { anchor: 4 }, userEvent: "input" });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(tracker!.note.saver!.failure).not.toBeNull();
+  // 行送りは成功し、本文を保存する
+  q(".note-ed .cm-content")!.focus();
+  press(T);
+  await until(() => core.note.body === "- ab");
+  await until(() => tracker!.note.saver!.failure === null && !tracker!.note.saver!.busy);
+});
+
+test("右クリックのメニューは、窓の右・下の端の近くでも窓の中に出す", async () => {
+  await start("- a");
+  const content = q(".note-ed .cm-content")!;
+  content.focus();
+  content.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: window.innerWidth + 50, clientY: window.innerHeight + 50 }),
+  );
+  await until(() => q(".line-menu") !== null && document.activeElement === qa(".line-menu button")[0]);
+  expect(parseFloat(q(".line-menu")!.style.left)).toBeLessThanOrEqual(window.innerWidth);
+  expect(parseFloat(q(".line-menu")!.style.top)).toBeLessThanOrEqual(window.innerHeight);
 });

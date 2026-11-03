@@ -95,6 +95,14 @@
     if (session.date !== source.date) session.show(source.date);
     shell.setMode("note");
   }
+  // 移り終える前に、ほかの日へ移った・整理モードに戻ったら、移るのをやめる（後で思わぬときに
+  // カーソルを動かさないため）
+  $effect(() => {
+    const j = noteJump;
+    const showing = session.showing;
+    const mode = shell.mode;
+    if (j !== null && (showing !== j.date || mode !== "note")) untrack(() => (noteJump = null));
+  });
   /** その日のノートから送った項目（ノートが送信済みの印を求め直すため。送った項目はノートと同じ日に作る）。 */
   const boardItems = $derived(
     [...(session.board?.todos ?? []), ...(session.board?.blockers ?? [])]
@@ -133,6 +141,7 @@
           {mac}
           {notice}
           items={boardItems}
+          itemsDate={session.board?.date ?? null}
           jump={noteJump}
           onJumped={() => (noteJump = null)}
           bind:view={noteView}

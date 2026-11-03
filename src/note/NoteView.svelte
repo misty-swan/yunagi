@@ -42,6 +42,7 @@
     mac,
     notice,
     items,
+    itemsDate,
     jump,
     onJumped,
     font = monoFont,
@@ -62,10 +63,12 @@
     mac: boolean;
     notice: Notice;
     /**
-     * その日のノートから送った項目（行送りで作った、その日の項目の id を `,` でつないだもの）。増えた・
-     * 消えたら送信済みの印を求め直し、空なら印は無いのでコアに問い合わせない。
+     * `itemsDate` の日のノートから送った項目（行送りで作った、その日の項目の id を `,` でつないだもの）。
+     * 増えた・消えたら送信済みの印を求め直し、エディタの日の分が空なら、印は無いのでコアに問い合わせない。
      */
     items: string;
+    /** `items` を読んだボードの日（日を移った直後は、エディタの日とずれる）。 */
+    itemsDate: LogicalDate | null;
     /** 整理モードの項目の「← NOTE」から移る先（無ければ `null`）。移り終えたら `onJumped` を呼ぶ。 */
     jump: NoteSource | null;
     onJumped: () => void;
@@ -291,8 +294,9 @@
     if (v === null || d === null) return;
     const n = ++marksSeq;
     const doc = v.state.doc;
-    // その日のノートから送った項目が無ければ、印は無い（打つたびに本文をコアへ送らない）
-    if (items === "" && !sentHere) {
+    // その日のノートから送った項目が無ければ、印は無い（打つたびに本文をコアへ送らない）。ボードがまだ
+    // ほかの日のものなら、分からないので問い合わせる
+    if (itemsDate === d && items === "" && !sentHere) {
       if (v.state.field(marksField).marks.length > 0) v.dispatch({ effects: setMarks.of([]) });
       syncOutline(v.state);
       marked = true;
@@ -346,7 +350,12 @@
   // その日のノートから送った項目が増えた・消えたら（送り先を消すと印が外れる）、印を求め直す
   $effect(() => {
     void items;
-    untrack(() => refreshMarks(0));
+    const d = itemsDate;
+    untrack(() => {
+      // 送った後にボードを読み直したら、送った項目は `items` に入る（消した後も問い合わせ続けない）
+      if (d === loaded) sentHere = false;
+      refreshMarks(0);
+    });
   });
 
   // 「← NOTE」から移る：その日の本文と印を読み終えてから、送り元の行の終わりにカーソルを置く。
@@ -416,9 +425,20 @@
     const sel = v.state.selection.main;
     if (pos !== null && (pos < sel.from || pos > sel.to || sel.empty)) v.dispatch({ selection: { anchor: pos } });
     menu = { x: e.clientX, y: e.clientY };
-    void tick().then(() => menuEl?.querySelector<HTMLElement>("button")?.focus());
+    void tick().then(() => {
+      if (menu === null || menuEl === null) return;
+      // 窓の右・下の端の近くでは、窓の中に収まるように寄せる
+      const r = menuEl.getBoundingClientRect();
+      const x = Math.max(0, Math.min(menu.x, window.innerWidth - r.width - MENU_MARGIN_PX));
+      const y = Math.max(0, Math.min(menu.y, window.innerHeight - r.height - MENU_MARGIN_PX));
+      if (x !== menu.x || y !== menu.y) menu = { x, y };
+      menuEl.querySelector<HTMLElement>("button")?.focus();
+    });
     return true;
   }
+
+  /** メニューを窓の端に寄せたときに、端から空ける間（px）。 */
+  const MENU_MARGIN_PX = 4;
 
   /** メニューを閉じる。`back` ならエディタにフォーカスを戻す。 */
   function closeMenu(back: boolean) {

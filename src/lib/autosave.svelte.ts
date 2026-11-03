@@ -217,11 +217,30 @@ abstract class Saver<P> {
     })();
     this.#status.update();
     await this.#inFlight;
+    this.#afterSend();
+  }
+
+  /** 送り終えた後（保存と `exclusive` で共通）：次の保存の待ちを決め、閉じるのを待っていれば閉じる。 */
+  #afterSend() {
     this.#inFlight = null;
     this.settled();
     this.#schedule();
     if (this.#closing && !this.busy) this.#finish();
     this.#status.update();
+  }
+
+  /**
+   * 送ったものが、まだ保存していない内容を保存し終えた（`exclusive` の中で、保存を兼ねる送りが成功した
+   * とき）。再試行の待ちと「保存できていません」を終える。
+   */
+  protected markSaved() {
+    this.#failures = 0;
+    this.#failure = null;
+    if (this.take() === null) {
+      this.#pendingSince = null;
+      this.#immediate = false;
+      this.#clearTimer();
+    }
   }
 
   /**
@@ -240,11 +259,7 @@ abstract class Saver<P> {
     try {
       return await run;
     } finally {
-      this.#inFlight = null;
-      this.settled();
-      this.#schedule();
-      if (this.#closing && !this.busy) this.#finish();
-      this.#status.update();
+      this.#afterSend();
     }
   }
 
@@ -462,7 +477,8 @@ export class DocSaver extends Saver<Snapshot> {
         r = await core.sendNoteLines(this.date, body, this.#saved.rev, range.from, range.to, kind);
         if (r.result === "sent") {
           if (r.rev >= this.#saved.rev) this.#saved = { body, rev: r.rev };
-          // 送っている間の入力は、ふだんの保存で送る
+          // 本文を保存したので、保存の失敗中を終える。送っている間の入力は、ふだんの保存で送る
+          this.markSaved();
           if (this.#editor.text() !== body) this.markPending();
           return r;
         }

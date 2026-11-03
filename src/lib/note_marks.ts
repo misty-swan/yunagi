@@ -7,7 +7,7 @@
 // - 同じ行に印が2つ付くこともある（同じ本文の行を2回送った後に1行を消したときなど）。そのときは送り先の
 //   種類ごとに1つずつ出す。
 
-import { RangeSetBuilder, StateEffect, StateField, type EditorState } from "@codemirror/state";
+import { MapMode, RangeSetBuilder, StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import type { Id, ItemKind, NoteMark } from "./bindings";
 
@@ -69,11 +69,15 @@ export const marksField = StateField.define<SentMarks>({
     let next = value;
     if (tr.docChanged && value.marks.length > 0) {
       // 行の始まりに入れた文字の後ろへ動かす（行の始まりで Enter を押したら、印は下へ動いた本文に付いて
-      // いく。文字を入れただけなら、行の途中になった位置を build がその行の始まりにそろえる）
-      next = build(
-        tr.state,
-        value.marks.map((m) => ({ ...m, pos: tr.changes.mapPos(m.pos, 1) })),
-      );
+      // いく。文字を入れただけなら、行の途中になった位置を build がその行の始まりにそろえる）。行の
+      // 始まりの後ろの文字を消したら（行を消した・行の頭を書き換えた）、印は外す（本文が変わったので、
+      // 求め直しても外れる。消した行の印を次の行に移さないため）
+      const moved: Mark[] = [];
+      for (const m of value.marks) {
+        const pos = tr.changes.mapPos(m.pos, 1, MapMode.TrackAfter);
+        if (pos !== null) moved.push({ ...m, pos });
+      }
+      next = build(tr.state, moved);
     }
     for (const e of tr.effects) {
       if (!e.is(setMarks)) continue;
