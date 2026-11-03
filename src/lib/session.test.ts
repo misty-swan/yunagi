@@ -138,7 +138,7 @@ test("見つからないときは、探した場所を持つ", async () => {
 
 test("コマンドの失敗は CoreError で、コアのエラーの形をそのまま持つ", async () => {
   mockIPC((cmd) => {
-    if (cmd === "save_item_text") {
+    if (cmd === "save_item") {
       throw { kind: "invalid_argument", reason: "empty_text" };
     }
     if (cmd === "move_item") {
@@ -146,7 +146,7 @@ test("コマンドの失敗は CoreError で、コアのエラーの形をその
       throw "invalid args `id` for command `move_item`";
     }
   });
-  const e1 = await core.saveItemText("01JC0000000000000000000000", "").catch((e) => e);
+  const e1 = await core.saveItem("01JC0000000000000000000000", { text: "" }).catch((e) => e);
   expect(e1).toBeInstanceOf(CoreError);
   expect(e1.error).toEqual({ kind: "invalid_argument", reason: "empty_text" });
   const e2 = await core.moveItem("x", { at: "first" }).catch((e) => e);
@@ -160,15 +160,20 @@ test("コマンドの引数は camelCase で渡す", async () => {
     return { result: "saved", rev: 2, updated: true };
   });
   await core.saveTextDoc("note", "2026-11-03", "本文", 1);
-  await core.setItemClosed("01JC0000000000000000000000", 1700000000000);
+  await core.saveItem("01JC0000000000000000000000", {
+    status: { before: "open", closedAt: 1700000000000, changedAt: 1700000000000 },
+  });
   expect(calls).toEqual([
     {
       cmd: "save_text_doc",
       args: { doc: "note", date: "2026-11-03", body: "本文", baseRev: 1 },
     },
     {
-      cmd: "set_item_closed",
-      args: { id: "01JC0000000000000000000000", closedAt: 1700000000000 },
+      cmd: "save_item",
+      args: {
+        id: "01JC0000000000000000000000",
+        fields: { status: { before: "open", closedAt: 1700000000000, changedAt: 1700000000000 } },
+      },
     },
   ]);
 });

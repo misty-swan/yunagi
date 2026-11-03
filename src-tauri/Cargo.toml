@@ -32,3 +32,9 @@ ts-rs.workspace = true
 [[test]]
 name = "bridge"
 harness = false
+
+# 強制終了の試験（テスト計画書 4.1）。コアを子プロセスで動かして SIGKILL で止める。既定ディレクトリを
+# 一時フォルダにするため、bridge と同じく main から走らせる
+[[test]]
+name = "crash"
+harness = false

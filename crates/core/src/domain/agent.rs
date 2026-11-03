@@ -72,8 +72,8 @@ pub trait UiState {
     /// 日付 `date` のノート・振り返り `doc` の守る行。エディタにフォーカスが無く、まだ保存していない
     /// 入力も無いとき（画面が知らせていないとき）は `None`。
     ///
-    /// いまは受け取る形だけで、`edit_note` の判定（守る行への書き換えと、版が古いときの
-    /// `conflict`）は接続口の作業で使う。
+    /// `edit_note` の判定（守る行への書き換えと、版が古いときの `conflict`）に使う
+    /// （`crate::domain::text_doc::edit_note`）。
     fn protected_lines(&self, doc: TextDoc, date: LogicalDate) -> Option<ProtectedLines>;
 }
 
@@ -162,7 +162,7 @@ pub fn require_save_working(agent: &Agent<'_>) -> Result<(), StorageUnavailable>
 pub(crate) mod test_support {
     //! エージェントの書き込みのテストで共通に使うもの。
 
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
     use super::*;
@@ -179,6 +179,7 @@ pub(crate) mod test_support {
     pub struct FakeUi {
         pub save_failing: bool,
         pub editing: Mutex<HashSet<(Ulid, ItemField)>>,
+        pub protected: Mutex<HashMap<(TextDoc, LogicalDate), ProtectedLines>>,
     }
 
     impl FakeUi {
@@ -186,6 +187,17 @@ pub(crate) mod test_support {
             let ui = Self::default();
             ui.editing.lock().unwrap().insert((item_id, field));
             ui
+        }
+
+        /// `date` の `doc` の守る行を、版 `rev` の `lines` にする（空なら守る行が無い知らせ）。
+        pub fn protect(&self, doc: TextDoc, date: LogicalDate, rev: i64, lines: &[usize]) {
+            self.protected.lock().unwrap().insert(
+                (doc, date),
+                ProtectedLines {
+                    rev,
+                    lines: lines.to_vec(),
+                },
+            );
         }
     }
 
@@ -198,8 +210,8 @@ pub(crate) mod test_support {
             self.editing.lock().unwrap().contains(&(item_id, field))
         }
 
-        fn protected_lines(&self, _: TextDoc, _: LogicalDate) -> Option<ProtectedLines> {
-            None
+        fn protected_lines(&self, doc: TextDoc, date: LogicalDate) -> Option<ProtectedLines> {
+            self.protected.lock().unwrap().get(&(doc, date)).cloned()
         }
     }
 }

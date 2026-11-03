@@ -13,10 +13,10 @@ import {
   type Deleted,
   type Id,
   type Item,
+  type ItemFields,
   type ItemKind,
   type ItemOutcome,
   type LogicalDate,
-  type Millis,
   type Position,
   type Snapshot,
   type SplitResult,
@@ -72,12 +72,12 @@ export const core = {
   getBoard: (date: LogicalDate) => call<Board>("get_board", { date }),
   addItem: (date: LogicalDate, kind: ItemKind, text: string, position: Position) =>
     call<Item>("add_item", { date, kind, text, position }),
-  saveItemText: (id: Id, text: string) => call<ItemOutcome>("save_item_text", { id, text }),
-  /** `closedAt` が数なら完了・解消（その時刻を完了時刻に）、`null` なら未完了・未解消に戻す。 */
-  setItemClosed: (id: Id, closedAt: Millis | null) =>
-    call<ItemOutcome>("set_item_closed", { id, closedAt }),
-  saveResolutionNote: (id: Id, note: string) =>
-    call<ItemOutcome>("save_resolution_note", { id, note }),
+  /**
+   * 項目の、利用者が変えた欄だけを保存する（無い欄には触れない）。状態を変えたときは、変える前の
+   * 値と最初の操作の時刻を添える（エージェントとの行き違いの判定に使う）。画面からは、自動保存
+   * （`autosave.svelte.ts` の `ItemSaves`）を通して呼ぶ。
+   */
+  saveItem: (id: Id, fields: ItemFields) => call<ItemOutcome>("save_item", { id, fields }),
   deleteItem: (id: Id) => call<Deleted>("delete_item", { id }),
   restoreItem: (deleted: Deleted) => call<Item>("restore_item", { deleted }),
   moveItem: (id: Id, position: Position) => call<ItemOutcome>("move_item", { id, position }),
