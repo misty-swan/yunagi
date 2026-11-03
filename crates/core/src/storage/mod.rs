@@ -2,8 +2,8 @@
 //! （docs/design/01-architecture.md 2章・3章、docs/design/02-data-model.md 1章）。
 //!
 //! データベースは [`Database::open`] で開く。開くときに、未適用のマイグレーション
-//! （スキーマを番号順に更新する手順）を自動で適用する（[`migration`] モジュール）。
-//! 開く前に `yunagi.lock` のロック（[`DbLock`]）を取る（[`lock`] モジュール）。
+//! （スキーマを番号順に更新する手順）を自動で適用する（`migration` モジュール）。
+//! 開く前に `yunagi.lock` のロック（[`DbLock`]）を取る（`lock` モジュール）。
 //! 場所はロックと `config.json` から求め、データベースが無いときに黙って作らない（`open` モジュール）。
 
 pub mod backup;

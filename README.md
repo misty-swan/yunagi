@@ -22,16 +22,17 @@ Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークス�
 
 ```sh
 pnpm install --frozen-lockfile   # ロックファイルどおりに依存を入れる
-pnpm check                       # Rust の書式の検査・単体テスト・clippy・画面の型チェック・画面のテストをまとめて走らせる
+pnpm check                       # Rust の書式の検査・単体テスト・clippy・文書の生成・画面の型チェック・画面のテストをまとめて走らせる
 pnpm tauri dev                   # 開発サーバーとアプリを起動する（ウィンドウが開く）
 cargo run -p yunagi-cli          # コンソール用バイナリ yunagi を動かす
 ```
 
-`pnpm check` は次の5つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
+`pnpm check` は次の6つを順に走らせ、1つでも失敗すると止まる。個別にも走らせられる。
 
 - `pnpm check:fmt`：Rust のコードの書式が rustfmt（Rust の標準の整形ツール）の形にそろっているかを確かめる。`cargo fmt --all --check`（ファイルは書き換えない。ずれていたら `cargo fmt --all` で直す）
 - `pnpm check:rust`：Rust の3つのクレート全体の単体テスト。`cargo test --workspace --locked`（`Cargo.lock` と食い違うと失敗する）。デスクトップアプリ（`yunagi-app`）もテスト用に実際にビルドするので、Tauri と WebView のライブラリを含む初回は数分かかる。2回目以降は変わった所だけビルドするので速い
 - `pnpm check:clippy`：Rust の3つのクレート全体（テストのコードを含む）を clippy（Rust のコードの書き方の問題を指摘する検査）にかける。`cargo clippy --workspace --all-targets --locked -- -D warnings`（警告が1つでもあれば失敗する。型の確認までで、実行ファイルは作らない）
+- `pnpm check:doc`：Rust の3つのクレートのコード中の説明（doc コメント）から文書を作り、説明の中のリンク切れを見つける。`cargo doc --workspace --no-deps --locked --config "build.rustdocflags=['-D','warnings']"` を、`--document-private-items` ありとなしで2回走らせる。1回目は公開していない項目の説明も作り、その中のリンク切れを見つける（2回目の設定では、公開していない項目の説明は検査されない）。2回目は公開している項目の説明だけを作り、公開していない項目へのリンクを見つける（この検査は1回目の設定では働かない）。`target/doc` の目次は2回目の公開の版になる（1回目で作った非公開の項目のページのファイルは残るが、目次からは辿れない）。2回の設定が違うので、変更がなくても毎回作り直す（数秒）。警告が1つでもあれば失敗する。依存ライブラリの文書は作らない。警告を失敗にする指定を `--config` で渡すのは、環境変数を使う書き方と違って Windows でも同じ1行で動くため。ただし環境変数 `RUSTDOCFLAGS`・`CARGO_ENCODED_RUSTDOCFLAGS` や、cargo の設定ファイル（`~/.cargo/config.toml` など）の `target.<対象>.rustdocflags` があると、cargo はそちらを優先してこの指定が効かなくなる（空の値でも同じ）。走らせるときはどれも設定しない
 - `pnpm check:types`：画面のコードの型チェック（`svelte-check`）と、設定ファイル（`vite.config.ts`・`svelte.config.js`）の型チェック（`tsc -p tsconfig.node.json`）
 - `pnpm check:web`：`vitest run`
 
