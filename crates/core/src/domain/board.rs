@@ -140,13 +140,10 @@ pub struct WeekCounts {
 pub fn week_days(date: LogicalDate) -> [LogicalDate; 5] {
     // 月曜は 0、日曜は 6。0001-01-01 は月曜、9999-12-31 は金曜なので、週の5日はいつも暦の中にある
     let from_monday = i32::from(date.as_date().weekday().to_monday_zero_offset());
-    let mut offset = -from_monday;
-    std::array::from_fn(|_| {
-        let day = date
-            .add_days(offset)
-            .expect("Monday to Friday of a week is in the calendar");
-        offset += 1;
-        day
+    std::array::from_fn(|i| {
+        // i は 0〜4
+        date.add_days(i as i32 - from_monday)
+            .expect("Monday to Friday of a week is in the calendar")
     })
 }
 

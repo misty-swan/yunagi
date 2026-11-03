@@ -10,7 +10,8 @@ edition = "2024"
 rust-version = "1.99"
 publish = false
 
-# 説明（doc コメント）の警告。rustdoc が既定で警告にするものを、すべて失敗にする（`pnpm check:doc`）。
+# 説明（doc コメント）の警告。rustdoc が既定で警告にするもの（`rustdoc -W help` で warn のもの）を、
+# すべて失敗にする（`pnpm check:doc`）。Rust の版を上げたら、増えたものが無いかを確かめて足す。
 # `--config` の `-D warnings` と違い、環境変数 RUSTDOCFLAGS などを設定していても効く
 # （cargo はこの設定を RUSTDOCFLAGS と一緒に渡す）。各クレートは `[lints] workspace = true` で使う
 [workspace.lints.rustdoc]
@@ -20,6 +21,8 @@ invalid_codeblock_attributes = "deny"
 invalid_html_tags = "deny"
 invalid_rust_codeblocks = "deny"
 bare_urls = "deny"
+broken_footnote = "deny"
+unused_footnote_definition = "deny"
 redundant_explicit_links = "deny"
 
 [workspace.dependencies]

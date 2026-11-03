@@ -148,16 +148,12 @@ impl LogicalDate {
 
     /// 翌日の論理日付。9999-12-31 の翌日は無いので `None`。
     pub fn tomorrow(self) -> Option<Self> {
-        (self < Self::MAX)
-            .then(|| self.0.tomorrow().ok().map(Self))
-            .flatten()
+        self.add_days(1)
     }
 
     /// 前日の論理日付。0001-01-01 の前日は無いので `None`。
     pub fn yesterday(self) -> Option<Self> {
-        (self > Self::MIN)
-            .then(|| self.0.yesterday().ok().map(Self))
-            .flatten()
+        self.add_days(-1)
     }
 
     /// `days` 日後（負なら前）の論理日付。0001-01-01〜9999-12-31 の外になるなら `None`。

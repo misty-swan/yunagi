@@ -106,6 +106,14 @@ fn open_items(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, Storage
     Ok(items)
 }
 
+/// その日に持ち越しの対象（未完了・未解消で、まだ持ち越し済みでない項目）が1件でもあるか。
+/// 前面に出すたびに呼ばれるので、項目は id だけを読む。
+fn has_pending(conn: &Connection, date: LogicalDate) -> Result<bool, StorageError> {
+    let ids = item_table::open_ids_by_date(conn, date)?;
+    let carried = item_table::carried_to_many(conn, &ids)?;
+    Ok(ids.iter().any(|id| !carried.contains_key(id)))
+}
+
 /// 持ち越しの画面を、いつ出すか（画面設計書 5章）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Prompt {
@@ -140,7 +148,7 @@ pub fn status(conn: &Connection, today: LogicalDate) -> Result<Option<Pending>, 
         let Some(from) = previous_day(conn, today)? else {
             return Ok(None);
         };
-        if open_items(conn, from)?.is_empty() {
+        if !has_pending(conn, from)? {
             return Ok(None);
         }
         let prompt = match row {

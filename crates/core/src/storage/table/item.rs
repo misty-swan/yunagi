@@ -161,6 +161,16 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, S
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// その日の、未完了の TODO と未解消の障害（`status = open`）の id（id の順）。論理削除したものは
+/// 含めない。持ち越しの対象があるかを確かめるのに使う（前面に出すたびに呼ばれるので、id だけを読む）。
+pub fn open_ids_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Ulid>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id FROM item WHERE date = ?1 AND status = 'open' AND deleted_at IS NULL ORDER BY id",
+    )?;
+    let rows = stmt.query_map([date], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// `from` から `to` まで（両端を含む）の日の項目を、日付・並び順（`sort_key`、同じなら id）で返す。
 /// 論理削除したものは含めない。
 pub fn list_between(
@@ -567,6 +577,25 @@ mod tests {
             .map(|i| i.text)
             .collect();
         assert_eq!(texts, ["a", "b"]);
+    }
+
+    #[test]
+    fn open_ids_by_date_are_open_live_items_of_the_day() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = ensure_day(&db, "2026-11-03");
+        let other = ensure_day(&db, "2026-11-02");
+        let open_item = todo(d, "open", "a");
+        let done = Item {
+            status: ItemStatus::Done,
+            ..todo(d, "done", "b")
+        };
+        let deleted = todo(d, "deleted", "c");
+        for item in [&open_item, &done, &deleted, &todo(other, "other day", "a")] {
+            insert(conn, item).unwrap();
+        }
+        assert!(soft_delete(conn, deleted.id, at("2026-11-03T05:00:00Z")).unwrap());
+        assert_eq!(open_ids_by_date(conn, d).unwrap(), [open_item.id]);
     }
 
     #[test]

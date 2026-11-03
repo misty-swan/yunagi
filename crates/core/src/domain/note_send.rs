@@ -644,17 +644,31 @@ fn read_request_context(
     let section =
         note_body::section_of_line(body, source.line).expect("the marked line is in the body");
     let lines = section.lines_in(body).map(str::to_owned).collect();
-    let mut blockers = Vec::new();
-    let mut seen = HashSet::new();
+    // 区間の行から送った、削除されていない障害（行の順）
+    let mut sent = Vec::new();
     for mark in marked {
         if mark.kind != ItemKind::Blocker || !section.lines.contains(&mark.line) {
             continue;
         }
-        let Some(latest) = latest_carried(conn, mark.item_id)? else {
-            continue;
+        if let Some(item) = item_table::get(conn, mark.item_id)?.filter(|i| i.deleted_at.is_none())
+        {
+            sent.push(item);
+        }
+    }
+    let ids: Vec<Ulid> = sent.iter().map(|i| i.id).collect();
+    let latest = latest_carried(conn, &ids)?;
+    let mut blockers = Vec::new();
+    let mut seen = HashSet::new();
+    for item in sent {
+        let item = match latest.get(&item.id) {
+            Some(&last) => match item_table::get(conn, last)? {
+                Some(last) => last,
+                None => continue,
+            },
+            None => item,
         };
-        if latest.status == ItemStatus::Open && seen.insert(latest.id) {
-            blockers.push(latest);
+        if item.status == ItemStatus::Open && seen.insert(item.id) {
+            blockers.push(item);
         }
     }
     Ok(Some(RequestContext {
@@ -665,28 +679,29 @@ fn read_request_context(
     }))
 }
 
-/// 削除されていない項目 `id` の、最後の持ち越し先（持ち越していなければその項目）。項目が無いか
-/// 削除されていれば `None`。
-fn latest_carried(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    let live = |id| -> Result<Option<Item>, StorageError> {
-        Ok(item_table::get(conn, id)?.filter(|i| i.deleted_at.is_none()))
-    };
-    let Some(item) = live(id)? else {
-        return Ok(None);
-    };
-    let mut last = item.id;
-    let mut visited = HashSet::from([last]);
-    while let Some(next) = item_table::carried_to(conn, last)? {
-        if !visited.insert(next.id) {
-            break;
-        }
-        last = next.id;
+/// 項目 `ids` それぞれの、最後の持ち越し先の id。持ち越していない項目は入れない。持ち越しの1段ごとに
+/// まとめて読む（[`item_table::carried_to_many`]）。持ち越し先はいつも削除されていない項目。
+fn latest_carried(conn: &Connection, ids: &[Ulid]) -> Result<HashMap<Ulid, Ulid>, StorageError> {
+    let mut latest: HashMap<Ulid, Ulid> = HashMap::new();
+    // 壊れたデータで輪になっていても止まるように、元ごとに一度通った項目は通らない
+    let mut visited: HashSet<(Ulid, Ulid)> = ids.iter().map(|&id| (id, id)).collect();
+    // （元, 今いる項目）
+    let mut frontier: Vec<(Ulid, Ulid)> = ids.iter().map(|&id| (id, id)).collect();
+    while !frontier.is_empty() {
+        let nodes: Vec<Ulid> = frontier.iter().map(|&(_, node)| node).collect();
+        let next = item_table::carried_to_many(conn, &nodes)?;
+        frontier = frontier
+            .into_iter()
+            .filter_map(|(origin, node)| {
+                let to = next.get(&node)?;
+                visited.insert((origin, to.id)).then(|| {
+                    latest.insert(origin, to.id);
+                    (origin, to.id)
+                })
+            })
+            .collect();
     }
-    if last == item.id {
-        return Ok(Some(item));
-    }
-    // 持ち越し先は削除されていない項目（同じ時点の内容で読んだばかり）
-    live(last)
+    Ok(latest)
 }
 
 #[cfg(test)]
