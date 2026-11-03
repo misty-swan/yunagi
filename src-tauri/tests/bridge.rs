@@ -42,7 +42,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 7] = [
+    let tests: [(&str, Test); 8] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -60,6 +60,10 @@ fn main() {
         (
             "logical_date_changes_notify_and_back_up",
             logical_date_changes_notify_and_back_up,
+        ),
+        (
+            "backup_failures_are_reported_once_and_retried",
+            backup_failures_are_reported_once_and_retried,
         ),
         (
             "missing_database_is_reported_and_can_be_created",
@@ -645,6 +649,51 @@ fn logical_date_changes_notify_and_back_up(default_dir: &Path) {
     h.core.check_today(later);
     h.core.wait_for_backup();
     h.assert_no_event();
+}
+
+/// 定期バックアップを作れなければ、その日に1回だけ `backup-failed` を知らせ、次に確かめたときに
+/// 作り直す（6.2）。
+fn backup_failures_are_reported_once_and_retried(default_dir: &Path) {
+    let h = Harness::opened();
+    let later = yunagi_core::storage::table::now() + jiff::SignedDuration::from_hours(24 * 5);
+    let day = LogicalDate::at(
+        later,
+        &yunagi_app::app_core::system_tz(),
+        Default::default(),
+    );
+    // backups/ をフォルダでなくファイルにして、作れなくする
+    let backups_dir = default_dir.join("backups");
+    let moved = default_dir.join("backups.moved");
+    std::fs::rename(&backups_dir, &moved).unwrap();
+    std::fs::write(&backups_dir, "").unwrap();
+
+    h.core.check_today(later);
+    assert_eq!(h.next_event().0, "today-changed");
+    h.core.wait_for_backup();
+    let (name, payload) = h.next_event();
+    assert_eq!(name, "backup-failed");
+    assert!(
+        payload["detail"].as_str().unwrap().contains("backups"),
+        "{payload}"
+    );
+    // 同じ日の作り直しの失敗では、もう知らせない
+    h.core.check_today(later);
+    h.core.wait_for_backup();
+    h.assert_no_event();
+
+    // 直れば、次に確かめたときに作る
+    std::fs::remove_file(&backups_dir).unwrap();
+    std::fs::rename(&moved, &backups_dir).unwrap();
+    h.core.check_today(later);
+    h.core.wait_for_backup();
+    h.assert_no_event();
+    assert!(
+        backups(default_dir)
+            .iter()
+            .any(|n| n.starts_with(&format!("daily-{day}-"))),
+        "{:?}",
+        backups(default_dir)
+    );
 }
 
 /// 保存先にデータベースが無いとき（初めてでない）：探した場所を返し、選べば新しく作れる（6.3）。

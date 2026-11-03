@@ -22,6 +22,9 @@ export interface Session {
   stop(): Promise<void>;
 }
 
+/** 開く処理の状態の問い合わせに失敗したとき、問い合わせ直すまでの時間。 */
+export const STARTUP_RETRY_MS = 1000;
+
 /** コアとつなぎ始める。 */
 export function startSession(): Session {
   let startup = $state<Startup | null>(null);
@@ -31,6 +34,9 @@ export function startSession(): Session {
   let stopped = false;
   // 読み込みが行き違ったとき（続けて変わったとき）、最後に始めたものだけを使う
   let loads = 0;
+  // 読んでいる（読み終えた）日。日付が変わって新しい日を読んでいる途中に changed が届いても、
+  // 前の日を読み直さないよう、読み始めた時点で進める
+  let target: LogicalDate | undefined;
   const unlisten: Promise<UnlistenFn>[] = [];
 
   const fail = (e: unknown) => {
@@ -39,8 +45,10 @@ export function startSession(): Session {
 
   async function load(date?: LogicalDate) {
     const n = ++loads;
+    if (date !== undefined) target = date;
     try {
       const day = date ?? (await core.today());
+      if (n === loads) target = day;
       const b = await core.getBoard(day);
       if (stopped || n !== loads) return;
       today = day;
@@ -60,17 +68,24 @@ export function startSession(): Session {
   unlisten.push(coreEvents.onStartup(onStartup));
   unlisten.push(
     coreEvents.onChanged(() => {
-      if (startup?.state === "ready") void load(today ?? undefined);
+      if (startup?.state === "ready") void load(target);
     }),
   );
   unlisten.push(coreEvents.onTodayChanged((p) => void load(p.today)));
-  void Promise.all(unlisten)
-    .then(() => core.startupStatus())
-    .then((s) => {
+  // 問い合わせに失敗したら、届くまで問い合わせ直す（聞き始める前に開き終わっていると、
+  // startup はもう届かないため）
+  async function askStartup() {
+    try {
+      const s = await core.startupStatus();
       // イベントで先に新しい状態が届いていれば、それを使う
       if (!stopped && startup === null) onStartup(s);
-    })
-    .catch(fail);
+    } catch (e) {
+      if (stopped || startup !== null) return;
+      fail(e);
+      setTimeout(() => void askStartup(), STARTUP_RETRY_MS);
+    }
+  }
+  void Promise.all(unlisten).then(askStartup, fail);
 
   return {
     get startup() {

@@ -2,7 +2,7 @@
 //! 失敗している間か。エージェントの書き込みの判定に、コアの [`UiState`] として渡す。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use yunagi_core::domain::agent::{ItemField, ProtectedLines, UiState};
 use yunagi_core::domain::logical_date::LogicalDate;
@@ -27,8 +27,7 @@ struct Inner {
 
 impl ScreenState {
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        // 中身は値の集まりで、途中で止まっても壊れた状態にはならないので、毒は無視する
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        crate::app_core::lock(&self.inner)
     }
 
     /// 画面から知らされた入力中の状態で置き換える。守る行の番号は昇順にし、重なりを除く。

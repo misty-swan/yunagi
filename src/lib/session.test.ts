@@ -4,7 +4,7 @@ import { flushSync } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 import { EVENTS, type Board, type Startup } from "./bindings";
 import { core, CoreError } from "./core";
-import { startSession, type Session } from "./session.svelte";
+import { STARTUP_RETRY_MS, startSession, type Session } from "./session.svelte";
 
 let session: Session | undefined;
 
@@ -171,4 +171,64 @@ test("コマンドの引数は camelCase で渡す", async () => {
       args: { id: "01JC0000000000000000000000", closedAt: 1700000000000 },
     },
   ]);
+});
+
+test("新しい日を読んでいる途中に changed が届いても、前の日に戻らない", async () => {
+  const texts: Record<string, string> = { "2026-11-03": "今日", "2026-11-04": "翌日" };
+  let release: (() => void) | undefined;
+  mockIPC(
+    async (cmd, args) => {
+      if (cmd === "startup_status") return { state: "ready" };
+      if (cmd === "today") return "2026-11-03";
+      if (cmd === "get_board") {
+        const date = (args as { date: string }).date;
+        // 翌日の1回目の読み込みを止めておく
+        if (date === "2026-11-04" && release === undefined) {
+          await new Promise<void>((r) => (release = r));
+        }
+        return board(date, texts[date]);
+      }
+    },
+    { shouldMockEvents: true },
+  );
+  session = startSession();
+  const s = session;
+  await until(() => s.board?.date === "2026-11-03");
+  await emit(EVENTS.todayChanged, { today: "2026-11-04" });
+  await vi.waitFor(() => expect(release).toBeDefined());
+  await emit(EVENTS.changed, { by: "agent" });
+  release?.();
+  await until(() => s.board?.date === "2026-11-04");
+  expect(s.today).toBe("2026-11-04");
+});
+
+test("開く処理の状態の問い合わせに失敗したら、問い合わせ直す", async () => {
+  vi.useFakeTimers();
+  try {
+    let asks = 0;
+    mockIPC(
+      (cmd) => {
+        if (cmd === "startup_status") {
+          asks += 1;
+          if (asks === 1) throw { kind: "internal", detail: "x" };
+          return { state: "ready" };
+        }
+        if (cmd === "today") return "2026-11-03";
+        if (cmd === "get_board") return board("2026-11-03", "x");
+      },
+      { shouldMockEvents: true },
+    );
+    session = startSession();
+    const s = session;
+    await vi.waitFor(() => expect(s.error?.kind).toBe("internal"));
+    await vi.advanceTimersByTimeAsync(STARTUP_RETRY_MS);
+    await vi.waitFor(() => {
+      flushSync();
+      expect(s.board).not.toBeNull();
+    });
+    expect(asks).toBe(2);
+    expect(s.error).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });

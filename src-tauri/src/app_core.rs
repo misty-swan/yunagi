@@ -77,14 +77,25 @@ pub struct AppCore {
     /// 定期バックアップを作っている間に持つ。保存先の変更と復元（画面の作業で作る）も、これを
     /// 持ってから行い、バックアップと同時に走らないようにする（`DailyBackup` の説明）。
     maintenance: Mutex<()>,
-    /// 最後に始めた定期バックアップのスレッド（[`AppCore::wait_for_backup`]）。
-    backup_thread: Mutex<Option<JoinHandle<()>>>,
+    /// 定期バックアップの進み具合。
+    backup: Mutex<BackupState>,
     notify: Notify,
+}
+
+/// 定期バックアップの進み具合。作るのは一度に1つだけ。
+#[derive(Default)]
+struct BackupState {
+    /// 作り終えた（すでにあった場合も含む）論理日付。
+    done_for: Option<LogicalDate>,
+    /// 作れなかったと知らせた論理日付（同じ日の作り直しの失敗では、もう知らせない）。
+    failed_for: Option<LogicalDate>,
+    /// 作っているスレッド（[`AppCore::wait_for_backup`]）。
+    running: Option<JoinHandle<()>>,
 }
 
 /// ロックの毒（ほかのスレッドが持ったまま止まった）は無視して中身を使う。中身はどれも、
 /// 書きかけで止まっても使える値（データベースは SQLite がトランザクションで守る）。
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -94,6 +105,9 @@ pub fn chain(e: &(dyn std::error::Error + 'static)) -> String {
 }
 
 /// 端末のタイムゾーン。求められなければ UTC（日付の行に記録するタイムゾーンもそれになる）。
+///
+/// 呼ぶたびに求めるが、jiff が5分間は覚えているので、毎回ファイルを読むことはない。アプリで
+/// 覚え続けると、起動中に端末のタイムゾーンを変えたとき（移動など）に追いつけないので、覚えない。
 pub fn system_tz() -> TimeZone {
     TimeZone::try_system().unwrap_or(TimeZone::UTC)
 }
@@ -181,7 +195,7 @@ impl AppCore {
             screen: ScreenState::default(),
             today: Mutex::new(None),
             maintenance: Mutex::new(()),
-            backup_thread: Mutex::new(None),
+            backup: Mutex::new(BackupState::default()),
             notify,
         })
     }
@@ -278,22 +292,24 @@ impl AppCore {
     /// - 書き込みに失敗したら（[`CommandError::Storage`]）、次に成功するまで、画面の保存の失敗中と
     ///   して記録する（その間、エージェントの書き込みは `storage_unavailable`。アーキテクチャ設計書
     ///   4.1）。引数の誤りなど、保存先に関係なく失敗したものは数えない。
+    ///
+    /// 保存の失敗中かは、データベースを使っている間に記録する（2つの保存の結果が、書いた順と
+    /// 逆に記録されないように）。
     pub fn screen_write<T: Changes, E: Into<CommandError>>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, E>,
     ) -> Result<T, CommandError> {
-        let result = self.read(f);
-        match &result {
-            Ok(r) => {
-                if r.committed() {
-                    self.screen.set_save_failing(false);
-                }
-                if r.changed() {
-                    self.notify_changed(ChangeSource::Screen);
-                }
+        let result = self.with_db(|db| {
+            let result = f(db.connection()).map_err(Into::into);
+            match &result {
+                Ok(r) if r.committed() => self.screen.set_save_failing(false),
+                Err(CommandError::Storage { .. }) => self.screen.set_save_failing(true),
+                _ => {}
             }
-            Err(CommandError::Storage { .. }) => self.screen.set_save_failing(true),
-            Err(_) => {}
+            result
+        });
+        if result.as_ref().is_ok_and(Changes::changed) {
+            self.notify_changed(ChangeSource::Screen);
         }
         result
     }
@@ -326,8 +342,9 @@ impl AppCore {
     }
 
     /// 瞬間 `now` の今日の論理日付を求め、前に確かめたときから変わっていたら
-    /// [`Notice::TodayChanged`] を知らせて、その日の定期バックアップを始める。開いた直後の1回目は、
-    /// 知らせずにバックアップだけを始める（アーキテクチャ設計書 6.2）。
+    /// [`Notice::TodayChanged`] を知らせる（開いた直後の1回目は知らせない）。その日の定期バックアップを
+    /// まだ作り終えていなければ、作り始める（アーキテクチャ設計書 6.2。作れなかったときは、次に
+    /// 確かめたときに作り直す）。
     ///
     /// データベースを開いていなければ何もしない。
     pub fn check_today(self: &Arc<Self>, now: Timestamp) {
@@ -335,10 +352,7 @@ impl AppCore {
             return;
         };
         let previous = lock(&self.today).replace(today);
-        if previous == Some(today) {
-            return;
-        }
-        if previous.is_some() {
+        if previous.is_some_and(|p| p != today) {
             self.notify(Notice::TodayChanged(TodayChanged {
                 today: crate::types::Date(today),
             }));
@@ -351,45 +365,64 @@ impl AppCore {
         self.read(|conn| day::today(conn, &system_tz(), now()))
     }
 
-    /// `today` の定期バックアップを、別のスレッドで作る（無ければ作る）。
+    /// `today` の定期バックアップを、別のスレッドで作る（無ければ作る）。その日の分を作り終えているか、
+    /// ほかのバックアップを作っている途中なら何もしない（作っている途中に日付が変わったときは、次に
+    /// 確かめたときに作る）。
     ///
     /// 写すのはデータベースのファイルを別に開いた接続からなので、作っている間も画面のコマンドは
-    /// 待たずに動く（`DailyBackup`）。作れなかったときは、標準エラーに書き、
-    /// [`Notice::BackupFailed`] を知らせる（失敗にはせず、次に日付が変わったとき・次の起動で作る）。
+    /// 待たずに動く（`DailyBackup`）。作れなかったときは、標準エラーに書き、その日に初めて失敗した
+    /// ときだけ [`Notice::BackupFailed`] を知らせる（失敗にはせず、次に確かめたときに作り直す）。
     fn start_daily_backup(self: &Arc<Self>, today: LogicalDate) {
+        let mut state = lock(&self.backup);
+        let running = state.running.as_ref().is_some_and(|h| !h.is_finished());
+        if running || state.done_for == Some(today) {
+            return;
+        }
         let job = match self.with_db(|db| db.daily_backup().map_err(|e| CommandError::storage(&e)))
         {
             Ok(job) => job,
-            Err(CommandError::Storage { detail }) => return self.backup_failed(detail),
+            Err(CommandError::Storage { detail }) => {
+                return self.backup_failed(&mut state, today, &detail);
+            }
             Err(_) => return,
         };
         let core = Arc::clone(self);
-        let handle = spawn("yunagi-backup", move || {
-            let _maintenance = lock(&core.maintenance);
-            if let Err(e) = job.ensure(today) {
-                core.backup_failed(chain(&e));
+        state.running = spawn("yunagi-backup", move || {
+            let result = {
+                let _maintenance = lock(&core.maintenance);
+                job.ensure(today)
+            };
+            let mut state = lock(&core.backup);
+            match result {
+                Ok(_) => state.done_for = Some(today),
+                Err(e) => core.backup_failed(&mut state, today, &chain(&e)),
             }
         });
-        *lock(&self.backup_thread) = handle;
     }
 
-    fn backup_failed(&self, detail: String) {
-        eprintln!("yunagi: the daily backup failed: {detail}");
-        self.notify(Notice::BackupFailed(BackupFailed { detail }));
+    fn backup_failed(&self, state: &mut BackupState, today: LogicalDate, detail: &str) {
+        eprintln!("yunagi: the daily backup for {today} failed: {detail}");
+        if state.failed_for.replace(today) != Some(today) {
+            self.notify(Notice::BackupFailed(BackupFailed {
+                detail: detail.to_owned(),
+            }));
+        }
     }
 
-    /// 最後に始めた定期バックアップが終わるまで待つ（テストと、終了の前に使う）。
+    /// 作っている途中の定期バックアップが終わるまで待つ（テストと、終了の前に使う）。
     pub fn wait_for_backup(&self) {
-        let handle = lock(&self.backup_thread).take();
+        let handle = lock(&self.backup).running.take();
         if let Some(handle) = handle {
             // バックアップのスレッドが止まっても（不具合）、待つ側は続ける
             let _ = handle.join();
         }
     }
 
-    /// データベースを閉じ、ロックを離す（アプリの終了時）。閉じた後のコマンドは
-    /// [`CommandError::NotReady`]。
+    /// 作っている途中の定期バックアップを待ってから、データベースを閉じ、ロックを離す（アプリの
+    /// 終了時）。待たずに離すと、写している途中で CLI・MCP がロックを取ってデータベースを書き換えうる
+    /// ため。閉じた後のコマンドは [`CommandError::NotReady`]。
     pub fn close(&self) {
+        self.wait_for_backup();
         let slot = std::mem::replace(&mut *lock(&self.db), Slot::Closed);
         if let Slot::Open(db) = slot
             && let Err(e) = db.close()
