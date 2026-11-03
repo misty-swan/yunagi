@@ -53,6 +53,8 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::split_item,
         commands::get_text_doc,
         commands::save_text_doc,
+        commands::send_note_lines,
+        commands::note_marks,
         commands::report_ui_state,
         commands::export_markdown,
     ]

@@ -17,6 +17,7 @@ use yunagi_core::domain::board;
 use yunagi_core::domain::item::{self as core_item, CloseReason as CoreCloseReason};
 use yunagi_core::domain::logical_date::LogicalDate;
 use yunagi_core::domain::note_body;
+use yunagi_core::domain::note_send;
 use yunagi_core::domain::text_doc::{self, TextDoc as CoreTextDoc};
 use yunagi_core::storage::Ulid;
 
@@ -374,6 +375,33 @@ pub struct BoardItem {
     pub agent_name: Option<String>,
     /// エージェントによる未確認の変更がある（行頭の菱形）。
     pub unseen: bool,
+    /// ノートから送った項目なら、送り元の行（持ち越し・分割の元へさかのぼる）。画面は行末の
+    /// 「← NOTE」からその行へ移る（画面設計書 3章「各領域の表示」）。
+    pub note_source: Option<NoteSource>,
+}
+
+/// 項目の送り元の行（データモデル設計書 3章 note_send）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSource {
+    /// 送り元のノートの日。
+    pub date: Date,
+    /// 保存済みの本文での、送り元の行（1始まり）。
+    pub line: usize,
+    /// 送った記録の送り先の項目（持ち越し・分割で作った項目では、元の項目）。画面は、エディタの
+    /// 本文の送信済みの印（`note_marks`）からこの項目の行を探し、無ければ `line` を使う。
+    pub item_id: Id,
+}
+
+impl From<note_send::SourceRef> for NoteSource {
+    fn from(s: note_send::SourceRef) -> Self {
+        Self {
+            date: Date(s.date),
+            line: s.line,
+            item_id: Id(s.item_id),
+        }
+    }
 }
 
 /// ノートの時刻付き見出し（`## 10:00 定例`）。
@@ -442,12 +470,14 @@ impl From<board::ScreenBoard> for Board {
             mut agent_names,
             unseen,
             revs,
+            note_sources,
         } = sb;
         let mut items = |list: Vec<board::BoardItem>| {
             list.into_iter()
                 .map(|bi| BoardItem {
                     agent_name: agent_names.remove(&bi.item.id),
                     unseen: unseen.contains(&bi.item.id),
+                    note_source: note_sources.get(&bi.item.id).copied().map(Into::into),
                     item: bi.item.into(),
                     carried_to: bi.carried_to.map(|c| CarriedTo {
                         id: Id(c.id),
@@ -587,6 +617,122 @@ pub enum TextSave {
         #[cfg_attr(test, ts(type = "number"))]
         rev: i64,
     },
+}
+
+// ---- 行送り ----
+
+/// 送信済みの印を付けるノートの行（`note_marks`。同じ行に2つ付くこともある）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct NoteMark {
+    /// 行の番号（1始まり。渡した本文で数える）。
+    pub line: usize,
+    /// 送り先の種類（「→ TODO」「→ BLOCKER」）。
+    pub kind: ItemKind,
+    /// 送り先の項目。
+    pub item_id: Id,
+}
+
+impl From<note_send::Mark> for NoteMark {
+    fn from(m: note_send::Mark) -> Self {
+        Self {
+            line: m.line,
+            kind: m.kind.into(),
+            item_id: Id(m.item_id),
+        }
+    }
+}
+
+/// 送らなかった行の理由（データモデル設計書 3章 note_send「送らない行」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// 見出しの行。
+    Heading,
+    /// リストの印などを除くと本文が無い（空の行・区切り線・コードの囲みの行など）。
+    NoText,
+    /// コードの囲みの中の行。
+    InCode,
+    /// すでに送信済みの印が付いている。
+    AlreadySent,
+}
+
+impl From<&note_send::SkipReason> for SkipReason {
+    fn from(r: &note_send::SkipReason) -> Self {
+        match r {
+            note_send::SkipReason::Heading => Self::Heading,
+            note_send::SkipReason::NoText => Self::NoText,
+            note_send::SkipReason::InCode => Self::InCode,
+            note_send::SkipReason::AlreadySent { .. } => Self::AlreadySent,
+        }
+    }
+}
+
+/// 送った1行。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SentLine {
+    pub line: usize,
+    /// 作った項目。
+    pub item: Item,
+}
+
+/// 送らなかった1行。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedLine {
+    pub line: usize,
+    pub reason: SkipReason,
+}
+
+/// 行送り（`send_note_lines`）の結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum SendResult {
+    /// 本文を保存し、送れる行を送った（1行も送らなくても本文は保存する）。`rev` は保存の後の版。
+    Sent {
+        #[cfg_attr(test, ts(type = "number"))]
+        rev: i64,
+        /// 送った行（上から順）。
+        sent: Vec<SentLine>,
+        /// 送らなかった行（上から順）。
+        skipped: Vec<SkippedLine>,
+    },
+    /// もとにした版が古いので、何も書かなかった。いまの本文と版。画面は取り込んでから送り直す。
+    Stale {
+        body: String,
+        #[cfg_attr(test, ts(type = "number"))]
+        rev: i64,
+    },
+}
+
+impl From<note_send::Sent> for SendResult {
+    fn from(s: note_send::Sent) -> Self {
+        Self::Sent {
+            rev: s.rev,
+            sent: s
+                .sent
+                .into_iter()
+                .map(|l| SentLine {
+                    line: l.line,
+                    item: l.item.into(),
+                })
+                .collect(),
+            skipped: s
+                .skipped
+                .iter()
+                .map(|l| SkippedLine {
+                    line: l.line,
+                    reason: (&l.reason).into(),
+                })
+                .collect(),
+        }
+    }
 }
 
 // ---- 画面の入力中の状態 ----
@@ -869,7 +1015,7 @@ pub enum InvalidReason {
     InvalidPosition,
     /// 外部課題と紐付いていない TODO。
     NotLinkedExternal,
-    /// ノートの行の指定の誤り（エージェントの操作だけで起きる）。
+    /// ノートの行の指定の誤り（エージェントの操作と、行送りの行の番号の誤り）。
     NoteLine,
     /// 守る行の番号が 0（1始まり）。
     InvalidLine,
@@ -977,6 +1123,22 @@ impl From<text_doc::TextDocError> for CommandError {
             | E::StorageUnavailable(_)
             | E::Changed(_)
             | E::UserEditing => Self::Internal {
+                detail: crate::app_core::chain(&e),
+            },
+        }
+    }
+}
+
+impl From<note_send::SendError> for CommandError {
+    fn from(e: note_send::SendError) -> Self {
+        use note_send::SendError as E;
+        match e {
+            E::InvalidArgument(_) => Self::InvalidArgument {
+                reason: InvalidReason::NoteLine,
+            },
+            E::Storage(_) => Self::storage(&e),
+            // 行き違いは、コマンドでは成功（SendResult::Stale）として返す
+            E::Stale { .. } => Self::Internal {
                 detail: crate::app_core::chain(&e),
             },
         }

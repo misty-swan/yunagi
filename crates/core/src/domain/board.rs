@@ -18,6 +18,7 @@ use super::day;
 use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
+use super::note_send;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
 use crate::storage::table::{agent_client, change_log};
@@ -256,6 +257,9 @@ pub struct ScreenBoard {
     pub unseen: HashSet<Ulid>,
     /// 振り返り・ノートの版。
     pub revs: TextDocRevs,
+    /// ノートから送った項目の、送り元の行（項目の id ごと。持ち越し・分割の元へさかのぼる。
+    /// [`note_send::source_refs`]）。画面は、ここから送り元の行へ移る。
+    pub note_sources: HashMap<Ulid, note_send::SourceRef>,
 }
 
 /// 画面に出すその日のボード（[`get_board`] と、項目の行の印）。どれも同じ時点の内容を読む。
@@ -276,11 +280,20 @@ pub fn get_screen_board(conn: &Connection, date: LogicalDate) -> Result<ScreenBo
             })
             .collect();
         let unseen = change_log::unseen_items_by_agents(conn, date)?;
+        let note_sources = note_send::source_refs(
+            conn,
+            board
+                .todos
+                .iter()
+                .chain(&board.blockers)
+                .map(|bi| bi.item.id),
+        )?;
         Ok(ScreenBoard {
             board,
             agent_names,
             unseen,
             revs,
+            note_sources,
         })
     })
 }
