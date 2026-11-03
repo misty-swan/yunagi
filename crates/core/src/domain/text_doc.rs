@@ -10,20 +10,25 @@
 //!
 //! 本文の行・見出し・追記の決まりは [`super::note_body`] にある。
 //!
+//! エージェントの書き込みは、はじめに権限（スコープ。`append`・`note_edit`）を確かめる
+//! （[`super::agent::require_scope`]）。
+//!
 //! ここに無いもの（画面がつながってから作る）：利用者の入力中の行（守る行）への `edit_note` を
 //! `conflict`（`reason: user_editing`）にする判定と、画面の保存の失敗中に `storage_unavailable` を
-//! 返す判定（アーキテクチャ設計書 4.1）。権限（スコープ）の確かめも、接続口の側で行う。
+//! 返す判定（アーキテクチャ設計書 4.1）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
+use super::agent::{self, PermissionDenied, ScopeError};
 use super::note_body::{self, Changed, InvalidArgument, LineEdit, LineEditError};
 use crate::domain::day;
 use crate::domain::logical_date::LogicalDate;
+use crate::storage::table::agent_client::Scope;
 use crate::storage::table::change_log::{self, Actor, ChangeLog, Target};
 use crate::storage::table::text_doc;
-use crate::storage::{StorageError, Ulid};
+use crate::storage::{StorageError, Ulid, in_transaction};
 
 pub use crate::storage::table::text_doc::TextDoc;
 
@@ -48,6 +53,8 @@ pub struct Written {
 /// 読み書きが失敗した理由。
 #[derive(Debug)]
 pub enum TextDocError {
+    /// エージェントに、操作のスコープが許可されていない（`permission_denied`）。何も書いていない。
+    PermissionDenied(PermissionDenied),
     /// 引数が誤っている（`invalid_argument`）。何も書いていない。
     InvalidArgument(InvalidArgument),
     /// `edit_note` の行が、エージェントの読んだ後に変わっている（`conflict`、`reason: changed`）。
@@ -63,6 +70,7 @@ pub enum TextDocError {
 impl std::fmt::Display for TextDocError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PermissionDenied(e) => e.fmt(f),
             Self::InvalidArgument(e) => e.fmt(f),
             Self::Changed(e) => e.fmt(f),
             Self::Stale { latest } => write!(
@@ -80,7 +88,7 @@ impl std::error::Error for TextDocError {
         match self {
             Self::InvalidArgument(e) => Some(e),
             Self::Storage(e) => Some(e),
-            Self::Changed(_) | Self::Stale { .. } => None,
+            Self::PermissionDenied(_) | Self::Changed(_) | Self::Stale { .. } => None,
         }
     }
 }
@@ -94,6 +102,15 @@ impl From<StorageError> for TextDocError {
 impl From<rusqlite::Error> for TextDocError {
     fn from(e: rusqlite::Error) -> Self {
         Self::Storage(e.into())
+    }
+}
+
+impl From<ScopeError> for TextDocError {
+    fn from(e: ScopeError) -> Self {
+        match e {
+            ScopeError::Denied(e) => Self::PermissionDenied(e),
+            ScopeError::Storage(e) => Self::Storage(e),
+        }
     }
 }
 
@@ -168,8 +185,8 @@ pub fn save(
 /// 現在時刻（`now` の、端末のタイムゾーン `tz` での時刻）の見出し `## HH:MM 件名` を入れてから
 /// 追記する（件名が空なら `## HH:MM`）。追記の決まりは [`note_body::append`]。
 ///
-/// `agent_client_id` は操作したエージェント（CLI は `cli`）。change_log に `note.append` として
-/// 記録する。
+/// `agent_client_id` は操作したエージェント（CLI は `cli`）。`append` スコープが要る。
+/// change_log に `note.append` として記録する。
 pub fn append_note(
     conn: &Connection,
     date: LogicalDate,
@@ -179,10 +196,13 @@ pub fn append_note(
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
-    let heading = heading
-        .map(|title| note_body::time_heading_line(now.to_zoned(tz.clone()).time(), title))
-        .transpose()?;
-    let new_body = |body: &str| Ok(note_body::append(body, text, heading.as_deref())?);
+    let new_body = |body: &str| {
+        // 件名の誤りも引数の誤りなので、権限を確かめた後に確かめる
+        let heading = heading
+            .map(|title| note_body::time_heading_line(now.to_zoned(tz.clone()).time(), title))
+            .transpose()?;
+        Ok(note_body::append(body, text, heading.as_deref())?)
+    };
     write_by_agent(
         conn,
         date,
@@ -195,7 +215,7 @@ pub fn append_note(
 }
 
 /// エージェント・CLI が、振り返りの末尾に追記する（`append_reflection`）。追記の決まりは
-/// [`note_body::append`]。change_log に `reflection.append` として記録する。
+/// [`note_body::append`]。`append` スコープが要る。change_log に `reflection.append` として記録する。
 ///
 /// 振り返りの既存の文章を書き換える操作は無い（MCP・CLI 仕様書 2章）。
 pub fn append_reflection(
@@ -223,7 +243,8 @@ pub fn append_reflection(
 /// 行の本文が `expected_text` と一致しなければ [`TextDocError::Changed`]、引数の誤りは
 /// [`TextDocError::InvalidArgument`]（確かめる順は [`note_body::apply_line_edit`]）。
 /// まだ書いていない日のノートは、空の1行の本文として扱う。本文が変わらない書き換えは
-/// `updated: false` で、記録しない。change_log には `note.edit` として記録する。
+/// `updated: false` で、記録しない。`note_edit` スコープが要る。change_log には `note.edit` として
+/// 記録する。
 pub fn edit_note(
     conn: &Connection,
     date: LogicalDate,
@@ -262,6 +283,14 @@ impl AgentOperation {
         }
     }
 
+    /// 操作に要るスコープ（MCP・CLI 仕様書 2章）。
+    const fn scope(self) -> Scope {
+        match self {
+            Self::NoteAppend | Self::ReflectionAppend => Scope::Append,
+            Self::NoteEdit => Scope::NoteEdit,
+        }
+    }
+
     const fn doc(self) -> TextDoc {
         match self {
             Self::NoteAppend | Self::NoteEdit => TextDoc::Note,
@@ -270,8 +299,8 @@ impl AgentOperation {
     }
 }
 
-/// エージェントの書き込みの共通の手順。いまの本文から `new_body` で新しい本文を作り、
-/// いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
+/// エージェントの書き込みの共通の手順。権限を確かめてから、いまの本文から `new_body` で
+/// 新しい本文を作り、いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
 fn write_by_agent(
     conn: &Connection,
     date: LogicalDate,
@@ -282,6 +311,7 @@ fn write_by_agent(
     new_body: impl FnOnce(&str) -> Result<String, TextDocError>,
 ) -> Result<Written, TextDocError> {
     let doc = operation.doc();
+    agent::require_scope(conn, agent_client_id, operation.scope())?;
     in_transaction(conn, || {
         let current = get(conn, doc, date)?;
         let body = new_body(&current.body)?;
@@ -324,87 +354,24 @@ fn json_string(body: &str) -> String {
     serde_json::to_string(body).expect("a string always serializes to JSON")
 }
 
-/// `f` を1つのトランザクションの中で行い、成功したら確定し、失敗したら取り消す。
-/// 呼び出し側のトランザクションの中で呼べば、セーブポイントを使ってその一部になる（`BEGIN` は
-/// 入れ子にできないため）。確定は呼び出し側が行う。
-///
-/// - `f` の失敗は、取り消しにも失敗したときでも `f` の失敗のまま返す（行き違いの最新の本文などを
-///   失わないため）。
-/// - 確定（`COMMIT`）の失敗と、`f` の途中の panic でも取り消す。トランザクションが開いたまま
-///   残ると、以後の書き込みがすべてその中に入り、確定されないため。
-fn in_transaction<T>(
-    conn: &Connection,
-    f: impl FnOnce() -> Result<T, TextDocError>,
-) -> Result<T, TextDocError> {
-    let guard = TransactionGuard::begin(conn)?;
-    let value = f()?; // 失敗なら guard の drop で取り消す
-    guard.commit()?;
-    Ok(value)
-}
-
-/// [`in_transaction`] のトランザクション。確定せずに手放すと（失敗・panic）取り消す。
-struct TransactionGuard<'c> {
-    conn: &'c Connection,
-    /// 外側のトランザクションか（`false` なら呼び出し側のトランザクションの中のセーブポイント）。
-    outermost: bool,
-    done: bool,
-}
-
-impl<'c> TransactionGuard<'c> {
-    const SAVEPOINT: &'static str = "yunagi_text_doc";
-
-    fn begin(conn: &'c Connection) -> rusqlite::Result<Self> {
-        let outermost = conn.is_autocommit();
-        if outermost {
-            conn.execute_batch("BEGIN")?;
-        } else {
-            conn.execute_batch(&format!("SAVEPOINT {}", Self::SAVEPOINT))?;
-        }
-        Ok(Self {
-            conn,
-            outermost,
-            done: false,
-        })
-    }
-
-    /// 確定する。失敗したら、drop で取り消す。
-    fn commit(mut self) -> rusqlite::Result<()> {
-        if self.outermost {
-            self.conn.execute_batch("COMMIT")?;
-        } else {
-            self.conn
-                .execute_batch(&format!("RELEASE {}", Self::SAVEPOINT))?;
-        }
-        self.done = true;
-        Ok(())
-    }
-}
-
-impl Drop for TransactionGuard<'_> {
-    fn drop(&mut self) {
-        if self.done {
-            return;
-        }
-        // 取り消しの失敗は返す先が無い（元の失敗を返すほうを優先する）ので捨てる
-        let _ = if self.outermost {
-            self.conn.execute_batch("ROLLBACK")
-        } else {
-            // ROLLBACK TO はセーブポイントを残すので、続けて外す
-            self.conn.execute_batch(&format!(
-                "ROLLBACK TO {name}; RELEASE {name}",
-                name = Self::SAVEPOINT
-            ))
-        };
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::test_support::grant;
     use crate::domain::note_body::LineOp;
+    use crate::storage::Database;
     use crate::storage::table::agent_client::{CLI_ID, UNKNOWN_ID};
-    use crate::storage::table::test_support::{at, date, open};
+    use crate::storage::table::test_support::{at, date, fail_change_log_inserts};
     use crate::storage::table::{day as day_table, text_doc as text_doc_table};
+
+    /// データベースを開き、`cli` と `unknown` に書き込みのスコープを許可する。
+    fn open() -> (Database, tempfile::TempDir) {
+        let (db, dir) = crate::storage::table::test_support::open();
+        for client in [CLI_ID, UNKNOWN_ID] {
+            grant(db.connection(), client, &[Scope::Append, Scope::NoteEdit]);
+        }
+        (db, dir)
+    }
 
     fn tokyo() -> TimeZone {
         TimeZone::get("Asia/Tokyo").unwrap()
@@ -841,14 +808,13 @@ mod tests {
 
     #[test]
     fn a_failed_write_leaves_nothing_behind() {
-        // 知らないエージェント（外部キーの誤り）で change_log に入れられないと、本文と day の行も
-        // 書かれない
+        // change_log に入れられないと、本文と day の行も書かれない
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        let unknown = Ulid::from_u128(99);
+        fail_change_log_inserts(conn);
         assert!(matches!(
-            append_note(conn, d, "x", None, unknown, &tokyo(), at(NOW)),
+            append_note(conn, d, "x", None, CLI_ID, &tokyo(), at(NOW)),
             Err(TextDocError::Storage(_))
         ));
         assert_eq!(get(conn, TextDoc::Note, d).unwrap().rev, 0);
@@ -858,22 +824,43 @@ mod tests {
     }
 
     #[test]
-    fn a_panic_inside_the_transaction_rolls_it_back() {
-        let (db, _dir) = open();
+    fn writes_need_the_scope_before_anything_else() {
+        let (db, _dir) = crate::storage::table::test_support::open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Result<(), TextDocError> = in_transaction(conn, || {
-                day::ensure(conn, d, &tokyo(), at(NOW))?;
-                panic!("boom");
-            });
-        }));
-        assert!(result.is_err());
-        assert!(conn.is_autocommit());
+        let denied = |r: Result<Written, TextDocError>, scope: Scope| {
+            assert!(
+                matches!(r, Err(TextDocError::PermissionDenied(PermissionDenied { required_scope })) if required_scope == scope)
+            );
+        };
+        // 引数の誤り（空の本文・改行を含む件名・行番号 0）より先に確かめる
+        denied(
+            append_note(conn, d, "", Some("a\nb"), CLI_ID, &tokyo(), at(NOW)),
+            Scope::Append,
+        );
+        denied(
+            append_reflection(conn, d, "x", CLI_ID, &tokyo(), at(NOW)),
+            Scope::Append,
+        );
+        grant(conn, CLI_ID, &[Scope::Append]);
+        denied(
+            edit_note(
+                conn,
+                d,
+                &edit(0, "", LineOp::Delete),
+                CLI_ID,
+                &tokyo(),
+                at(NOW),
+            ),
+            Scope::NoteEdit,
+        );
+        // 登録されていないエージェントには何も許可しない
+        denied(
+            append_note(conn, d, "x", None, Ulid::from_u128(99), &tokyo(), at(NOW)),
+            Scope::Append,
+        );
         assert_eq!(day_table::get(conn, d).unwrap(), None);
-        // 以後の書き込みは確定される
-        append_note(conn, d, "y", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
-        assert!(conn.is_autocommit());
+        append_reflection(conn, d, "x", CLI_ID, &tokyo(), at(NOW)).unwrap();
     }
 
     #[test]
