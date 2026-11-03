@@ -1,0 +1,700 @@
+//! 画面とコアの結合テスト：Tauri コマンドを IPC（画面からの呼び出しと同じ経路）で呼び、結果と
+//! イベントを確かめる。WebView は開かない（`tauri::test` の模擬の実行環境）。
+//!
+//! 既定ディレクトリ（`yunagi_core::storage::data_dir::default_dir`）は環境変数から求まるので、
+//! はじめに一時フォルダを指すよう設定する。環境変数の設定はほかのスレッドがあると安全でないため、
+//! テストの仕組み（harness）を使わず、`main` から1つずつ順に走らせる（Cargo.toml の `[[test]]`）。
+
+// コアのエラー（`ItemError`）をそのまま受け取って確かめる。大きさはテストでは問題にならない
+#![allow(clippy::result_large_err)]
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use tauri::ipc::{CallbackFn, InvokeBody};
+use tauri::test::{
+    INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets,
+};
+use tauri::webview::InvokeRequest;
+use tauri::{App, Listener, WebviewWindow, WebviewWindowBuilder};
+use yunagi_app::AppCore;
+use yunagi_core::domain::agent::{ItemField, ProtectedLines, UiState};
+use yunagi_core::domain::item::{self, ItemError};
+use yunagi_core::domain::logical_date::LogicalDate;
+use yunagi_core::domain::text_doc::TextDoc;
+use yunagi_core::storage::table::agent_client::{self, AgentClient, Scope};
+use yunagi_core::storage::{StorageError, Ulid};
+
+/// 待つ時間の上限（イベントとバックアップ）。
+const WAIT: Duration = Duration::from_secs(10);
+
+fn main() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_path_buf();
+    // SAFETY: まだほかのスレッドを作っていない（テストはこの後、このスレッドで順に走らせる）
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_DATA_HOME", &home);
+        std::env::set_var("LOCALAPPDATA", &home);
+    }
+    let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
+    assert!(default_dir.path().starts_with(&home));
+    let tests: [(&str, Test); 7] = [
+        (
+            "opens_on_first_use_and_backs_up",
+            opens_on_first_use_and_backs_up,
+        ),
+        ("item_commands", item_commands),
+        ("text_doc_commands", text_doc_commands),
+        (
+            "agent_writes_use_the_same_events_and_the_screen_state",
+            agent_writes_use_the_same_events_and_the_screen_state,
+        ),
+        (
+            "save_failures_refuse_agent_writes_until_a_save_succeeds",
+            save_failures_refuse_agent_writes_until_a_save_succeeds,
+        ),
+        (
+            "logical_date_changes_notify_and_back_up",
+            logical_date_changes_notify_and_back_up,
+        ),
+        (
+            "missing_database_is_reported_and_can_be_created",
+            missing_database_is_reported_and_can_be_created,
+        ),
+    ];
+    for (name, test) in tests {
+        print!("test {name} ... ");
+        test(default_dir.path());
+        println!("ok");
+    }
+    println!("\ntest result: ok. {} passed", tests.len());
+}
+
+// ---- 道具 ----
+
+/// 1つのテスト。既定ディレクトリを受け取る。
+type Test = fn(&Path);
+
+/// 模擬のアプリ。コアはまだデータベースを開いていない。
+struct Harness {
+    _app: App<MockRuntime>,
+    webview: WebviewWindow<MockRuntime>,
+    core: Arc<AppCore>,
+    events: Receiver<(&'static str, Value)>,
+}
+
+impl Harness {
+    fn new() -> Self {
+        let app = mock_builder()
+            .invoke_handler(yunagi_app::invoke_handler())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let core = yunagi_app::manage_core(app.handle());
+        let (tx, events) = mpsc::channel();
+        for name in [
+            yunagi_app::EVENT_STARTUP,
+            yunagi_app::EVENT_CHANGED,
+            yunagi_app::EVENT_TODAY_CHANGED,
+            yunagi_app::EVENT_BACKUP_FAILED,
+        ] {
+            let tx = tx.clone();
+            app.listen_any(name, move |e| {
+                let _ = tx.send((name, serde_json::from_str(e.payload()).unwrap()));
+            });
+        }
+        let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        Self {
+            _app: app,
+            webview,
+            core,
+            events,
+        }
+    }
+
+    /// データベースを開いた模擬のアプリ（開いたときの知らせとバックアップは済ませる）。
+    fn opened() -> Self {
+        let h = Self::new();
+        h.core.open();
+        assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+        h.core.wait_for_backup();
+        h.drain();
+        h
+    }
+
+    /// 画面からの呼び出しと同じ経路でコマンドを呼ぶ。
+    fn invoke(&self, cmd: &str, args: Value) -> Result<Value, Value> {
+        let url = if cfg!(windows) {
+            "http://tauri.localhost"
+        } else {
+            "tauri://localhost"
+        };
+        get_ipc_response(
+            &self.webview,
+            InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: url.parse().unwrap(),
+                body: InvokeBody::Json(args),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+        )
+        .map(|body| body.deserialize::<Value>().unwrap())
+    }
+
+    fn ok(&self, cmd: &str, args: Value) -> Value {
+        self.invoke(cmd, args)
+            .unwrap_or_else(|e| panic!("{cmd} failed: {e}"))
+    }
+
+    fn err(&self, cmd: &str, args: Value) -> Value {
+        match self.invoke(cmd, args) {
+            Ok(v) => panic!("{cmd} succeeded: {v}"),
+            Err(e) => e,
+        }
+    }
+
+    fn next_event(&self) -> (&'static str, Value) {
+        self.events.recv_timeout(WAIT).expect("no event")
+    }
+
+    /// 届いているイベントを捨てる。
+    fn drain(&self) {
+        while self.events.try_recv().is_ok() {}
+    }
+
+    /// まだ届いていないイベントが無いこと。
+    fn assert_no_event(&self) {
+        if let Ok(e) = self.events.recv_timeout(Duration::from_millis(100)) {
+            panic!("unexpected event: {e:?}");
+        }
+    }
+
+    fn today(&self) -> String {
+        self.ok("today", json!({})).as_str().unwrap().to_owned()
+    }
+
+    fn add_todo(&self, date: &str, text: &str) -> Value {
+        self.ok(
+            "add_item",
+            json!({ "date": date, "kind": "todo", "text": text, "position": { "at": "last" } }),
+        )
+    }
+
+    /// エージェントを登録し、`scopes` を許可する。
+    fn register_agent(&self, name: &str, scopes: Vec<Scope>) -> Ulid {
+        let id = Ulid::generate();
+        let client = AgentClient {
+            id,
+            name: name.into(),
+            scopes,
+            created_at: yunagi_core::storage::table::now(),
+            last_seen_at: None,
+        };
+        self.core
+            .read(|conn| agent_client::insert(conn, &client))
+            .unwrap();
+        id
+    }
+}
+
+impl Drop for Harness {
+    /// 次のテストが同じ既定ディレクトリのロックを取れるよう、閉じてロックを離す。
+    fn drop(&mut self) {
+        self.core.wait_for_backup();
+        self.core.close();
+    }
+}
+
+fn changed_by(by: &str) -> (&'static str, Value) {
+    ("changed", json!({ "by": by }))
+}
+
+fn backups(default_dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(default_dir.join("backups"))
+        .map(|rd| {
+            rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+// ---- テスト ----
+
+/// 初めて使うとき：開くまでは `opening` で、コマンドは `not_ready`。開くと `startup` が届き、
+/// その日の定期バックアップができる（アーキテクチャ設計書 6.2・6.3）。
+fn opens_on_first_use_and_backs_up(default_dir: &Path) {
+    let h = Harness::new();
+    assert_eq!(
+        h.ok("startup_status", json!({})),
+        json!({ "state": "opening" })
+    );
+    assert_eq!(
+        h.err("get_board", json!({ "date": "2026-11-03" })),
+        json!({ "kind": "not_ready" })
+    );
+    // 画面からは、データベースが見つからないとき以外は作れない
+    assert_eq!(
+        h.err("create_database", json!({})),
+        json!({ "kind": "invalid_state" })
+    );
+
+    h.core.open();
+    assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+    assert_eq!(
+        h.ok("startup_status", json!({})),
+        json!({ "state": "ready" })
+    );
+    assert!(default_dir.join("yunagi.db").is_file());
+
+    h.core.wait_for_backup();
+    let today = h.today();
+    let daily: Vec<_> = backups(default_dir)
+        .into_iter()
+        .filter(|n| n.starts_with(&format!("daily-{today}-")))
+        .collect();
+    assert_eq!(daily.len(), 1, "{daily:?}");
+    h.assert_no_event();
+
+    // 同じ日にもう一度確かめても、作り直さない
+    h.core.check_today(yunagi_core::storage::table::now());
+    h.core.wait_for_backup();
+    assert_eq!(
+        backups(default_dir)
+            .iter()
+            .filter(|n| n.starts_with("daily-"))
+            .count(),
+        1
+    );
+}
+
+/// 項目の操作：結果の形、変えたときだけ届く `changed`、エラーの形。
+fn item_commands(_: &Path) {
+    let h = Harness::opened();
+    let date = "2030-01-07";
+
+    let a = h.add_todo(date, "  設計を読む ");
+    assert_eq!(a["text"], "設計を読む");
+    assert_eq!(a["kind"], "todo");
+    assert_eq!(a["status"], "open");
+    assert_eq!(a["origin"], "human");
+    assert_eq!(a["date"], date);
+    assert!(a["createdAt"].is_i64());
+    assert_eq!(h.next_event(), changed_by("screen"));
+    let a_id = a["id"].as_str().unwrap().to_owned();
+
+    // 同じ本文なら何も変えず、知らせない
+    let same = h.ok(
+        "save_item_text",
+        json!({ "id": a_id, "text": "設計を読む" }),
+    );
+    assert_eq!(same["updated"], false);
+    h.assert_no_event();
+
+    let edited = h.ok(
+        "save_item_text",
+        json!({ "id": a_id, "text": "設計書を読む" }),
+    );
+    assert_eq!(edited["updated"], true);
+    assert_eq!(edited["item"]["text"], "設計書を読む");
+    assert_eq!(h.next_event(), changed_by("screen"));
+
+    // 完了時刻は画面が決めた時刻（ミリ秒）のまま
+    let closed_at = 1_893_888_000_123_i64;
+    let done = h.ok(
+        "set_item_closed",
+        json!({ "id": a_id, "closedAt": closed_at }),
+    );
+    assert_eq!(done["item"]["status"], "done");
+    assert_eq!(done["item"]["completedAt"], closed_at);
+    let reopened = h.ok("set_item_closed", json!({ "id": a_id, "closedAt": null }));
+    assert_eq!(reopened["item"]["status"], "open");
+    assert_eq!(reopened["item"]["completedAt"], Value::Null);
+    h.drain();
+
+    // 障害を先頭に足して、解消メモを書く。TODO に解消メモは書けない
+    let b = h.ok(
+        "add_item",
+        json!({ "date": date, "kind": "blocker", "text": "CI が落ちる", "position": { "at": "first" } }),
+    );
+    let b_id = b["id"].as_str().unwrap().to_owned();
+    let noted = h.ok(
+        "save_resolution_note",
+        json!({ "id": b_id, "note": "キャッシュを消した" }),
+    );
+    assert_eq!(noted["item"]["resolutionNote"], "キャッシュを消した");
+    assert_eq!(
+        h.err("save_resolution_note", json!({ "id": a_id, "note": "x" })),
+        json!({ "kind": "invalid_argument", "reason": "wrong_kind" })
+    );
+
+    // 分けて、動かす
+    let split = h.ok(
+        "split_item",
+        json!({ "id": a_id, "first": "設計書", "second": "を読む" }),
+    );
+    assert_eq!(split["original"]["text"], "設計書");
+    assert_eq!(split["created"]["text"], "を読む");
+    let c_id = split["created"]["id"].as_str().unwrap().to_owned();
+    let moved = h.ok(
+        "move_item",
+        json!({ "id": c_id, "position": { "at": "before", "id": a_id } }),
+    );
+    assert_eq!(moved["updated"], true);
+
+    let board = h.ok("get_board", json!({ "date": date }));
+    let texts = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|bi| bi["item"]["text"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(texts(&board["todos"]), ["を読む", "設計書"]);
+    assert_eq!(texts(&board["blockers"]), ["CI が落ちる"]);
+    assert_eq!(board["todos"][0]["carriedTo"], Value::Null);
+    assert_eq!(board["note"], json!({ "headings": [], "length": 0 }));
+
+    // 削除して、取り消す
+    h.drain();
+    let deleted = h.ok("delete_item", json!({ "id": c_id }));
+    assert_eq!(deleted, json!({ "id": c_id, "source": null }));
+    assert_eq!(h.next_event(), changed_by("screen"));
+    assert_eq!(
+        texts(&h.ok("get_board", json!({ "date": date }))["todos"]),
+        ["設計書"]
+    );
+    let restored = h.ok("restore_item", json!({ "deleted": deleted }));
+    assert_eq!(restored["deletedAt"], Value::Null);
+    assert_eq!(h.next_event(), changed_by("screen"));
+    assert_eq!(
+        h.err("restore_item", json!({ "deleted": deleted })),
+        json!({ "kind": "not_found" })
+    );
+
+    // 誤り：空の本文、無い項目、自分の前に動かす
+    assert_eq!(
+        h.err(
+            "add_item",
+            json!({ "date": date, "kind": "todo", "text": "  ", "position": { "at": "last" } })
+        ),
+        json!({ "kind": "invalid_argument", "reason": "empty_text" })
+    );
+    assert_eq!(
+        h.err(
+            "save_item_text",
+            json!({ "id": Ulid::generate().to_string(), "text": "x" })
+        ),
+        json!({ "kind": "not_found" })
+    );
+    assert_eq!(
+        h.err(
+            "move_item",
+            json!({ "id": a_id, "position": { "at": "after", "id": a_id } })
+        ),
+        json!({ "kind": "invalid_argument", "reason": "invalid_position" })
+    );
+    h.assert_no_event();
+    // 形の誤り（ID でない文字列）は、Tauri が引数を読めずに断る（文字列のエラー）
+    assert!(
+        h.err("save_item_text", json!({ "id": "x", "text": "x" }))
+            .is_string()
+    );
+}
+
+/// ノート・振り返り：版の番号での保存と、行き違いの最新の返し方（アーキテクチャ設計書 4.1）。
+fn text_doc_commands(_: &Path) {
+    let h = Harness::opened();
+    let date = "2030-01-08";
+    for doc in ["note", "reflection"] {
+        assert_eq!(
+            h.ok("get_text_doc", json!({ "doc": doc, "date": date })),
+            json!({ "body": "", "rev": 0 })
+        );
+        let saved = h.ok(
+            "save_text_doc",
+            json!({ "doc": doc, "date": date, "body": "## 10:00 定例\nメモ", "baseRev": 0 }),
+        );
+        assert_eq!(
+            saved,
+            json!({ "result": "saved", "rev": 1, "updated": true })
+        );
+        assert_eq!(h.next_event(), changed_by("screen"));
+        // もとにした版が古い
+        let stale = h.ok(
+            "save_text_doc",
+            json!({ "doc": doc, "date": date, "body": "別の本文", "baseRev": 0 }),
+        );
+        assert_eq!(
+            stale,
+            json!({ "result": "stale", "body": "## 10:00 定例\nメモ", "rev": 1 })
+        );
+        // 同じ本文は書かない
+        let same = h.ok(
+            "save_text_doc",
+            json!({ "doc": doc, "date": date, "body": "## 10:00 定例\nメモ", "baseRev": 1 }),
+        );
+        assert_eq!(
+            same,
+            json!({ "result": "saved", "rev": 1, "updated": false })
+        );
+        h.assert_no_event();
+    }
+    let board = h.ok("get_board", json!({ "date": date }));
+    assert_eq!(board["reflection"], "## 10:00 定例\nメモ");
+    assert_eq!(board["note"]["length"], 14);
+    assert_eq!(board["note"]["headings"][0]["text"], "10:00 定例");
+    assert_eq!(board["note"]["headings"][0]["line"], 1);
+}
+
+/// エージェントの書き込みも `changed` で知らせる。画面が知らせた入力中の欄は、エージェントの判定に
+/// 使われる（アーキテクチャ設計書 4章 6、4.1）。
+fn agent_writes_use_the_same_events_and_the_screen_state(_: &Path) {
+    let h = Harness::opened();
+    let date = "2030-01-09";
+    let agent = h.register_agent("claude-code", vec![Scope::Read, Scope::Todo]);
+    let todo = h.add_todo(date, "テストを書く");
+    let id: Ulid = todo["id"].as_str().unwrap().parse().unwrap();
+    let ld: LogicalDate = date.parse().unwrap();
+    h.drain();
+
+    // 本文を入力中：本文への edit_todo は user_editing、状態の変更は受け付ける
+    h.ok(
+        "report_ui_state",
+        json!({ "state": {
+            "editingItems": [{ "itemId": id.to_string(), "field": "text" }],
+            "editors": [{ "doc": "note", "date": date, "rev": 3, "lines": [2, 5] }],
+        } }),
+    );
+    assert!(h.core.screen().is_editing(id, ItemField::Text));
+    assert_eq!(
+        h.core.screen().protected_lines(TextDoc::Note, ld),
+        Some(ProtectedLines {
+            rev: 3,
+            lines: vec![2, 5]
+        })
+    );
+    let tz = jiff::tz::TimeZone::UTC;
+    let edit = h
+        .core
+        .agent_write(agent, |conn, a| {
+            item::edit_todo(conn, a, id, "別の本文", yunagi_core::storage::table::now())
+        })
+        .unwrap();
+    assert!(matches!(
+        edit,
+        Err(ItemError::Conflict(item::Conflict::UserEditing))
+    ));
+    h.assert_no_event();
+    let done = h
+        .core
+        .agent_write(agent, |conn, a| {
+            item::complete_todo(conn, a, id, yunagi_core::storage::table::now())
+        })
+        .unwrap()
+        .unwrap();
+    assert!(done.updated);
+    assert_eq!(h.next_event(), changed_by("agent"));
+
+    // 入力を終えたと知らせ直すと、受け付ける
+    h.ok(
+        "report_ui_state",
+        json!({ "state": { "editingItems": [], "editors": [] } }),
+    );
+    assert!(!h.core.screen().is_editing(id, ItemField::Text));
+    assert_eq!(h.core.screen().protected_lines(TextDoc::Note, ld), None);
+    h.core
+        .agent_write(agent, |conn, a| {
+            item::edit_todo(conn, a, id, "別の本文", yunagi_core::storage::table::now())
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(h.next_event(), changed_by("agent"));
+    let board = h.ok("get_board", json!({ "date": date }));
+    assert_eq!(board["todos"][0]["item"]["text"], "別の本文");
+    assert_eq!(board["todos"][0]["item"]["status"], "done");
+
+    // 何も変えない操作は知らせない
+    let again = h
+        .core
+        .agent_write(agent, |conn, a| {
+            item::complete_todo(conn, a, id, yunagi_core::storage::table::now())
+        })
+        .unwrap()
+        .unwrap();
+    assert!(!again.updated);
+    h.assert_no_event();
+    // 権限の無い操作は、何も書かずに断る
+    let add = h
+        .core
+        .agent_write(agent, |conn, a| {
+            item::add_blocker(conn, a, ld, "x", &tz, yunagi_core::storage::table::now())
+        })
+        .unwrap();
+    assert!(matches!(add, Err(ItemError::PermissionDenied(_))));
+    h.assert_no_event();
+
+    // 守る行の番号は 1 から
+    assert_eq!(
+        h.err(
+            "report_ui_state",
+            json!({ "state": { "editingItems": [], "editors": [{ "doc": "note", "date": date, "rev": 1, "lines": [0] }] } })
+        ),
+        json!({ "kind": "invalid_argument", "reason": "invalid_line" })
+    );
+}
+
+/// 画面の保存の書き込みが失敗したら、次に成功するまでエージェントの書き込みを断る
+/// （アーキテクチャ設計書 4.1「保存に失敗している間」）。引数の誤りでは断らない。
+fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
+    let h = Harness::opened();
+    let date = "2030-01-10";
+    let agent = h.register_agent("codex", vec![Scope::Read, Scope::Todo]);
+    let todo = h.add_todo(date, "保存の失敗");
+    let id: Ulid = todo["id"].as_str().unwrap().parse().unwrap();
+    let agent_edit = |text: &str| {
+        h.core
+            .agent_write(agent, |conn, a| {
+                item::edit_todo(conn, a, id, text, yunagi_core::storage::table::now())
+            })
+            .unwrap()
+    };
+
+    // 引数の誤りは保存の失敗に数えない
+    h.err(
+        "save_item_text",
+        json!({ "id": id.to_string(), "text": "" }),
+    );
+    assert!(!h.core.screen().save_failing());
+
+    // 書き込みを失敗させる（この接続だけの一時的なトリガー）
+    h.core
+        .read(|conn| {
+            conn.execute_batch(
+                "CREATE TEMP TRIGGER fail_item_update BEFORE UPDATE ON item \
+                 BEGIN SELECT RAISE(FAIL, 'disk is full'); END;",
+            )
+            .map_err(StorageError::from)
+        })
+        .unwrap();
+    let e = h.err(
+        "save_item_text",
+        json!({ "id": id.to_string(), "text": "書けない" }),
+    );
+    assert_eq!(e["kind"], "storage");
+    assert!(
+        e["detail"].as_str().unwrap().contains("disk is full"),
+        "{e}"
+    );
+    assert!(h.core.screen().save_failing());
+    assert!(matches!(
+        agent_edit("エージェント"),
+        Err(ItemError::StorageUnavailable(_))
+    ));
+    // 読み取りは受け付ける
+    h.ok("get_board", json!({ "date": date }));
+
+    h.core
+        .read(|conn| {
+            conn.execute_batch("DROP TRIGGER fail_item_update;")
+                .map_err(StorageError::from)
+        })
+        .unwrap();
+    h.ok(
+        "save_item_text",
+        json!({ "id": id.to_string(), "text": "書けた" }),
+    );
+    assert!(!h.core.screen().save_failing());
+    agent_edit("エージェント").unwrap();
+}
+
+/// 論理日付が変わったら `today-changed` を知らせ、その日の定期バックアップを作る（6.2）。
+fn logical_date_changes_notify_and_back_up(default_dir: &Path) {
+    let h = Harness::opened();
+    let today: LogicalDate = h.today().parse().unwrap();
+    let later = yunagi_core::storage::table::now() + jiff::SignedDuration::from_hours(48);
+    let expected = LogicalDate::at(
+        later,
+        &yunagi_app::app_core::system_tz(),
+        Default::default(),
+    );
+    assert_ne!(expected, today);
+    h.core.check_today(later);
+    assert_eq!(
+        h.next_event(),
+        ("today-changed", json!({ "today": expected.to_string() }))
+    );
+    h.core.wait_for_backup();
+    assert!(
+        backups(default_dir)
+            .iter()
+            .any(|n| n.starts_with(&format!("daily-{expected}-"))),
+        "{:?}",
+        backups(default_dir)
+    );
+    // 同じ日なら、もう知らせない
+    h.core.check_today(later);
+    h.core.wait_for_backup();
+    h.assert_no_event();
+}
+
+/// 保存先にデータベースが無いとき（初めてでない）：探した場所を返し、選べば新しく作れる（6.3）。
+fn missing_database_is_reported_and_can_be_created(default_dir: &Path) {
+    let elsewhere: PathBuf = default_dir.parent().unwrap().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        default_dir.join("config.json"),
+        serde_json::to_string(&json!({ "data_dir": elsewhere })).unwrap(),
+    )
+    .unwrap();
+
+    let h = Harness::new();
+    h.core.open();
+    let expected = json!({
+        "state": "not_found",
+        "path": elsewhere.join("yunagi.db").display().to_string(),
+        "dataDir": elsewhere.display().to_string(),
+        "configuredIn": default_dir.join("config.json").display().to_string(),
+        "dataDirExists": true,
+    });
+    assert_eq!(h.next_event(), ("startup", expected.clone()));
+    assert_eq!(h.ok("startup_status", json!({})), expected);
+    assert!(!elsewhere.join("yunagi.db").exists());
+    assert_eq!(h.err("today", json!({})), json!({ "kind": "not_ready" }));
+
+    assert_eq!(
+        h.ok("create_database", json!({})),
+        json!({ "state": "ready" })
+    );
+    assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+    assert!(elsewhere.join("yunagi.db").is_file());
+    h.core.wait_for_backup();
+    assert!(
+        std::fs::read_dir(elsewhere.join("backups"))
+            .unwrap()
+            .any(|e| e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("daily-"))
+    );
+    assert_eq!(
+        h.err("create_database", json!({})),
+        json!({ "kind": "invalid_state" })
+    );
+
+    // 閉じた後のコマンドは not_ready。ロックも離れている
+    h.core.close();
+    assert_eq!(h.err("today", json!({})), json!({ "kind": "not_ready" }));
+    let dir = yunagi_core::storage::data_dir::default_dir().unwrap();
+    yunagi_core::storage::DbLock::acquire(&dir, Duration::ZERO).unwrap();
+}

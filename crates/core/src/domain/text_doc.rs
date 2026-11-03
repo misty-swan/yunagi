@@ -16,8 +16,9 @@
 //! 画面の保存の失敗中は、引数の誤りの後に `storage_unavailable` を返す（[`super::agent::UiState`]。
 //! アーキテクチャ設計書 4.1）。
 //!
-//! ここに無いもの（画面がつながってから作る）：利用者の入力中の行（守る行）への `edit_note` を
-//! `conflict`（`reason: user_editing`）にする判定（守る行を画面から受け取る形がまだ無い）。
+//! ここに無いもの（接続口の作業で作る）：利用者の入力中の行（守る行）への `edit_note` を
+//! `conflict`（`reason: user_editing`）にする判定。守る行は、画面から知らされたものを
+//! [`super::agent::UiState::protected_lines`] で受け取れる。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;

@@ -1265,7 +1265,9 @@ mod tests {
         );
         // 元の項目を変えたので、削除を戻せない
         assert_eq!(
-            restore(conn, &deleted, at(T2)).unwrap_err().to_string(),
+            restore(conn, deleted.item.id, deleted.source.as_ref(), at(T2))
+                .unwrap_err()
+                .to_string(),
             "the item it was carried over from was changed after the delete"
         );
         assert!(get(conn, copy.id).deleted_at.is_some());
@@ -1282,7 +1284,7 @@ mod tests {
         let deleted = delete(conn, copy.id, at(T2)).unwrap();
         // 並べ替えは変更に数えない
         crate::domain::item::move_item(conn, source.id, Position::First, at(T2)).unwrap();
-        let restored = restore(conn, &deleted, at(T2)).unwrap();
+        let restored = restore(conn, deleted.item.id, deleted.source.as_ref(), at(T2)).unwrap();
         assert_eq!(restored.deleted_at, None);
         assert_eq!(carried_to(conn, source.id).unwrap().unwrap().id, copy.id);
     }
@@ -1306,7 +1308,7 @@ mod tests {
             Err(ItemError::Conflict(Conflict::CarriedOver { carried_to_id, .. })) if carried_to_id == c.id
         ));
         // B は戻せる（A はほかへ持ち越されていない）
-        restore(conn, &deleted_b, at(T2)).unwrap();
+        restore(conn, deleted_b.item.id, deleted_b.source.as_ref(), at(T2)).unwrap();
         assert_eq!(carried_to(conn, a.id).unwrap().unwrap().id, b.id);
     }
 
@@ -1326,7 +1328,7 @@ mod tests {
             .created
             .remove(0);
         assert_eq!(again.carry_count, 1);
-        match restore(conn, &deleted, at(T2)) {
+        match restore(conn, deleted.item.id, deleted.source.as_ref(), at(T2)) {
             Err(ItemError::RestoreRefused(RestoreRefused::SourceCarriedOver {
                 carried_to_id,
                 carried_to_date,

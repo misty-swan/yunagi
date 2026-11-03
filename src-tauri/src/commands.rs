@@ -1,0 +1,243 @@
+//! 画面から呼ぶ Tauri コマンド（アーキテクチャ設計書 2章）。
+//!
+//! どれも非同期のコマンドにして、データベースの読み書きは止めてよいスレッド
+//! （`spawn_blocking`）で行う。Tauri は同期のコマンドを画面のスレッドで動かすため。
+//! 引数の名前は、画面からは camelCase で渡す（`baseRev` → `base_rev`。Tauri の決まり）。
+//! 型は `crate::types`（画面の `src/lib/bindings.ts`）。
+
+// コアのエラー（`ItemError` など）は大きいが、1回の呼び出しで1度返すだけなので、箱に入れても得が無い
+#![allow(clippy::result_large_err)]
+
+use std::sync::Arc;
+
+use tauri::State;
+use yunagi_core::domain::{board, item, text_doc};
+
+use crate::app_core::{AppCore, now, system_tz};
+use crate::types::{
+    Board, CommandError, Date, Deleted, Id, Item, ItemKind, ItemOutcome, Millis, Position,
+    Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+};
+
+type Core<'a> = State<'a, Arc<AppCore>>;
+
+/// `f` を、止めてよいスレッドで動かす。
+async fn blocking<T: Send + 'static>(
+    core: &Core<'_>,
+    f: impl FnOnce(&Arc<AppCore>) -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || f(&core))
+        .await
+        .map_err(|e| CommandError::Internal {
+            detail: e.to_string(),
+        })?
+}
+
+/// データベースを開く処理の状態。画面は、`startup` イベントを聞き始めてからこれを呼ぶ
+/// （聞き始める前に開き終わっても取りこぼさないため）。
+#[tauri::command]
+pub async fn startup_status(core: Core<'_>) -> Result<Startup, CommandError> {
+    blocking(&core, |core| Ok(core.startup())).await
+}
+
+/// データベースが見つからなかったときに、新しく作って開く（`Startup::NotFound` のときだけ）。
+#[tauri::command]
+pub async fn create_database(core: Core<'_>) -> Result<Startup, CommandError> {
+    blocking(&core, |core| core.create_database()).await
+}
+
+/// 今日の論理日付。変わると `today-changed` イベントが届く。
+#[tauri::command]
+pub async fn today(core: Core<'_>) -> Result<Date, CommandError> {
+    blocking(&core, |core| core.today().map(Date)).await
+}
+
+/// その日のボード。
+#[tauri::command]
+pub async fn get_board(core: Core<'_>, date: Date) -> Result<Board, CommandError> {
+    blocking(&core, move |core| {
+        core.read(|conn| board::get_board(conn, date.0).map(Board::from))
+    })
+    .await
+}
+
+/// 項目を足す（`origin = human`）。
+#[tauri::command]
+pub async fn add_item(
+    core: Core<'_>,
+    date: Date,
+    kind: ItemKind,
+    text: String,
+    position: Position,
+) -> Result<Item, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| {
+            item::add(
+                conn,
+                date.0,
+                kind.into(),
+                &text,
+                position.into(),
+                &system_tz(),
+                now(),
+            )
+            .map(Item::from)
+        })
+    })
+    .await
+}
+
+/// 項目の本文を保存する。
+#[tauri::command]
+pub async fn save_item_text(
+    core: Core<'_>,
+    id: Id,
+    text: String,
+) -> Result<ItemOutcome, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| item::save_text(conn, id.0, &text, now()).map(ItemOutcome::from))
+    })
+    .await
+}
+
+/// 項目の完了・解消を切り替える。`closedAt` が数なら完了・解消にしてその時刻を完了時刻に、
+/// `null` なら未完了・未解消に戻す（完了時刻は画面が決める。操作仕様書 2章）。
+#[tauri::command]
+pub async fn set_item_closed(
+    core: Core<'_>,
+    id: Id,
+    closed_at: Option<Millis>,
+) -> Result<ItemOutcome, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| {
+            item::set_closed(conn, id.0, closed_at.map(|m| m.0), now()).map(ItemOutcome::from)
+        })
+    })
+    .await
+}
+
+/// 障害の解消メモを保存する（空なら消す）。
+#[tauri::command]
+pub async fn save_resolution_note(
+    core: Core<'_>,
+    id: Id,
+    note: String,
+) -> Result<ItemOutcome, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| {
+            item::save_resolution_note(conn, id.0, &note, now()).map(ItemOutcome::from)
+        })
+    })
+    .await
+}
+
+/// 項目を削除する。結果は削除の取り消し（`restore_item`）に渡す。
+#[tauri::command]
+pub async fn delete_item(core: Core<'_>, id: Id) -> Result<Deleted, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| item::delete(conn, id.0, now()).map(Deleted::from))
+    })
+    .await
+}
+
+/// 削除を取り消す（Mod+Z）。`deleted` は `delete_item` の結果。
+#[tauri::command]
+pub async fn restore_item(core: Core<'_>, deleted: Deleted) -> Result<Item, CommandError> {
+    blocking(&core, move |core| {
+        let source = deleted.source.map(|s| s.into_core());
+        core.screen_write(|conn| {
+            item::restore(conn, deleted.id.0, source.as_ref(), now()).map(Item::from)
+        })
+    })
+    .await
+}
+
+/// 項目を同じ日の並びの中で動かす。
+#[tauri::command]
+pub async fn move_item(
+    core: Core<'_>,
+    id: Id,
+    position: Position,
+) -> Result<ItemOutcome, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| {
+            item::move_item(conn, id.0, position.into(), now()).map(ItemOutcome::from)
+        })
+    })
+    .await
+}
+
+/// 項目を2つに分ける（`first` を元の項目の本文に、`second` を新しい項目の本文にする）。
+#[tauri::command]
+pub async fn split_item(
+    core: Core<'_>,
+    id: Id,
+    first: String,
+    second: String,
+) -> Result<SplitResult, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| {
+            item::split(conn, id.0, &first, &second, now()).map(|(original, created)| SplitResult {
+                original: original.into(),
+                created: created.into(),
+            })
+        })
+    })
+    .await
+}
+
+/// その日のノートか振り返りの本文と版。
+#[tauri::command]
+pub async fn get_text_doc(
+    core: Core<'_>,
+    doc: TextDoc,
+    date: Date,
+) -> Result<Snapshot, CommandError> {
+    blocking(&core, move |core| {
+        core.read(|conn| text_doc::get(conn, doc.into(), date.0).map(Snapshot::from))
+    })
+    .await
+}
+
+/// ノートか振り返りを保存する。`baseRev` はもとにした版。古ければ書かずに最新を返す
+/// （`TextSave::Stale`。アーキテクチャ設計書 4.1）。
+#[tauri::command]
+pub async fn save_text_doc(
+    core: Core<'_>,
+    doc: TextDoc,
+    date: Date,
+    body: String,
+    base_rev: i64,
+) -> Result<TextSave, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(|conn| {
+            match text_doc::save(
+                conn,
+                doc.into(),
+                date.0,
+                &body,
+                base_rev,
+                &system_tz(),
+                now(),
+            ) {
+                Ok(w) => Ok(TextSave::Saved {
+                    rev: w.rev,
+                    updated: w.updated,
+                }),
+                Err(text_doc::TextDocError::Stale { latest }) => Ok(TextSave::Stale {
+                    body: latest.body,
+                    rev: latest.rev,
+                }),
+                Err(e) => Err(CommandError::from(e)),
+            }
+        })
+    })
+    .await
+}
+
+/// 画面の入力中の状態を知らせる（変わるたびに全体を知らせ直す。アーキテクチャ設計書 4.1）。
+#[tauri::command]
+pub async fn report_ui_state(core: Core<'_>, state: UiReport) -> Result<(), CommandError> {
+    blocking(&core, move |core| core.screen().report(state)).await
+}

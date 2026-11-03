@@ -89,42 +89,23 @@ pub fn list_backups(data_dir: &Path) -> Result<Vec<Backup>, BackupError> {
 
 impl Database {
     /// 論理日付 `today` の定期バックアップがまだ無ければ作り、作ったものを返す。
-    /// すでにあれば何もせずに `None` を返す。どちらの場合も、残す数を超えた古い
-    /// バックアップを消す（消せなかったものはそのまま残し、失敗にはしない）。
-    ///
-    /// SQLite のオンラインバックアップで写すので、WAL にだけある書き込みも含まれる。
-    /// 写している間にほかの接続が書き込んでも、写し直すので、ある時点で整合した内容になる。
-    /// 写したものは整合性を確かめ、一時ファイルに書いてから名前を変える（途中で止まっても、
-    /// 壊れたバックアップが一覧に並ばない）。
+    /// すでにあれば何もせずに `None` を返す（[`DailyBackup::ensure`]）。
     ///
     /// アプリは起動時と、起動中に論理日付が変わったときに呼ぶ（アーキテクチャ設計書 6.2）。
+    /// 写して整合性を確かめる間、呼んだスレッドを止める。データベースを使う別の処理を待たせずに
+    /// 別のスレッドで作るときは、[`Database::daily_backup`] で取り出してから作る。
     pub fn ensure_daily_backup(&self, today: LogicalDate) -> Result<Option<Backup>, BackupError> {
-        let db_path = self.file_path()?;
-        let dir = backups_dir_of(&db_path);
-        let mut backups = list_in(&dir)?;
-        let exists = backups
-            .iter()
-            .any(|b| b.kind == BackupKind::Daily { date: today });
-        let created = if exists {
-            None
-        } else {
-            let secs = now_secs();
-            // 作れなかったときも古いものは片付ける（場所が空き、次は作れることがある）
-            match create_backup(&db_path, &dir, &format!("{DAILY_PREFIX}{today}-{secs}")) {
-                Ok(b) => Some(b),
-                Err(e) => {
-                    prune(&backups, Some(today), None);
-                    return Err(e);
-                }
-            }
-        };
-        backups.extend(created.clone());
-        prune(
-            &backups,
-            Some(today),
-            created.as_ref().map(|b| b.path.as_path()),
-        );
-        Ok(created)
+        self.daily_backup()?.ensure(today)
+    }
+
+    /// このデータベースの定期バックアップを作るもの。データベース（接続）を借りずに作れるので、
+    /// 取り出した後はデータベースを手放して、別のスレッドで [`DailyBackup::ensure`] を呼べる。
+    ///
+    /// ファイルに置いていない（メモリ上の）データベースは [`BackupError::NoDatabaseFile`]。
+    pub fn daily_backup(&self) -> Result<DailyBackup, BackupError> {
+        Ok(DailyBackup {
+            db_path: self.file_path()?,
+        })
     }
 
     /// バックアップ `backup` の内容でデータベースを置き換える。
@@ -219,6 +200,56 @@ impl Database {
             Some(p) if !p.is_empty() => Ok(self.path.clone()),
             _ => Err(BackupError::NoDatabaseFile),
         }
+    }
+}
+
+/// 定期バックアップを作るもの（[`Database::daily_backup`]）。
+///
+/// 写すのは、開いている接続ではなく、データベースのファイルを別に開いた接続から行う。そのため、
+/// 写している間も、開いているデータベースで読み書きできる（書き込まれたら SQLite が写し直す）。
+/// 保存先の変更（[`super::data_dir::change_data_dir`]）と復元（[`Database::restore_backup`]）は
+/// ファイルを差し替えるので、呼び出し側（アプリ）は、それらと同時に作らないようにする。
+#[derive(Debug, Clone)]
+pub struct DailyBackup {
+    db_path: PathBuf,
+}
+
+impl DailyBackup {
+    /// 論理日付 `today` の定期バックアップがまだ無ければ作り、作ったものを返す。
+    /// すでにあれば何もせずに `None` を返す。どちらの場合も、残す数を超えた古い
+    /// バックアップを消す（消せなかったものはそのまま残し、失敗にはしない）。
+    ///
+    /// SQLite のオンラインバックアップで写すので、WAL にだけある書き込みも含まれる。
+    /// 写している間にほかの接続が書き込んでも、写し直すので、ある時点で整合した内容になる。
+    /// 写したものは整合性を確かめ、一時ファイルに書いてから名前を変える（途中で止まっても、
+    /// 壊れたバックアップが一覧に並ばない）。
+    pub fn ensure(&self, today: LogicalDate) -> Result<Option<Backup>, BackupError> {
+        let db_path = &self.db_path;
+        let dir = backups_dir_of(db_path);
+        let mut backups = list_in(&dir)?;
+        let exists = backups
+            .iter()
+            .any(|b| b.kind == BackupKind::Daily { date: today });
+        let created = if exists {
+            None
+        } else {
+            let secs = now_secs();
+            // 作れなかったときも古いものは片付ける（場所が空き、次は作れることがある）
+            match create_backup(db_path, &dir, &format!("{DAILY_PREFIX}{today}-{secs}")) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    prune(&backups, Some(today), None);
+                    return Err(e);
+                }
+            }
+        };
+        backups.extend(created.clone());
+        prune(
+            &backups,
+            Some(today),
+            created.as_ref().map(|b| b.path.as_path()),
+        );
+        Ok(created)
     }
 }
 

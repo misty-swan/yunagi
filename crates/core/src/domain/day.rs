@@ -1,15 +1,40 @@
 //! 日付の行（day）を作る（docs/design/02-data-model.md 3章 day）。項目かノートのある日を求める
-//! （[`days_with_items_or_note`]。前回の日とサイドバーの Recent の日）。
+//! （[`days_with_items_or_note`]。前回の日とサイドバーの Recent の日）。今日の論理日付を、設定の
+//! 切り替わり時刻で求める（[`today`]。アーキテクチャ設計書 5章）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
-use crate::domain::logical_date::{LogicalDate, time_zone_record};
+use crate::domain::logical_date::{DayBoundary, LogicalDate, time_zone_record};
 use crate::storage::table::day;
 use crate::storage::table::item as item_table;
+use crate::storage::table::setting;
 use crate::storage::table::text_doc::{self, TextDoc};
 use crate::storage::{StorageError, in_read_transaction};
+
+/// 設定のキー：日付の切り替わり時刻（データモデル設計書 3章 setting）。値は `"HH:MM"` の JSON の文字列。
+pub const DAY_BOUNDARY_KEY: &str = "day_boundary";
+
+/// 日付の切り替わり時刻（設定 `day_boundary`）。未設定と、`"HH:MM"`（00:00〜23:59）の JSON の文字列で
+/// ない値は、既定の 4:00 として扱う（壊れた設定で日付を決められず、画面が開けなくならないように）。
+pub fn day_boundary(conn: &Connection) -> Result<DayBoundary, StorageError> {
+    let value = setting::get(conn, DAY_BOUNDARY_KEY)?;
+    Ok(value
+        .and_then(|v| serde_json::from_str::<String>(&v).ok())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_default())
+}
+
+/// 瞬間 `now` の、端末のタイムゾーン `tz` での今日の論理日付。切り替わり時刻は設定
+/// （[`day_boundary`]）から読む。
+pub fn today(
+    conn: &Connection,
+    tz: &TimeZone,
+    now: Timestamp,
+) -> Result<LogicalDate, StorageError> {
+    Ok(LogicalDate::at(now, tz, day_boundary(conn)?))
+}
 
 /// 論理日付 `date` の day の行が無ければ、端末のタイムゾーン `tz` を記録して作る。作ったら `true`。
 /// すでにあれば何も変えずに `false`（`tz` と作成時刻は最初に作ったときのまま）。
@@ -67,8 +92,26 @@ pub fn days_with_items_or_note(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::logical_date::{DayBoundary, parse_time_zone_record};
-    use crate::storage::table::test_support::{at, open};
+    use crate::domain::logical_date::parse_time_zone_record;
+    use crate::storage::table::test_support::{at, date, open};
+
+    #[test]
+    fn today_follows_the_day_boundary_setting() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let tz = TimeZone::get("Asia/Tokyo").unwrap();
+        let now = at("2026-11-02T19:30:00Z"); // 東京の 11/3 4:30
+        // 未設定は 4:00
+        assert_eq!(day_boundary(conn).unwrap(), DayBoundary::DEFAULT);
+        assert_eq!(today(conn, &tz, now).unwrap(), date("2026-11-03"));
+        setting::set(conn, DAY_BOUNDARY_KEY, r#""05:00""#).unwrap();
+        assert_eq!(today(conn, &tz, now).unwrap(), date("2026-11-02"));
+        // 形に合わない値は既定の 4:00
+        for bad in [r#""5:00""#, r#""24:00""#, "500", r#"{"h":5}"#] {
+            setting::set(conn, DAY_BOUNDARY_KEY, bad).unwrap();
+            assert_eq!(day_boundary(conn).unwrap(), DayBoundary::DEFAULT, "{bad}");
+        }
+    }
 
     #[test]
     fn records_the_time_zone_so_it_reads_back_to_the_same_date() {

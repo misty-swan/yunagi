@@ -15,8 +15,8 @@
 //!
 //! ここに無いもの（画面がつながってから作る）：利用者とエージェントが項目を同じ状態にした
 //! 行き違いの判定（アーキテクチャ設計書 4.1 の後半。画面の保存に添える「変える前の値」と操作の時刻を
-//! 使う）。画面の状態（保存の失敗中・入力中）は [`Agent::ui`] で受け取って判定するが、画面から
-//! それを知らせる仕組みはまだ無い。
+//! 使う）。画面の状態（保存の失敗中・入力中）は [`Agent::ui`] で受け取って判定する（アプリでは、
+//! 画面が知らせたものを src-tauri の `ScreenState` が返す。アーキテクチャ設計書 4.3）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -779,7 +779,8 @@ pub fn delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<Deleted, It
     })
 }
 
-/// 画面で削除を取り消す（Mod+Z）。`deleted` は [`delete`] の結果。戻した後の項目を返す。
+/// 画面で削除を取り消す（Mod+Z）。`id` と `source` は [`delete`] の結果（[`Deleted`] の項目の ID と
+/// [`Deleted::source`]）。戻した後の項目を返す。
 ///
 /// - 項目が無いか、削除されていなければ [`ItemError::NotFound`]。
 /// - 持ち越し先の項目は、削除した後に持ち越し元が変わったか、ほかの項目へ持ち越されていれば
@@ -788,16 +789,24 @@ pub fn delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<Deleted, It
 /// - 戻した項目のキーが、その後に同じ日のほかの項目と重なった（または形に当てはまらない）なら、
 ///   その日のキーを並び順を変えずに付け直す（付け直しは削除されていない項目だけを書くので、
 ///   削除の間に重なりうる）。
-pub fn restore(conn: &Connection, deleted: &Deleted, now: Timestamp) -> Result<Item, ItemError> {
+pub fn restore(
+    conn: &Connection,
+    id: Ulid,
+    source: Option<&SourceState>,
+    now: Timestamp,
+) -> Result<Item, ItemError> {
     in_transaction(conn, || {
-        let id = deleted.item.id;
         let item = match item_table::get(conn, id)? {
             Some(item) if item.deleted_at.is_some() => item,
             _ => return Err(ItemError::NotFound),
         };
         if let Some(from) = item.carried_from_id {
-            let source = item_table::get(conn, from)?;
-            if source.as_ref().map(SourceState::of) != deleted.source {
+            if item_table::get(conn, from)?
+                .as_ref()
+                .map(SourceState::of)
+                .as_ref()
+                != source
+            {
                 return Err(RestoreRefused::SourceChanged.into());
             }
             if let Some(to) = item_table::carried_to_skipping(conn, from, Some(id))? {
@@ -2225,7 +2234,7 @@ mod tests {
             rusqlite::params![a.sort_key, b.id],
         )
         .unwrap();
-        let restored = restore(conn, &deleted, at(T2)).unwrap();
+        let restored = restore(conn, deleted.item.id, deleted.source.as_ref(), at(T2)).unwrap();
         assert_eq!(restored.deleted_at, None);
         assert_eq!(restored.updated_at, at(T2));
         let items = item_table::list_by_date(conn, date("2026-11-03")).unwrap();
@@ -2236,7 +2245,7 @@ mod tests {
         assert_eq!(get(conn, b.id).updated_at, at(T0));
         // 戻した後は削除されていないので、もう一度は戻せない
         assert!(matches!(
-            restore(conn, &deleted, at(T2)),
+            restore(conn, deleted.item.id, deleted.source.as_ref(), at(T2)),
             Err(ItemError::NotFound)
         ));
     }
@@ -2248,7 +2257,7 @@ mod tests {
         let a = todo(conn, "a");
         let b = todo(conn, "b");
         let deleted = delete(conn, a.id, at(T1)).unwrap();
-        let restored = restore(conn, &deleted, at(T2)).unwrap();
+        let restored = restore(conn, deleted.item.id, deleted.source.as_ref(), at(T2)).unwrap();
         assert_eq!(restored.sort_key, a.sort_key);
         assert_eq!(get(conn, b.id), b);
         assert_eq!(texts(conn, "2026-11-03"), ["a", "b"]);
