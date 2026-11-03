@@ -4,6 +4,15 @@
   - アニメーションは付けない（色と形がその場で切り替わるだけ。06 2章）
 */
 
+/* Inter v4.1 の可変フォント（太さ 100〜900）。配布元のファイルを加工せずに置く（06 4章。許諾は同じ場所の LICENSE.txt） */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/inter/InterVariable.woff2") format("woff2");
+}
+
 :root {
   --fs-setting: 15;
   --u: calc(1px * var(--fs-setting) / 15);
@@ -19,8 +28,8 @@
   /* 影は重ねて表示するパネルとポップオーバーだけに付ける（06 5章） */
   --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.18);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
-  /* 欧文は同梱の Inter（@fontsource-variable/inter）、和文は OS 標準 */
-  --font: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", "Hiragino Sans",
+  /* 欧文は同梱の Inter、和文は OS 標準（06 4章） */
+  --font: Inter, system-ui, -apple-system, "Segoe UI", "Hiragino Sans",
     "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Noto Sans CJK JP", "Noto Sans JP",
     sans-serif;
 }

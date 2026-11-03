@@ -9,7 +9,7 @@ PC画面全体を「その日の仕事ノート1枚」として使う、エン�
 | `crates/core/` | コア（`yunagi-core`）。ドメイン層（`domain`）とストレージ（`storage`） |
 | `src-tauri/` | デスクトップアプリ（Tauri 2、`yunagi-app`）。コアを使う。画面とコアのつなぎ（Tauri コマンド・イベント。`docs/design/01-architecture.md` 4.3） |
 | `crates/cli/` | コンソール用バイナリ `yunagi`（CLI・MCP サーバー）。コアを使う |
-| `src/` | 画面（TypeScript ＋ Svelte 5、Vite）。コアの呼び出し口は `src/lib/core.ts`。画面の外枠（サイドバー・上部のバー・凪メーター・キーの案内）は `src/shell/`、色のトークンと文字の土台は `src/styles/`、画面の文言（日本語・英語）は `src/lib/i18n.ts` |
+| `src/` | 画面（TypeScript ＋ Svelte 5、Vite）。コアの呼び出し口は `src/lib/core.ts`。画面の外枠（サイドバー・上部のバー・凪メーター・キーの案内）は `src/shell/`、色のトークンと文字の土台は `src/styles/`、同梱するフォント（配布元のファイルと許諾の表記）は `src/assets/fonts/`、画面の文言（日本語・英語）は `src/lib/i18n.ts` |
 
 Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークスペースにまとめている。依存の版は `Cargo.lock` と `pnpm-lock.yaml` で固定する。
 
