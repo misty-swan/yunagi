@@ -8,6 +8,7 @@
 pub mod backup;
 pub mod cloud_sync;
 pub mod data_dir;
+mod db_copy;
 mod error;
 mod lock;
 mod migration;
