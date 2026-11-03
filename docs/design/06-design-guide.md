@@ -65,7 +65,7 @@
 | 用途 | 書体（案） | サイズ | 太さ |
 | --- | --- | --- | --- |
 | 本文（項目・振り返り） | 欧文：Inter、和文：OS 標準（ヒラギノ角ゴ／游ゴシック／Noto Sans CJK） | 15px | 400 |
-| ノート | 同上。設定で等幅（JetBrains Mono ＋ 和文等幅）に切替可 | 15px | 400 |
+| ノート | 同上。設定で等幅（UDEV Gothic HS。下の「ノートの等幅」）に切替可 | 15px | 400 |
 | 英字ラベル（領域見出し、Recent、Outline、Sent、This week など） | 本文と同じ書体。大文字 | 11px、字間 0.24em | 600 |
 | 日付 | 本文と同じ書体、数字は等幅。曜日は `--text-muted` | 15px | 500 |
 | 凪メーターの残り件数 | 本文と同じ書体 | 32px | 200 |
@@ -75,9 +75,39 @@
 | ボタン・小さな本文 | 本文と同じ書体 | 13px | 400（主な操作のボタンは 600） |
 | 補助情報 | 本文と同じ書体 | 12px | 400 |
 
-Inter と JetBrains Mono はアプリに同梱する（SIL OFL。サードパーティライセンス表記に含める）。和文等幅は OS 標準の等幅（Osaka−等幅／MS ゴシック／Noto Sans Mono CJK など。各 OS での収録状況は要確認）を優先し、無ければ和文のみ本文書体で代替する（案）。
+Inter と UDEV Gothic HS はアプリに同梱する（どちらも SIL Open Font License 1.1（OFL）。サードパーティライセンス表記に含める）。JetBrains Mono は UDEV Gothic HS の英数字として入っているため、単体では同梱しない。
 
 行間は本文 1.65、ノート 1.95。フォントサイズは設定で 13〜19px の範囲で変えられ、全体が比例して拡縮する。
+
+### ノートの等幅
+
+ノートの等幅は、和文も含めて同梱のフォントで表示し、どの OS でも同じ見た目で、半角2文字と全角1文字の幅をそろえる（2026-11-03 決定）。OS 標準の和文等幅は、次のとおり必ず入っているとは限らず、字形も OS ごとに違うため使わない。同梱するので、OS に和文等幅が無いときの代替は要らない。
+
+- macOS：Osaka−等幅（Osaka-Mono）は、Apple の一覧（Fonts included with macOS Tahoe）で「入っているか、ダウンロードできる」フォントに載る。入っていないときは Font Book から取り込む必要がある（オンデマンド）。
+- Windows：MS ゴシックと BIZ UDゴシックは「日本語の追加フォント（Japanese Supplemental Fonts）」に入る。日本語版や日本語を足した環境には入るが、英語版などを新しく入れた環境には入っていない（Microsoft Learn「How to add fonts missing after upgrading Windows」、BIZ UDGothic font family）。
+- Linux：Noto Sans Mono CJK JP が、Debian・Ubuntu では `fonts-noto-cjk`、Fedora では `google-noto-sans-mono-cjk-vf-fonts`、Arch Linux では `noto-fonts-cjk` にある。Ubuntu のデスクトップは `fonts-noto-cjk` を標準で入れる（`ubuntu-desktop-minimal` の推奨）が、ほかは入れるときの言語や利用者の導入しだい。
+
+同梱するフォント：
+
+| 項目 | 決めたこと |
+| --- | --- |
+| 書体 | UDEV Gothic HS。JetBrains Mono の英数字を半角の幅に縮め、BIZ UDゴシックの和文と合わせたもの。HS は全角スペースを見えない形にした版 |
+| 版とファイル | v2.2.0 の `UDEVGothicHS-Regular.ttf`。公式の配布元（GitHub の `yuru7/udev-gothic` のリリース `UDEVGothic_HS_v2.2.0.zip`）に入っているもの。SHA-256 は `89fa22a7fe28aca7ab3cdf33812406589b2e28739bcdb051848913e4164a2339` |
+| 太さ | Regular（400）の1つだけ。ノートには太字・斜体の表示が無く、時刻付き見出しは等幅に切り替えても上の表の書体（本文と同じ）で表示する |
+| 大きさ | 3.87 MB（3,874,168 バイト）。アプリに埋め込むときに Tauri が圧縮するため、配布物は約 2.2 MB 増える |
+| 字幅 | 半角 0.5em・全角 1.0em。矢印・罫線など、幅の決まっていない記号は半角 |
+| 加工 | しない。公式の TTF をそのまま入れ、WOFF2 への変換や文字を減らす加工はしない（下の「予約フォント名」） |
+| 指定 | `font-family: "UDEV Gothic HS", monospace`。このフォントに無い文字（絵文字など）は OS のフォントで表示され、その文字だけ幅がそろわないことがある |
+
+選ばなかったもの：
+
+- JetBrains Mono と BIZ UDゴシックの2つを同梱し、`font-family` で並べて和文だけ BIZ UDゴシックで表示する組み合わせ：JetBrains Mono の半角は 0.6em で、半角2文字（1.2em）と全角1文字（1.0em）がそろわない。
+- BIZ UDゴシック単体：桁はそろうが、英数字が JetBrains Mono でなくなり、ファイルも大きい（Regular で 4.67 MB）。
+- UDEV Gothic のほかの版：35 版は半角3：全角5で桁がそろわない。JPDOC 版は矢印・罫線などを全角にし、英語の文やコードの桁がずれる。LG 版は合字（`->` などを1つの記号に見せる）で、書いた文字のとおりに見えなくなる。通常版は全角スペースを点線の箱で見せるプログラミング向けの表示で、日本語の文章が中心のノートでは字下げなどの全角スペースが目障りになる。
+
+予約フォント名：UDEV Gothic のライセンスは「UDEV Gothic」を予約フォント名にしている。手を加えた版はこの名前で配れず、形式の変換もふつうは手を加えたことになる（OFL FAQ 2.2）。このため公式のファイルを加工せずに入れる。変換や文字の削減が要るようになったら、OFL に従って別の名前を付ける。
+
+許諾の表記：UDEV Gothic の著作権表示（Copyright (c) 2022 Yuko OTAWARA）と OFL の本文に加えて、元になった JetBrains Mono（Copyright 2020 The JetBrains Mono Project Authors）と BIZ UDゴシック（Copyright 2022 The BIZ UDGothic Project Authors）の著作権表示と OFL の本文を含める。配布元のリポジトリの `LICENSE`、`source/LICENSE_JetBrainsMono`、`source/LICENSE_BIZUDGothic` を、同じ版のものでフォントのファイルと同じ場所に置き、サードパーティライセンス表記に加える（サードパーティライセンス表記の方針 2章）。OFL はフォントだけを売ることを禁じるが、ソフトウェアに入れて配ることは認めている（有料のサポーターライセンスとも両立する）。
 
 ## 5. 余白とレイアウト
 
