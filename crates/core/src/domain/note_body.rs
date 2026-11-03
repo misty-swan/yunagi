@@ -13,6 +13,8 @@
 
 use std::ops::Range;
 
+use jiff::civil::Time;
+
 /// 本文の行。1行目から順に返す。空の本文は空の1行。
 pub fn lines(body: &str) -> std::str::Split<'_, char> {
     body.split('\n')
@@ -125,10 +127,12 @@ pub fn sections(body: &str) -> Vec<Section> {
 /// 行 `line`（1始まり）が属する区間。見出しの行は、その見出しの区間に属する。
 /// 行が本文に無ければ `None`。
 pub fn section_of_line(body: &str, line: usize) -> Option<Section> {
-    if line == 0 || line > line_count(body) {
+    let sections = sections(body);
+    // 最後の区間の終わりは、行数＋1
+    if line == 0 || line >= sections.last().expect("at least one section").lines.end {
         return None;
     }
-    sections(body).into_iter().rev().find(|s| match &s.heading {
+    sections.into_iter().rev().find(|s| match &s.heading {
         Some(h) => h.line <= line,
         None => true,
     })
@@ -142,14 +146,13 @@ pub enum InvalidArgument {
     EmptyText,
     /// 見出しの件名に改行が含まれる。
     MultilineTitle,
-    /// 行番号が 0（行番号は1始まり）。
+    /// 行番号（書き換える行か移動先）が 0（行番号は1始まり）。
     LineZero,
     /// `expected_text` に改行が含まれる（1行の本文と一致することはない）。
     MultilineExpectedText,
-    /// 書き換えた後の行に改行（LF・CR）が含まれる。書き換えは1行を1行にする。
+    /// 書き換えた後の行に改行（LF）が含まれる。書き換えは1行を1行にする。CR は行の文字として
+    /// 受け付ける（行の数え方と同じ）。
     MultilineReplacement,
-    /// 移動先の行番号が 0。
-    MoveToZero,
 }
 
 impl std::fmt::Display for InvalidArgument {
@@ -160,7 +163,6 @@ impl std::fmt::Display for InvalidArgument {
             Self::LineZero => "Line numbers start at 1.",
             Self::MultilineExpectedText => "expected_text must be a single line.",
             Self::MultilineReplacement => "The replacement must be a single line.",
-            Self::MoveToZero => "Line numbers start at 1.",
         })
     }
 }
@@ -179,11 +181,13 @@ fn normalize_text(text: &str) -> Result<String, InvalidArgument> {
     Ok(text.to_owned())
 }
 
-/// 時刻付き見出しの行（`## HH:MM 件名`。件名が無ければ `## HH:MM`）。件名は前後の空白を除く。
-pub fn time_heading_line(hour: u8, minute: u8, title: &str) -> Result<String, InvalidArgument> {
+/// 時刻 `time` の時刻付き見出しの行（`## HH:MM 件名`。件名が無ければ `## HH:MM`）。
+/// 秒より細かい部分は使わない。件名は前後の空白を除く。
+pub fn time_heading_line(time: Time, title: &str) -> Result<String, InvalidArgument> {
     if title.contains(['\n', '\r']) {
         return Err(InvalidArgument::MultilineTitle);
     }
+    let (hour, minute) = (time.hour(), time.minute());
     let title = title.trim();
     Ok(if title.is_empty() {
         format!("## {hour:02}:{minute:02}")
@@ -270,12 +274,12 @@ impl std::fmt::Display for Changed {
     }
 }
 
-/// 本文に行単位の書き換えを当てた結果。本文が変わらない書き換え（同じ本文への置き換え、
-/// 同じ位置への移動）なら `None`。
+/// 本文に行単位の書き換えを当てた結果の本文。同じ本文への置き換えや同じ位置への移動では、
+/// もとと同じ本文になる（何も変えなかったかは、呼び出し側が本文を比べて決める）。
 ///
 /// 確かめる順：引数の誤り（[`InvalidArgument`]）、`line` 行目が本文にあり `expected_text` と
 /// 一致するか、移動先が本文にあるか（[`Changed`]）。
-pub fn apply_line_edit(body: &str, edit: &LineEdit) -> Result<Option<String>, LineEditError> {
+pub fn apply_line_edit(body: &str, edit: &LineEdit) -> Result<String, LineEditError> {
     let invalid = |e| Err(LineEditError::InvalidArgument(e));
     if edit.line == 0 {
         return invalid(InvalidArgument::LineZero);
@@ -284,10 +288,10 @@ pub fn apply_line_edit(body: &str, edit: &LineEdit) -> Result<Option<String>, Li
         return invalid(InvalidArgument::MultilineExpectedText);
     }
     match &edit.op {
-        LineOp::Replace(text) if text.contains(['\n', '\r']) => {
+        LineOp::Replace(text) if text.contains('\n') => {
             return invalid(InvalidArgument::MultilineReplacement);
         }
-        LineOp::MoveTo(0) => return invalid(InvalidArgument::MoveToZero),
+        LineOp::MoveTo(0) => return invalid(InvalidArgument::LineZero),
         _ => {}
     }
 
@@ -308,12 +312,7 @@ pub fn apply_line_edit(body: &str, edit: &LineEdit) -> Result<Option<String>, Li
         });
     }
     match &edit.op {
-        LineOp::Replace(text) => {
-            if actual == text {
-                return Ok(None);
-            }
-            lines[index] = text;
-        }
+        LineOp::Replace(text) => lines[index] = text,
         LineOp::Delete => {
             lines.remove(index);
         }
@@ -324,14 +323,11 @@ pub fn apply_line_edit(body: &str, edit: &LineEdit) -> Result<Option<String>, Li
                     line_count,
                 });
             }
-            if *to == edit.line {
-                return Ok(None);
-            }
             let moved = lines.remove(index);
             lines.insert(to - 1, moved);
         }
     }
-    Ok(Some(lines.join("\n")))
+    Ok(lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -467,9 +463,12 @@ mod tests {
 
     #[test]
     fn appends_with_a_time_heading() {
-        let h = time_heading_line(9, 5, " 定例 ").unwrap();
+        let h = time_heading_line(Time::constant(9, 5, 59, 999), " 定例 ").unwrap();
         assert_eq!(h, "## 09:05 定例");
-        assert_eq!(time_heading_line(14, 0, "").unwrap(), "## 14:00");
+        assert_eq!(
+            time_heading_line(Time::constant(14, 0, 0, 0), "").unwrap(),
+            "## 14:00"
+        );
         assert_eq!(append("", "x", Some(&h)).unwrap(), "## 09:05 定例\nx");
         assert_eq!(append("a", "x", Some(&h)).unwrap(), "a\n\n## 09:05 定例\nx");
         assert_eq!(append("a\n", "x", Some(&h)).unwrap(), "a\n## 09:05 定例\nx");
@@ -477,7 +476,7 @@ mod tests {
         let body = append("a", "x", Some(&h)).unwrap();
         assert_eq!(headings(&body)[0].text, "09:05 定例");
         assert_eq!(
-            time_heading_line(9, 5, "a\nb"),
+            time_heading_line(Time::constant(9, 5, 0, 0), "a\nb"),
             Err(InvalidArgument::MultilineTitle)
         );
     }
@@ -508,7 +507,7 @@ mod tests {
     #[test]
     fn replaces_deletes_and_moves_lines() {
         let body = "a\nb\nc";
-        let apply = |e| apply_line_edit(body, &e).unwrap();
+        let apply = |e| Some(apply_line_edit(body, &e).unwrap());
         assert_eq!(
             apply(edit(2, "b", LineOp::Replace("B".into()))).as_deref(),
             Some("a\nB\nc")
@@ -529,24 +528,29 @@ mod tests {
         // 空の行も書き換えられる。行を消し切ると空の本文
         assert_eq!(
             apply_line_edit("a\n", &edit(2, "", LineOp::Replace("b".into()))).unwrap(),
-            Some("a\nb".into())
+            "a\nb"
         );
         assert_eq!(
             apply_line_edit("a", &edit(1, "a", LineOp::Delete)).unwrap(),
-            Some(String::new())
+            ""
+        );
+        // CR は行の文字なので、CR を含む行を CR を残したまま書き換えられる
+        assert_eq!(
+            apply_line_edit("a\r\nb", &edit(1, "a\r", LineOp::Replace("A\r".into()))).unwrap(),
+            "A\r\nb"
         );
     }
 
     #[test]
-    fn edits_that_change_nothing_return_none() {
+    fn edits_that_change_nothing_return_the_same_body() {
         let body = "a\nb";
         assert_eq!(
-            apply_line_edit(body, &edit(1, "a", LineOp::Replace("a".into()))),
-            Ok(None)
+            apply_line_edit(body, &edit(1, "a", LineOp::Replace("a".into()))).unwrap(),
+            body
         );
         assert_eq!(
-            apply_line_edit(body, &edit(2, "b", LineOp::MoveTo(2))),
-            Ok(None)
+            apply_line_edit(body, &edit(2, "b", LineOp::MoveTo(2))).unwrap(),
+            body
         );
     }
 
@@ -597,7 +601,7 @@ mod tests {
             invalid(edit(1, "a\nb", LineOp::Delete)),
             InvalidArgument::MultilineExpectedText
         );
-        for text in ["x\ny", "x\r"] {
+        for text in ["x\ny", "x\r\n"] {
             assert_eq!(
                 invalid(edit(9, "x", LineOp::Replace(text.into()))),
                 InvalidArgument::MultilineReplacement
@@ -605,7 +609,7 @@ mod tests {
         }
         assert_eq!(
             invalid(edit(1, "a", LineOp::MoveTo(0))),
-            InvalidArgument::MoveToZero
+            InvalidArgument::LineZero
         );
     }
 }

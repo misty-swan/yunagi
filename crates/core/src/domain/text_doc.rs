@@ -129,10 +129,10 @@ pub fn get(conn: &Connection, doc: TextDoc, date: LogicalDate) -> Result<Snapsho
 
 /// 画面からの保存。`base_rev` は、もとにした本文の版の番号（まだ書いていない日は 0）。
 ///
-/// - `base_rev` がいまの版と違えば、書かずに [`TextDocError::Stale`] で最新を返す。
-/// - 本文がいまと同じなら、書かずに `updated: false` を返す（版を進めない。版が進むと、画面が
-///   知らせた守る行が古いものになるため。アーキテクチャ設計書 4.1）。まだ書いていない日に
-///   空の本文を保存したときも、行を作らない。
+/// - 本文がいまと同じなら、書かずに `updated: false` といまの版を返す（版を進めない。版が進むと、
+///   画面が知らせた守る行が古いものになるため。アーキテクチャ設計書 4.1）。`base_rev` が古くても
+///   同じ。まだ書いていない日に空の本文を保存したときも、行を作らない。
+/// - そうでなく `base_rev` がいまの版と違えば、書かずに [`TextDocError::Stale`] で最新を返す。
 /// - 書くときは、その日の day の行が無ければ端末のタイムゾーン `tz` で作る（[`day::ensure`]）。
 ///
 /// 人の編集なので change_log には記録しない。`now` は `crate::storage::table::now` で作る。
@@ -145,16 +145,18 @@ pub fn save(
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
-    in_savepoint(conn, || {
+    in_transaction(conn, || {
         let current = get(conn, doc, date)?;
-        if current.rev != base_rev {
-            return Err(TextDocError::Stale { latest: current });
-        }
+        // 同じ本文なら、もとにした版が古くても書かずに成功にする。行き違いにすると、画面の取り込みで
+        // 同じ行が両方から足されたものとして二重になるため
         if current.body == body {
             return Ok(Written {
                 rev: current.rev,
                 updated: false,
             });
+        }
+        if current.rev != base_rev {
+            return Err(TextDocError::Stale { latest: current });
         }
         day::ensure(conn, date, tz, now)?;
         let rev = text_doc::save(conn, doc, date, body, now)?;
@@ -178,16 +180,9 @@ pub fn append_note(
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
     let heading = heading
-        .map(|title| {
-            let time = now.to_zoned(tz.clone());
-            note_body::time_heading_line(
-                u8::try_from(time.hour()).expect("hour is 0-23"),
-                u8::try_from(time.minute()).expect("minute is 0-59"),
-                title,
-            )
-        })
+        .map(|title| note_body::time_heading_line(now.to_zoned(tz.clone()).time(), title))
         .transpose()?;
-    let new_body = |body: &str| Ok(Some(note_body::append(body, text, heading.as_deref())?));
+    let new_body = |body: &str| Ok(note_body::append(body, text, heading.as_deref())?);
     write_by_agent(
         conn,
         TextDoc::Note,
@@ -212,7 +207,7 @@ pub fn append_reflection(
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
-    let new_body = |body: &str| Ok(Some(note_body::append(body, text, None)?));
+    let new_body = |body: &str| Ok(note_body::append(body, text, None)?);
     write_by_agent(
         conn,
         TextDoc::Reflection,
@@ -252,8 +247,8 @@ pub fn edit_note(
     )
 }
 
-/// エージェントの書き込みの共通の手順。いまの本文から `new_body` で新しい本文を作り
-/// （`None` なら変えない）、本文と change_log の記録を1つのトランザクションで書く。
+/// エージェントの書き込みの共通の手順。いまの本文から `new_body` で新しい本文を作り、
+/// いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
 #[allow(clippy::too_many_arguments)]
 fn write_by_agent(
     conn: &Connection,
@@ -263,16 +258,17 @@ fn write_by_agent(
     agent_client_id: Ulid,
     tz: &TimeZone,
     now: Timestamp,
-    new_body: impl FnOnce(&str) -> Result<Option<String>, TextDocError>,
+    new_body: impl FnOnce(&str) -> Result<String, TextDocError>,
 ) -> Result<Written, TextDocError> {
-    in_savepoint(conn, || {
+    in_transaction(conn, || {
         let current = get(conn, doc, date)?;
-        let Some(body) = new_body(&current.body)?.filter(|b| *b != current.body) else {
+        let body = new_body(&current.body)?;
+        if body == current.body {
             return Ok(Written {
                 rev: current.rev,
                 updated: false,
             });
-        };
+        }
         day::ensure(conn, date, tz, now)?;
         let rev = text_doc::save(conn, doc, date, &body, now)?;
         let target = match doc {
@@ -305,28 +301,44 @@ fn json_string(body: &str) -> String {
     serde_json::to_string(body).expect("a string always serializes to JSON")
 }
 
-/// `f` を1つのセーブポイントの中で行い、成功したら確定し、失敗したら取り消す。
-/// トランザクションの外で呼べばトランザクションになり、呼び出し側のトランザクションの中で呼べば
-/// その一部になる（`BEGIN` と違い、入れ子にできる）。
-fn in_savepoint<T>(
+/// `f` を1つのトランザクションの中で行い、成功したら確定し、失敗したら取り消す。
+/// 呼び出し側のトランザクションの中で呼べば、セーブポイントを使ってその一部になる（`BEGIN` は
+/// 入れ子にできないため）。確定は呼び出し側が行う。
+///
+/// `f` の失敗は、取り消しにも失敗したときでも `f` の失敗のまま返す（行き違いの最新の本文などを
+/// 失わないため）。確定（`COMMIT`）の失敗では、トランザクションが開いたまま残らないよう取り消す。
+fn in_transaction<T>(
     conn: &Connection,
     f: impl FnOnce() -> Result<T, TextDocError>,
 ) -> Result<T, TextDocError> {
-    const NAME: &str = "yunagi_text_doc";
-    conn.execute_batch(&format!("SAVEPOINT {NAME}"))?;
-    let rollback = || conn.execute_batch(&format!("ROLLBACK TO {NAME}; RELEASE {NAME}"));
+    const SAVEPOINT: &str = "yunagi_text_doc";
+    let outermost = conn.is_autocommit();
+    let (begin, commit, rollback) = if outermost {
+        (
+            "BEGIN".to_owned(),
+            "COMMIT".to_owned(),
+            "ROLLBACK".to_owned(),
+        )
+    } else {
+        (
+            format!("SAVEPOINT {SAVEPOINT}"),
+            format!("RELEASE {SAVEPOINT}"),
+            // ROLLBACK TO はセーブポイントを残すので、続けて外す
+            format!("ROLLBACK TO {SAVEPOINT}; RELEASE {SAVEPOINT}"),
+        )
+    };
+    conn.execute_batch(&begin)?;
     match f() {
-        Ok(value) => match conn.execute_batch(&format!("RELEASE {NAME}")) {
+        Ok(value) => match conn.execute_batch(&commit) {
             Ok(()) => Ok(value),
             Err(e) => {
-                // 確定に失敗した。取り消しにも失敗したら、そちらを返す（トランザクションが開いたまま
-                // 残っていることを知らせるため）
-                rollback()?;
+                // 確定の失敗を返す。取り消しの失敗は、それに続いて起きたものなので捨てる
+                let _ = conn.execute_batch(&rollback);
                 Err(e.into())
             }
         },
         Err(e) => {
-            rollback()?;
+            let _ = conn.execute_batch(&rollback);
             Err(e)
         }
     }
@@ -475,6 +487,17 @@ mod tests {
             w,
             Written {
                 rev: 1,
+                updated: false
+            }
+        );
+
+        // もとにした版が古くても、同じ本文なら行き違いにせず、いまの版を返す
+        append_note(conn, d, "x", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
+        let w = save(conn, TextDoc::Note, d, "a\nx", 1, &tokyo(), at(NOW)).unwrap();
+        assert_eq!(
+            w,
+            Written {
+                rev: 2,
                 updated: false
             }
         );
