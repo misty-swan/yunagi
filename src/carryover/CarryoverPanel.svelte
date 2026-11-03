@@ -6,7 +6,7 @@
   // 「選んだものを持ち越す」、Esc で後回し。分割の子の入力欄では、文字・Enter（改行）はそのまま打て、
   // Esc でその行のチェック欄へ戻る。表示している間は、ほかの画面のキー（Mod+K・Mod+Z など）を受け付けない。
   // Tab は画面の中だけを回る。
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import type { Id } from "../lib/bindings";
   import type { CarryRow, Carryover } from "../lib/carryover.svelte";
   import { shortDate } from "../lib/dates";
@@ -27,34 +27,47 @@
   const selIndex = $derived(Math.max(0, ordered.findIndex((r) => r.item.id === selId)));
 
   let panel = $state<HTMLElement | null>(null);
-  /** 開く前にフォーカスのあった所（閉じたら戻す）。 */
-  let returnTo: Element | null = null;
-  let focusedFor: string | null = null;
+  /** フォーカスを置いた一覧（前回の日。前回の日が変わったら置き直す）。開いていなければ `undefined`。 */
+  let focusedFor: string | null | undefined = undefined;
+  /** 選んでいる行の位置（読み直しで行が消えたとき、同じ位置へ移るため）。 */
+  let lastIndex = 0;
+  $effect(() => {
+    const i = ordered.findIndex((r) => r.item.id === selId);
+    if (i >= 0) lastIndex = i;
+  });
 
-  // 開いたら、一覧を読み終えたところで先頭の行（無ければ「選んだものを持ち越す」）へフォーカスを置く
+  // 開いたら、一覧を読み終えたところで先頭の行（無ければ「選んだものを持ち越す」）へフォーカスを置く。
+  // 閉じたら、開く直前にフォーカスのあった所（Carryover.returnFocus）へ戻す
   $effect(() => {
     if (!carry.open) {
-      if (focusedFor !== null) {
-        focusedFor = null;
+      if (focusedFor !== undefined) {
+        focusedFor = undefined;
         selId = null;
-        const back = returnTo;
-        returnTo = null;
+        lastIndex = 0;
+        const back = carry.returnFocus;
+        carry.returnFocus = null;
         void tick().then(() => {
           if (back instanceof HTMLElement && back.isConnected) back.focus();
         });
       }
       return;
     }
+    if (!carry.loaded) return;
     const from = carry.from;
-    if (from === null || focusedFor === from) return;
-    if (focusedFor === null) returnTo = document.activeElement;
+    if (focusedFor === from) return;
     focusedFor = from;
     void tick().then(() => focusRow(0));
   });
 
-  // 読み直しで選んでいた行が消えたら、同じ位置の行へ
+  // 読み直しで選んでいた行が消えたら、同じ位置の行へ移る（フォーカスも。消えたチェック欄にあった
+  // フォーカスが背後へ落ちて、次のキーが効かなくならないように）
   $effect(() => {
-    if (selId !== null && !ordered.some((r) => r.item.id === selId)) selId = ordered[0]?.item.id ?? null;
+    if (selId === null || ordered.some((r) => r.item.id === selId)) return;
+    const n = Math.min(lastIndex, ordered.length - 1);
+    selId = ordered[n]?.item.id ?? null;
+    untrack(() => {
+      if (panel !== null && !panel.contains(document.activeElement)) focusRow(n);
+    });
   });
 
   function focusRow(i: number) {
@@ -144,16 +157,21 @@
     }
   }
 
-  // 背後（外枠）にフォーカスがあるときのキーも、ほかの画面の操作にしない（クリックで外れたときなど）
+  // 背後（外枠）にフォーカスがあるときのキーも、ほかの画面の操作にしない（覆いをクリックしてフォーカスが
+  // 外れたときなど）。Esc（後回し）と Enter（選んだものを持ち越す）はそのまま効かせ、ほかは行へ戻す
   function onWindowKeydown(e: KeyboardEvent) {
     if (!carry.open || panel === null) return;
     if (e.target instanceof Node && panel.contains(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
-    focusRow(selIndex);
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Escape") void carry.postpone();
+    else if (e.key === "Enter" && !e.repeat) void carry.confirm("selected");
+    else focusRow(selIndex);
   }
 
   const reviewAt = $derived(carry.reviewThreshold);
+  const confirmDisabled = $derived(carry.busy || !carry.loaded);
 </script>
 
 <svelte:window onkeydowncapture={onWindowKeydown} />
@@ -238,9 +256,9 @@
     >
       <div class="ph">
         <div class="label">{m.labels.carryOver}</div>
-        <h2 id="carry-title">{carry.from === null ? c.loading : c.title(shortDate(carry.from))}</h2>
+        <h2 id="carry-title">{carry.from === null ? (carry.loaded ? c.nothing : c.loading) : c.title(shortDate(carry.from))}</h2>
         {#if carry.message !== null}
-          <p class="message" role="status">{carry.message === "failed" ? c.failed : c.reloaded}</p>
+          <p class="message" role="status">{c.messages[carry.message]}</p>
         {/if}
       </div>
       <div class="body">
@@ -256,22 +274,23 @@
             {#each blockers as r (r.item.id)}{@render row(r)}{/each}
           </ul>
         {/if}
-        {#if carry.from !== null && ordered.length === 0}
+        {#if carry.loaded && ordered.length === 0}
           <p class="empty">{c.empty}</p>
         {/if}
       </div>
       <div class="actions">
+        <!-- 一覧を読み終えるまでは確定できない（後回しはできる） -->
         <button
           type="button"
           class="btn primary"
           data-act="selected"
-          disabled={carry.busy}
+          disabled={confirmDisabled}
           onclick={() => void carry.confirm("selected")}>{c.carrySelected}<kbd>Enter</kbd></button
         >
-        <button type="button" class="btn" data-act="all" disabled={carry.busy} onclick={() => void carry.confirm("all")}
+        <button type="button" class="btn" data-act="all" disabled={confirmDisabled} onclick={() => void carry.confirm("all")}
           >{c.carryAll}</button
         >
-        <button type="button" class="btn" data-act="none" disabled={carry.busy} onclick={() => void carry.confirm("none")}
+        <button type="button" class="btn" data-act="none" disabled={confirmDisabled} onclick={() => void carry.confirm("none")}
           >{c.carryNone}</button
         >
         <button

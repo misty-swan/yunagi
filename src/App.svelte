@@ -58,12 +58,14 @@
 
   // ---- 持ち越し（S-03。画面設計書 5章） ----
 
-  // 出すときは、今日の整理モードの上に重ねる（まだ保存していない入力は先に送る）
-  const carry = new Carryover(() => {
-    void save.flushAll();
+  // 出すときは、今日の整理モードの上に重ねる。一覧は、まだ保存していない入力を送り終えてから読む
+  // （前の日の項目の本文・完了を送る前の内容で持ち越さないため）
+  const carry = new Carryover(async () => {
+    const flushed = save.flushAll();
     shell.setMode("board");
     const today = session.today;
     if (today !== null && session.showing !== today) session.show(today);
+    await flushed;
   });
   onDestroy(() => void carry.stop());
   // データベースを開いたら（起動は前面に出したことに数える）確かめる

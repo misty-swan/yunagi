@@ -6,6 +6,7 @@
 // - 短く、命令形を避け、状態を淡々と伝える。感嘆符・絵文字・励ましの言葉は使わない。
 
 import type { CloseReason, RejectReason, StartupFailure } from "./bindings";
+import type { CarryMessage } from "./carryover.svelte";
 import { prefs, type Lang } from "./prefs.svelte";
 
 /** 日英で共通の英字ラベル。 */
@@ -232,11 +233,13 @@ export interface CarryoverMessages {
   carryAll: string;
   carryNone: string;
   later: string;
+  /** 見出しの文（前回の日が無くなったとき）。 */
+  nothing: string;
   /** 一覧が空になったとき（エージェントが完了にしたなど）。 */
   empty: string;
   loading: string;
-  failed: string;
-  reloaded: string;
+  /** 見出しの下に出す知らせ（`Carryover.message`）。 */
+  messages: Record<CarryMessage, string>;
 }
 
 
@@ -493,10 +496,15 @@ const ja: Messages = {
     carryAll: "すべて持ち越す",
     carryNone: "持ち越さない",
     later: "後回し",
+    nothing: "前回の日に残った項目",
     empty: "持ち越す項目はありません。",
     loading: "読み込んでいます",
-    failed: "持ち越せませんでした。もう一度選べます。",
-    reloaded: "前回の日が変わったため、一覧を読み直しました。",
+    messages: {
+      failed: "持ち越せませんでした。もう一度選べます。",
+      invalid: "見直しの選択を受け付けられませんでした。選び直せます。",
+      loadFailed: "一覧を読めませんでした。読み直しています。",
+      reloaded: "前回の日が変わったため、一覧を読み直しました。",
+    },
   },
 };
 
@@ -561,10 +569,15 @@ const en: Messages = {
     carryAll: "Carry over all",
     carryNone: "Don’t carry over",
     later: "Later",
+    nothing: "Left on the previous day",
     empty: "Nothing left to carry over.",
     loading: "Loading",
-    failed: "Couldn't carry over. You can choose again.",
-    reloaded: "The previous day changed, so the list was reloaded.",
+    messages: {
+      failed: "Couldn't carry over. You can choose again.",
+      invalid: "The review choices couldn't be accepted. You can choose again.",
+      loadFailed: "Couldn't load the list. Retrying.",
+      reloaded: "The previous day changed, so the list was reloaded.",
+    },
   },
 };
 

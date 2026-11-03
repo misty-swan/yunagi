@@ -60,6 +60,8 @@ interface Fake {
   list: CarryoverList | null;
   reshown: boolean;
   confirmError: CommandError | null;
+  /** 一覧の読み込みを、この回数だけ失敗させる。 */
+  listFailures?: number;
 }
 
 function mockCore(fake: Fake) {
@@ -72,6 +74,10 @@ function mockCore(fake: Fake) {
         case "carryover_status":
           return fake.status;
         case "carryover_candidates":
+          if ((fake.listFailures ?? 0) > 0) {
+            fake.listFailures! -= 1;
+            throw { kind: "storage", detail: "disk" };
+          }
           return fake.list;
         case "mark_carryover_reshown": {
           const r = fake.reshown;
@@ -372,4 +378,101 @@ test("英語の文言", async () => {
     "Don’t carry over",
     "Later",
   ]);
+});
+
+test("一覧を読めなければ知らせて読み直し、読み終えるまでは確定できない", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const { carry, calls } = await start(defaultFake({ listFailures: 1 }));
+    void carry.started();
+    await until(() => text($(".message")) === "一覧を読めませんでした。読み直しています。");
+    expect(text($("#carry-title"))).toBe("読み込んでいます");
+    expect(($("[data-act='selected']") as HTMLButtonElement).disabled).toBe(true);
+    expect(($("[data-act='later']") as HTMLButtonElement).disabled).toBe(false);
+    await carry.confirm("all");
+    expect(confirmed(calls)).toEqual([]);
+    expect($("[data-carryover]")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    await until(() => $$("li[data-carry-row]").length === 3);
+    expect($(".message")).toBeNull();
+    expect(($("[data-act='selected']") as HTMLButtonElement).disabled).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("前回の日が無くなったら空にし、確定のボタンで閉じる", async () => {
+  const { carry, fake, calls } = await start();
+  await carry.started();
+  await until(() => $$("li[data-carry-row]").length === 3);
+  fake.list = null;
+  fake.status = null;
+  await emit(EVENTS.changed, { by: "agent" });
+  await until(() => $$("li[data-carry-row]").length === 0 && text($(".empty")) === "持ち越す項目はありません。");
+  expect(text($("#carry-title"))).toBe("前回の日に残った項目");
+  $("[data-act='selected']")!.click();
+  await until(() => $("[data-carryover]") === null);
+  expect(confirmed(calls)).toEqual([]);
+  // 持ち越しの状態を読み直す
+  await until(() => carry.pending === null);
+});
+
+test("閉じると、開く直前にフォーカスのあった所へ戻す", async () => {
+  const { carry } = await start();
+  const before = document.createElement("button");
+  document.body.append(before);
+  before.focus();
+  await carry.started();
+  await until(() => document.activeElement === check(A));
+  press(check(A), "Escape");
+  await until(() => $("[data-carryover]") === null && document.activeElement === before);
+});
+
+test("選んでいた行が読み直しで消えたら、同じ位置の行へ選択とフォーカスを移す", async () => {
+  const { carry, fake } = await start();
+  await carry.started();
+  await until(() => document.activeElement === check(A));
+  press(check(A), "j");
+  await until(() => document.activeElement === check(B));
+  fake.list = { ...fake.list!, items: fake.list!.items.filter((c) => c.item.id !== B) };
+  await emit(EVENTS.changed, { by: "agent" });
+  await until(() => document.activeElement === check(C));
+  press(check(C), "k");
+  await until(() => document.activeElement === check(A));
+});
+
+test("背後にフォーカスがあっても、Esc で後回し、Enter で選んだものを持ち越す", async () => {
+  const { carry, calls } = await start();
+  const outside = document.createElement("button");
+  document.body.append(outside);
+  await carry.started();
+  await until(() => $$("li[data-carry-row]").length === 3);
+  outside.focus();
+  press(outside, "Escape");
+  await until(() => $("[data-carryover]") === null);
+  expect(calls.some((c) => c.cmd === "postpone_carryover")).toBe(true);
+
+  await carry.openOnRequest();
+  await until(() => $$("li[data-carry-row]").length === 3);
+  outside.focus();
+  press(outside, "Enter");
+  await until(() => $("[data-carryover]") === null);
+  expect(confirmed(calls)).toHaveLength(1);
+});
+
+test("前面に出したのとパレットから開くのが重なっても、1回だけ開き、再表示の記録も1回", async () => {
+  const { carry, calls } = await start(defaultFake({ status: { from: FROM, prompt: "reshow_on_focus" } }));
+  await Promise.all([carry.focused(), carry.openOnRequest(), carry.focused()]);
+  await until(() => $$("li[data-carry-row]").length === 3);
+  expect(calls.filter((c) => c.cmd === "mark_carryover_reshown")).toHaveLength(1);
+  expect(calls.filter((c) => c.cmd === "carryover_candidates")).toHaveLength(1);
+});
+
+test("見直しの選択をコアが受け付けなかったら、閉じずに知らせる", async () => {
+  const { carry } = await start(defaultFake({ confirmError: { kind: "invalid_argument", reason: "multiline_text" } }));
+  await carry.started();
+  await until(() => $$("li[data-carry-row]").length === 3);
+  $("[data-act='all']")!.click();
+  await until(() => text($(".message")) === "見直しの選択を受け付けられませんでした。選び直せます。");
+  expect($("[data-carryover]")).not.toBeNull();
 });

@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { CarryoverList, Item } from "./bindings";
-import { decisionOf, mergeRows, type CarryRow } from "./carryover.svelte";
+import { decisionOf, mergeRows, splitChildren, type CarryRow } from "./carryover.svelte";
+
+test("分割の子は LF・CRLF・CR のどれでも行に分ける", () => {
+  expect(splitChildren("a\nb\r\nc\rd")).toEqual(["a", "b", "c", "d"]);
+});
 
 function item(id: string, text: string, over: Partial<Item> = {}): Item {
   return {
