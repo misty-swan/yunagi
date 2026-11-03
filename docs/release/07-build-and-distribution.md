@@ -104,6 +104,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] バージョン番号を `Cargo.toml`・`tauri.conf.json`・`package.json` で揃えた
 - [ ] テスト計画書のリリース前テストを完了した
 - [ ] `THIRD_PARTY_LICENSES.md` を生成し、許可外ライセンスと既知脆弱性が無いことを確認した
+- [ ] 型チェックの道具（svelte-check）の新しい版が TypeScript 7 系に正式に対応したかを、アーキテクチャ設計書 3.2 の目安で確かめた（対応していれば移行を判断する）
 - [ ] タグを作成して push した
 - [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている
 - [ ] `https://<公式サイト>/latest.json` を新しい版に更新した
