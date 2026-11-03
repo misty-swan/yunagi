@@ -119,9 +119,6 @@ pub fn counts_between(
     to: LogicalDate,
 ) -> Result<BTreeMap<LogicalDate, Counts>, StorageError> {
     let mut by_day: BTreeMap<LogicalDate, Counts> = BTreeMap::new();
-    if from > to {
-        return Ok(by_day);
-    }
     for item in item_table::list_between(conn, from, to)? {
         by_day.entry(item.date).or_default().count(&item);
     }
@@ -138,29 +135,26 @@ pub struct WeekCounts {
 }
 
 /// `date` を含む週の日：月曜から金曜まで（画面設計書 9章。土日の日付では、その前の月曜から金曜）。
-/// 古い順で、いつも5日。
-pub fn week_days(date: LogicalDate) -> Vec<LogicalDate> {
-    // 月曜は 0、日曜は 6。0001-01-01 は月曜なので、月曜までさかのぼる日はいつも暦の中にある
+/// 古い順。
+pub fn week_days(date: LogicalDate) -> [LogicalDate; 5] {
+    // 月曜は 0、日曜は 6。0001-01-01 は月曜、9999-12-31 は金曜なので、週の5日はいつも暦の中にある
     let from_monday = date.as_date().weekday().to_monday_zero_offset();
     let monday = (0..from_monday).fold(date, |d, _| {
         d.yesterday().expect("Monday of a week is in the calendar")
     });
-    // 9999-12-31 は金曜なので、金曜までの日もいつも暦の中にある
-    std::iter::successors(Some(monday), |d| d.tomorrow())
-        .take(5)
-        .collect()
+    let mut day = monday;
+    std::array::from_fn(|i| {
+        if i > 0 {
+            day = day.tomorrow().expect("Friday of a week is in the calendar");
+        }
+        day
+    })
 }
 
 /// `date` を含む週（[`week_days`]）の日ごとの件数と合計。
 pub fn week_counts(conn: &Connection, date: LogicalDate) -> Result<WeekCounts, StorageError> {
     let days = week_days(date);
-    let (Some(&first), Some(&last)) = (days.first(), days.last()) else {
-        return Ok(WeekCounts {
-            days: Vec::new(),
-            total: Counts::default(),
-        });
-    };
-    let by_day = counts_between(conn, first, last)?;
+    let by_day = counts_between(conn, days[0], days[4])?;
     let days: Vec<_> = days
         .into_iter()
         .map(|d| (d, by_day.get(&d).copied().unwrap_or_default()))
@@ -180,7 +174,8 @@ pub struct BoardItem {
 }
 
 /// ボードのノート：時刻付き見出しと長さだけ（本文は `get_note` で読む。MCP・CLI 仕様書 4.2）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// まだ書いていない日は [`Default`]（見出しが無く、長さ 0）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NoteOutline {
     /// 時刻付き見出し（上から順）。`get_board` の `headings` は各見出しの [`TimeHeading::text`]。
     pub headings: Vec<TimeHeading>,
@@ -228,10 +223,7 @@ fn read_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageErro
             headings: note_body::headings(&row.body),
             length: row.body.chars().count(),
         })
-        .unwrap_or(NoteOutline {
-            headings: Vec::new(),
-            length: 0,
-        });
+        .unwrap_or_default();
     Ok(Board {
         date,
         todos,
@@ -485,7 +477,11 @@ mod tests {
         // 2026-11-02 は月曜
         let mon_to_fri: Vec<_> = (2..=6).map(|d| date(&format!("2026-11-0{d}"))).collect();
         for d in 2..=8 {
-            assert_eq!(week_days(date(&format!("2026-11-0{d}"))), mon_to_fri, "{d}");
+            assert_eq!(
+                week_days(date(&format!("2026-11-0{d}"))).to_vec(),
+                mon_to_fri,
+                "{d}"
+            );
         }
         assert_eq!(week_days(date("2026-11-09"))[0], date("2026-11-09"));
         // 年をまたぐ週
@@ -642,10 +638,7 @@ mod tests {
                 todos: Vec::new(),
                 blockers: Vec::new(),
                 reflection: String::new(),
-                note: NoteOutline {
-                    headings: Vec::new(),
-                    length: 0,
-                },
+                note: NoteOutline::default(),
             }
         );
         let open = open_board(conn, date("2026-11-03")).unwrap();

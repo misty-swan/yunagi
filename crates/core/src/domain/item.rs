@@ -800,7 +800,7 @@ pub fn restore(conn: &Connection, deleted: &Deleted, now: Timestamp) -> Result<I
             if source.as_ref().map(SourceState::of) != deleted.source {
                 return Err(RestoreRefused::SourceChanged.into());
             }
-            if let Some(to) = item_table::carried_to(conn, from, Some(id))? {
+            if let Some(to) = item_table::carried_to_skipping(conn, from, Some(id))? {
                 return Err(RestoreRefused::SourceCarriedOver {
                     carried_to_id: to.id,
                     carried_to_date: to.date,
@@ -890,7 +890,7 @@ pub fn split(
 /// たどり方は、検索（`crate::storage::search`）の結果にも付けるので、表の層
 /// （[`item_table::carried_to`]）に置いている。
 pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    item_table::carried_to(conn, id, None)
+    item_table::carried_to(conn, id)
 }
 
 // ---- 共通の部品 ----

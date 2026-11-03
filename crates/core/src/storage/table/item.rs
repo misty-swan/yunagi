@@ -222,9 +222,17 @@ impl From<&Item> for CarriedTo {
 
 /// 項目 `id` の持ち越し先（データモデル設計書 3章 `carried_to_id`）：`carried_from_id` で `id` を
 /// 指す項目をたどり、最初に行き着いた削除されていない項目。削除されている項目は、さらにそれを
-/// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。`skip` の項目（とその先）は
-/// たどらない（削除した持ち越し先を戻すときの確かめに使う。ふだんは `None`）。
-pub fn carried_to(
+/// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。
+///
+/// 行き着く項目は常に1件以下に保つ（データモデル設計書 3章）。壊れたデータで2件以上あるときは、
+/// 持ち越しの段の浅いほう、同じ段では、たどった元の項目の id の順、その中で id の小さいほうを返す。
+pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
+    carried_to_skipping(conn, id, None)
+}
+
+/// [`carried_to`] と同じたどり方で、`skip` の項目（とその先）はたどらない。削除した持ち越し先を
+/// 戻すときに、持ち越し元がほかの項目へ持ち越されていないかを確かめるのに使う。
+pub fn carried_to_skipping(
     conn: &Connection,
     id: Ulid,
     skip: Option<Ulid>,
@@ -637,13 +645,50 @@ mod tests {
         assert_eq!(found, expected);
         for id in ids {
             assert_eq!(
-                carried_to(conn, id, None).unwrap().map(|i| i.id),
+                carried_to(conn, id).unwrap().map(|i| i.id),
                 many.get(&id).map(|i| i.id)
             );
         }
         // skip の先はたどらない
-        assert_eq!(carried_to(conn, a.id, Some(b.id)).unwrap(), None);
+        assert_eq!(carried_to_skipping(conn, a.id, Some(b.id)).unwrap(), None);
         assert!(carried_to_many(conn, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn carried_to_of_broken_data_with_two_live_copies_is_the_shallowest_then_by_id() {
+        // A を B1・B2（どちらも削除）へ持ち越し、B1→C1、B2→C2（どちらも残っている）。行き着く項目が
+        // 2件ある壊れたデータでも、1段ずつたどって、たどった元（B1・B2）の id の順の、最初の項目を返す
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let days = ["2026-11-01", "2026-11-02", "2026-11-03"].map(|d| ensure_day(&db, d));
+        let carried = |date, from: &Item| Item {
+            carried_from_id: Some(from.id),
+            ..todo(date, &from.text, "a")
+        };
+        let a = todo(days[0], "A", "a");
+        let b1 = carried(days[1], &a);
+        let b2 = carried(days[1], &a);
+        let c1 = carried(days[2], &b1);
+        let c2 = carried(days[2], &b2);
+        for item in [&a, &b1, &b2, &c1, &c2] {
+            insert(conn, item).unwrap();
+        }
+        let t = at("2026-11-03T05:00:00Z");
+        assert!(soft_delete(conn, b1.id, t).unwrap());
+        assert!(soft_delete(conn, b2.id, t).unwrap());
+        let (first, second) = if b1.id < b2.id {
+            ((b1.id, c1.id), (b2.id, c2.id))
+        } else {
+            ((b2.id, c2.id), (b1.id, c1.id))
+        };
+        assert_eq!(carried_to(conn, a.id).unwrap().unwrap().id, first.1);
+        assert_eq!(
+            carried_to_skipping(conn, a.id, Some(first.0))
+                .unwrap()
+                .unwrap()
+                .id,
+            second.1
+        );
     }
 
     #[test]
