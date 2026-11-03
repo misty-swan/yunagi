@@ -309,3 +309,20 @@ test("言語を変えると、エディタの読み上げ用の名前を付け�
   flushSync();
   expect(q(".note-ed .cm-content")?.getAttribute("aria-label")).toBe("Note");
 });
+
+test("CR は行の区切りにせず、そのまま残す（コアと同じ数え方で、保存で書き換えない）", async () => {
+  const { core, view } = await start("## 10:00 定例\r\n一\r");
+  expect(view().state.doc.lines).toBe(2);
+  view().dispatch({ changes: { from: view().state.doc.length, insert: "二" }, userEvent: "input" });
+  await until(() => core.note.body === "## 10:00 定例\r\n一\r二");
+});
+
+test("1回の書き換えで本文の行を見出しの上から下へ動かしても、見出しの位置を読み直す", async () => {
+  const { view } = await start("a\nb\n## 10:00 定例\nc");
+  // 1行目を消して、最後に足す（行の数は同じで、見出しは 3行目から 2行目へ）
+  view().dispatch({ changes: [{ from: 0, to: 2 }, { from: view().state.doc.length, insert: "\na" }] });
+  flushSync();
+  expect(qa(".note-ed .cm-line").map((l) => l.classList.contains("cm-th"))).toEqual([false, true, false, false]);
+  qa(".outline button")[0].click();
+  expect(view().state.selection.main.head).toBe(view().state.doc.line(2).to);
+});

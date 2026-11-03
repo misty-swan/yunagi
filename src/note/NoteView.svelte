@@ -108,13 +108,17 @@
     a.every((h, i) => (Object.keys(h) as (keyof Heading)[]).every((k) => h[k] === b[i][k]));
 
   /**
-   * 書き換え `tr` で見出しが変わりうるか。行の数が変わらず、書き換えた行が前も後も「## 」で始まらなければ、
-   * 見出しの一覧は前のまま（本文の行を打っている間に、本文全体を読み直さないため）。
+   * 書き換え `tr` で見出しが変わりうるか。書き換えが1か所で、行の数が変わらず、書き換えた行が前も後も
+   * 「## 」で始まらなければ、見出しの一覧は前のまま（本文の行を打っている間に、本文全体を読み直さないため）。
+   * 2か所以上の書き換え（ドラッグでの移動など）は、行の数が同じでも見出しの行がずれうるので読み直す。
    */
   function touchesHeadings(tr: Transaction): boolean {
     const before = tr.startState.doc;
     const after = tr.state.doc;
     if (before.lines !== after.lines) return true;
+    let ranges = 0;
+    tr.changes.iterChangedRanges(() => ranges++);
+    if (ranges > 1) return true;
     const heading = (doc: typeof before, from: number, to: number) => {
       for (let n = doc.lineAt(from).number; n <= doc.lineAt(to).number; n++) {
         if (doc.line(n).text.startsWith("## ")) return true;

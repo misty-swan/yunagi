@@ -119,6 +119,9 @@ export class TextDocEditor {
     return EditorState.create({
       doc: body,
       extensions: [
+        // 行の区切りは LF だけ（コアと同じ数え方。CR は行の文字のまま残し、保存で書き換えない。
+        // データモデル設計書 3章 note「行」）
+        EditorState.lineSeparator.of("\n"),
         EditorView.editable.of(editable),
         history(),
         keymap.of([...own.keys, ...historyKeymap, ...standardKeymap]),
