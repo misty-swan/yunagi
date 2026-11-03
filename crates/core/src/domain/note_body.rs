@@ -16,7 +16,7 @@ use std::ops::Range;
 use jiff::civil::Time;
 
 /// 本文の行。1行目から順に返す。空の本文は空の1行。
-pub fn lines(body: &str) -> std::str::Split<'_, char> {
+pub fn lines(body: &str) -> impl Iterator<Item = &str> {
     body.split('\n')
 }
 
@@ -95,11 +95,11 @@ pub struct Section {
 
 impl Section {
     /// 区間の中身の行を改行でつないだもの。
-    pub fn text<'a>(&self, body: &'a str) -> String {
+    pub fn text(&self, body: &str) -> String {
         lines(body)
             .skip(self.lines.start - 1)
             .take(self.lines.len())
-            .collect::<Vec<&'a str>>()
+            .collect::<Vec<_>>()
             .join("\n")
     }
 }
@@ -169,13 +169,13 @@ impl std::fmt::Display for InvalidArgument {
 
 impl std::error::Error for InvalidArgument {}
 
-/// 追記する本文を整える：改行を LF にそろえ（CRLF と単独の CR を LF に）、末尾の改行を除く。
-/// 標準入力から読んだ本文（`git log -1 --format=%s | yunagi reflection append -`）の末尾の改行で、
-/// 空の行が残らないようにするため。空白と改行だけなら誤り。
+/// 追記する本文を整える：改行を LF にそろえ（CRLF と単独の CR を LF に）、末尾の空白と改行を除く。
+/// 標準入力から読んだ本文（`git log -1 --format=%s | yunagi reflection append -`）の末尾の改行や
+/// 空白だけの行が、本文に残らないようにするため。空白と改行だけなら誤り。
 fn normalize_text(text: &str) -> Result<String, InvalidArgument> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
-    let text = text.trim_end_matches('\n');
-    if text.trim().is_empty() {
+    let text = text.trim_end();
+    if text.is_empty() {
         return Err(InvalidArgument::EmptyText);
     }
     Ok(text.to_owned())
@@ -202,7 +202,7 @@ pub fn time_heading_line(time: Time, title: &str) -> Result<String, InvalidArgum
 /// - `heading`（[`time_heading_line`] で作った見出しの行）があれば、本文の前に見出しの行を入れる。
 ///   最後の行が空ならその行に、そうでなければ空行を1行あけて入れる（画面の時刻付き見出しの挿入と
 ///   同じ。操作仕様書 2章）。
-/// - `text` は改行を LF にそろえ、末尾の改行を除いてから書く。
+/// - `text` は改行を LF にそろえ、末尾の空白と改行を除いてから書く。
 pub fn append(body: &str, text: &str, heading: Option<&str>) -> Result<String, InvalidArgument> {
     let text = normalize_text(text)?;
     let last_line_empty = body.is_empty() || body.ends_with('\n');
@@ -485,6 +485,9 @@ mod tests {
     fn normalizes_appended_text() {
         assert_eq!(append("a", "x\r\ny\r\n", None).unwrap(), "a\nx\ny");
         assert_eq!(append("a", "x\ry\n\n", None).unwrap(), "a\nx\ny");
+        // 末尾の空白だけの行と、最後の行の末尾の空白も除く
+        assert_eq!(append("a", "x\n  \n\u{3000}", None).unwrap(), "a\nx");
+        assert_eq!(append("a", "x  ", None).unwrap(), "a\nx");
         // 先頭と途中の空白・空行は残す
         assert_eq!(append("a", "  x\n\ny", None).unwrap(), "a\n  x\n\ny");
         for empty in ["", "\n", " \n\u{3000}", "\r\n"] {

@@ -185,9 +185,8 @@ pub fn append_note(
     let new_body = |body: &str| Ok(note_body::append(body, text, heading.as_deref())?);
     write_by_agent(
         conn,
-        TextDoc::Note,
         date,
-        "note.append",
+        AgentOperation::NoteAppend,
         agent_client_id,
         tz,
         now,
@@ -210,9 +209,8 @@ pub fn append_reflection(
     let new_body = |body: &str| Ok(note_body::append(body, text, None)?);
     write_by_agent(
         conn,
-        TextDoc::Reflection,
         date,
-        "reflection.append",
+        AgentOperation::ReflectionAppend,
         agent_client_id,
         tz,
         now,
@@ -237,9 +235,8 @@ pub fn edit_note(
     let new_body = |body: &str| Ok(note_body::apply_line_edit(body, edit)?);
     write_by_agent(
         conn,
-        TextDoc::Note,
         date,
-        "note.edit",
+        AgentOperation::NoteEdit,
         agent_client_id,
         tz,
         now,
@@ -247,19 +244,44 @@ pub fn edit_note(
     )
 }
 
+/// エージェント・CLI による本文の書き込みの種類。change_log の `operation` と対象の表を決める。
+#[derive(Debug, Clone, Copy)]
+enum AgentOperation {
+    NoteAppend,
+    ReflectionAppend,
+    NoteEdit,
+}
+
+impl AgentOperation {
+    /// change_log の `operation`（MCP・CLI 仕様書 3章の命名規則）。
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoteAppend => "note.append",
+            Self::ReflectionAppend => "reflection.append",
+            Self::NoteEdit => "note.edit",
+        }
+    }
+
+    const fn doc(self) -> TextDoc {
+        match self {
+            Self::NoteAppend | Self::NoteEdit => TextDoc::Note,
+            Self::ReflectionAppend => TextDoc::Reflection,
+        }
+    }
+}
+
 /// エージェントの書き込みの共通の手順。いまの本文から `new_body` で新しい本文を作り、
 /// いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
-#[allow(clippy::too_many_arguments)]
 fn write_by_agent(
     conn: &Connection,
-    doc: TextDoc,
     date: LogicalDate,
-    operation: &str,
+    operation: AgentOperation,
     agent_client_id: Ulid,
     tz: &TimeZone,
     now: Timestamp,
     new_body: impl FnOnce(&str) -> Result<String, TextDocError>,
 ) -> Result<Written, TextDocError> {
+    let doc = operation.doc();
     in_transaction(conn, || {
         let current = get(conn, doc, date)?;
         let body = new_body(&current.body)?;
@@ -281,10 +303,11 @@ fn write_by_agent(
                 id: Ulid::generate(),
                 actor: Actor::Agent,
                 agent_client_id: Some(agent_client_id),
-                operation: operation.to_owned(),
+                operation: operation.as_str().to_owned(),
                 target,
-                // まだ書いていなかった日は、変更前が無い
-                before: (current.rev > 0).then(|| json_string(&current.body)),
+                // まだ書いていなかった日も、空の本文として記録する（`get` と同じ。取り消しで
+                // 書き戻す本文が、行の有無にかかわらず1通りに決まるように）
+                before: Some(json_string(&current.body)),
                 after: Some(json_string(&body)),
                 created_at: now,
                 reverted_at: None,
@@ -305,42 +328,73 @@ fn json_string(body: &str) -> String {
 /// 呼び出し側のトランザクションの中で呼べば、セーブポイントを使ってその一部になる（`BEGIN` は
 /// 入れ子にできないため）。確定は呼び出し側が行う。
 ///
-/// `f` の失敗は、取り消しにも失敗したときでも `f` の失敗のまま返す（行き違いの最新の本文などを
-/// 失わないため）。確定（`COMMIT`）の失敗では、トランザクションが開いたまま残らないよう取り消す。
+/// - `f` の失敗は、取り消しにも失敗したときでも `f` の失敗のまま返す（行き違いの最新の本文などを
+///   失わないため）。
+/// - 確定（`COMMIT`）の失敗と、`f` の途中の panic でも取り消す。トランザクションが開いたまま
+///   残ると、以後の書き込みがすべてその中に入り、確定されないため。
 fn in_transaction<T>(
     conn: &Connection,
     f: impl FnOnce() -> Result<T, TextDocError>,
 ) -> Result<T, TextDocError> {
-    const SAVEPOINT: &str = "yunagi_text_doc";
-    let outermost = conn.is_autocommit();
-    let (begin, commit, rollback) = if outermost {
-        (
-            "BEGIN".to_owned(),
-            "COMMIT".to_owned(),
-            "ROLLBACK".to_owned(),
-        )
-    } else {
-        (
-            format!("SAVEPOINT {SAVEPOINT}"),
-            format!("RELEASE {SAVEPOINT}"),
-            // ROLLBACK TO はセーブポイントを残すので、続けて外す
-            format!("ROLLBACK TO {SAVEPOINT}; RELEASE {SAVEPOINT}"),
-        )
-    };
-    conn.execute_batch(&begin)?;
-    match f() {
-        Ok(value) => match conn.execute_batch(&commit) {
-            Ok(()) => Ok(value),
-            Err(e) => {
-                // 確定の失敗を返す。取り消しの失敗は、それに続いて起きたものなので捨てる
-                let _ = conn.execute_batch(&rollback);
-                Err(e.into())
-            }
-        },
-        Err(e) => {
-            let _ = conn.execute_batch(&rollback);
-            Err(e)
+    let guard = TransactionGuard::begin(conn)?;
+    let value = f()?; // 失敗なら guard の drop で取り消す
+    guard.commit()?;
+    Ok(value)
+}
+
+/// [`in_transaction`] のトランザクション。確定せずに手放すと（失敗・panic）取り消す。
+struct TransactionGuard<'c> {
+    conn: &'c Connection,
+    /// 外側のトランザクションか（`false` なら呼び出し側のトランザクションの中のセーブポイント）。
+    outermost: bool,
+    done: bool,
+}
+
+impl<'c> TransactionGuard<'c> {
+    const SAVEPOINT: &'static str = "yunagi_text_doc";
+
+    fn begin(conn: &'c Connection) -> rusqlite::Result<Self> {
+        let outermost = conn.is_autocommit();
+        if outermost {
+            conn.execute_batch("BEGIN")?;
+        } else {
+            conn.execute_batch(&format!("SAVEPOINT {}", Self::SAVEPOINT))?;
         }
+        Ok(Self {
+            conn,
+            outermost,
+            done: false,
+        })
+    }
+
+    /// 確定する。失敗したら、drop で取り消す。
+    fn commit(mut self) -> rusqlite::Result<()> {
+        if self.outermost {
+            self.conn.execute_batch("COMMIT")?;
+        } else {
+            self.conn
+                .execute_batch(&format!("RELEASE {}", Self::SAVEPOINT))?;
+        }
+        self.done = true;
+        Ok(())
+    }
+}
+
+impl Drop for TransactionGuard<'_> {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        // 取り消しの失敗は返す先が無い（元の失敗を返すほうを優先する）ので捨てる
+        let _ = if self.outermost {
+            self.conn.execute_batch("ROLLBACK")
+        } else {
+            // ROLLBACK TO はセーブポイントを残すので、続けて外す
+            self.conn.execute_batch(&format!(
+                "ROLLBACK TO {name}; RELEASE {name}",
+                name = Self::SAVEPOINT
+            ))
+        };
     }
 }
 
@@ -533,8 +587,8 @@ mod tests {
         assert_eq!(first.actor, Actor::Agent);
         assert_eq!(first.agent_client_id, Some(CLI_ID));
         assert_eq!(first.operation, "note.append");
-        // まだ書いていなかった日は、変更前が無い
-        assert_eq!(first.before, None);
+        // まだ書いていなかった日は、空の本文が変更前
+        assert_eq!(first.before.as_deref(), Some(r#""""#));
         assert_eq!(first.after.as_deref(), Some(r#""first""#));
         assert_eq!(first.created_at, at(NOW));
         assert_eq!(logs[1].before.as_deref(), Some(r#""first""#));
@@ -779,7 +833,10 @@ mod tests {
             }
         );
         assert_eq!(get(conn, TextDoc::Note, d).unwrap().body, "x");
-        assert_eq!(logs_of(conn, Target::Note(d))[0].before, None);
+        assert_eq!(
+            logs_of(conn, Target::Note(d))[0].before.as_deref(),
+            Some(r#""""#)
+        );
     }
 
     #[test]
@@ -797,6 +854,25 @@ mod tests {
         assert_eq!(get(conn, TextDoc::Note, d).unwrap().rev, 0);
         assert_eq!(day_table::get(conn, d).unwrap(), None);
         // 接続はトランザクションの外に戻っている
+        assert!(conn.is_autocommit());
+    }
+
+    #[test]
+    fn a_panic_inside_the_transaction_rolls_it_back() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = date("2026-11-03");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), TextDocError> = in_transaction(conn, || {
+                day::ensure(conn, d, &tokyo(), at(NOW))?;
+                panic!("boom");
+            });
+        }));
+        assert!(result.is_err());
+        assert!(conn.is_autocommit());
+        assert_eq!(day_table::get(conn, d).unwrap(), None);
+        // 以後の書き込みは確定される
+        append_note(conn, d, "y", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
         assert!(conn.is_autocommit());
     }
 
