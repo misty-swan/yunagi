@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::backup::NO_PROGRESS;
 use rusqlite::{Connection, MAIN_DB, ffi};
 
-use super::StorageError;
+use super::{StorageError, db_copy};
 
 /// 1つのマイグレーション。
 pub(crate) struct Migration {
@@ -206,19 +206,9 @@ fn create_backup(
 
     let tmp = path.with_extension("db.tmp");
     let result = (|| {
-        // SQLite のオンラインバックアップ。WAL にだけある直近の書き込みも含めて写す
-        conn.backup(MAIN_DB, &tmp, NO_PROGRESS)?;
-        // 写したファイルは元と同じく WAL の印を持ち、開くたびに横に -wal・-shm ができる。
-        // バックアップは1つのファイルで完結させたいので、通常の（DELETE）モードにする
-        let mode: String = Connection::open(&tmp)?.pragma_update_and_check(
-            None,
-            "journal_mode",
-            "DELETE",
-            |row| row.get(0),
-        )?;
-        debug_assert_eq!(mode, "delete");
+        db_copy::copy(conn, &tmp)?;
         fs::rename(&tmp, &path)?;
-        sync_dir(backup_dir)?;
+        db_copy::sync_dir(backup_dir)?;
         Ok(())
     })();
     if result.is_err() {
@@ -249,16 +239,6 @@ fn remove_stale_temp_files(backup_dir: &Path) -> std::io::Result<()> {
             fs::remove_file(&path)?;
         }
     }
-    Ok(())
-}
-
-/// 名前の変更を確実にディスクに書く（電源断で消えないように）。Windows ではフォルダを
-/// 開けないため行わない。
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    fs::File::open(dir)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = dir;
     Ok(())
 }
 
