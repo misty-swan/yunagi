@@ -13,6 +13,18 @@
   src: url("../assets/fonts/inter/InterVariable.woff2") format("woff2");
 }
 
+/*
+  UDEV Gothic HS v2.2.0 の Regular。配布元のファイルを加工せずに置く（06 4章「ノートの等幅」。許諾は同じ
+  場所の LICENSE・LICENSE_JetBrainsMono・LICENSE_BIZUDGothic）。ノートの等幅と、本文の和文の最後の代わりに使う
+*/
+@font-face {
+  font-family: "UDEV Gothic HS";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/udev-gothic/UDEVGothicHS-Regular.ttf") format("truetype");
+}
+
 :root {
   --fs-setting: 15;
   --u: calc(1px * var(--fs-setting) / 15);
@@ -21,6 +33,7 @@
   --fs-meta: calc(12 * var(--u));
   --fs-small: calc(13 * var(--u));
   --lh-body: 1.65;
+  --lh-note: 1.95;
   --pad: calc(28 * var(--u));
   --side-w: calc(240 * var(--u));
   --top-h: calc(60 * var(--u));
@@ -30,10 +43,13 @@
   /* 影は重ねて表示するパネルとポップオーバーだけに付ける（06 5章） */
   --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.18);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
-  /* 欧文は同梱の Inter、和文は OS 標準（06 4章） */
+  /* 欧文は同梱の Inter、和文は OS 標準。OS に和文の書体が無いときは同梱の UDEV Gothic HS（06 4章） */
   --font: Inter, system-ui, -apple-system, "Segoe UI", "Hiragino Sans",
     "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Noto Sans CJK JP", "Noto Sans JP",
-    sans-serif;
+    "UDEV Gothic HS", sans-serif;
+  /* ノートの等幅：同梱の UDEV Gothic HS、無い文字は本文の和文の書体、最後に monospace（06 4章「ノートの等幅」） */
+  --font-mono: "UDEV Gothic HS", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic",
+    "Noto Sans CJK JP", "Noto Sans JP", monospace;
 }
 
 *,

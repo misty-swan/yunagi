@@ -4,8 +4,8 @@
   // 設定にかかわらず C にする（設定は変えない）。
   //
   // 受け持つキー（操作仕様書 2章「整理」）：Mod+1 / 2 / 3 で領域を移る。一覧の中のキーは ItemRow、
-  // 振り返りのキーは ReflectionEditor。入力中の状態は、変わるたびに `report_ui_state` で知らせる
-  // （docs/design/01-architecture.md 4.1）。
+  // 振り返りのキーは ReflectionEditor。入力中の状態は、画面全体の `InputTracker`（App が持つ）に入れ、
+  // 変わるたびに `report_ui_state` で知らせる（docs/design/01-architecture.md 4.1）。
   import type { EditorView } from "@codemirror/view";
   import { untrack } from "svelte";
   import { ItemSaves, type ItemSaveEvents, type SaveStatus } from "../lib/autosave.svelte";
@@ -17,7 +17,7 @@
   import type { Notice } from "../lib/notice.svelte";
   import { prefs, type Layout } from "../lib/prefs.svelte";
   import type { Session } from "../lib/session.svelte";
-  import { EditorPresence, UiReporter } from "../lib/ui_report.svelte";
+  import type { InputTracker } from "../lib/ui_report.svelte";
   import ItemList from "./ItemList.svelte";
   import ReflectionEditor from "./ReflectionEditor.svelte";
 
@@ -27,10 +27,13 @@
     notice,
     narrow,
     mac,
+    tracker,
   }: {
     session: Session;
     save: SaveStatus;
     notice: Notice;
+    /** 画面全体の入力中の状態。 */
+    tracker: InputTracker;
     /** ウィンドウ幅が 900px 未満か。 */
     narrow: boolean;
     mac: boolean;
@@ -65,7 +68,11 @@
   });
   events.saved = (key, item) => model.saved(key, item);
   events.rejected = (key, e) => model.rejected(key, e);
-  const presence = new EditorPresence();
+  // svelte-ignore state_referenced_locally
+  tracker.items = model;
+  $effect(() => () => {
+    if (tracker.items === model) tracker.items = null;
+  });
 
   // 読み込んだボードを出す。日を移ったら、保存を待っていない項目の待ち行列を片付ける
   $effect(() => {
@@ -142,43 +149,8 @@
 
   // ---- 入力中の状態 ----
 
-  let active = $state(typeof document === "undefined" ? true : document.hasFocus());
-  const reporter = new UiReporter(() => ({
-    editingItems: model.editingItems(Date.now(), active),
-    editors: presence.editors(Date.now(), active),
-  }));
-  let expiry: ReturnType<typeof setTimeout> | undefined;
-  function activity() {
-    reporter.update();
-    // 入力中でなくなる時刻に、知らせ直す
-    clearTimeout(expiry);
-    const until = [model.editingUntil(), presence.editingUntil()].filter((x): x is number => x !== null);
-
-    // すでに過ぎた時刻は待たない（入力中でなくなった後も、フォーカスがある間は過ぎた時刻が返るため）
-    const next = Math.min(...until.filter((u) => u > Date.now()));
-    if (Number.isFinite(next)) expiry = setTimeout(activity, next - Date.now() + 1);
-  }
-  // 保存し終えたら（まだ保存していない欄が減ったら）知らせ直す
-  $effect(() => {
-    void save.saving;
-    void save.failing;
-    untrack(activity);
-  });
-  $effect(() => () => clearTimeout(expiry));
-
-  // アプリが前面から外れたら、まだ保存していない入力をすぐ送り、入力中を終える
-  function onWindowBlur() {
-    active = false;
-    void save.flushAll();
-    activity();
-  }
-  function onWindowFocus() {
-    active = true;
-    activity();
-  }
+  const activity = () => tracker.activity();
 </script>
-
-<svelte:window onblur={onWindowBlur} onfocus={onWindowFocus} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="board" data-layout={layout} data-date={model.date ?? ""} onkeydown={onKeydown}>
@@ -213,8 +185,8 @@
         <ReflectionEditor
           date={model.date}
           {save}
-          {presence}
-          refresh={session.board}
+          presence={tracker.reflection}
+          rev={session.board?.reflectionRev ?? 0}
           onActivity={activity}
           bind:view={editor}
         />

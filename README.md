@@ -9,7 +9,7 @@ PC画面全体を「その日の仕事ノート1枚」として使う、エン�
 | `crates/core/` | コア（`yunagi-core`）。ドメイン層（`domain`）とストレージ（`storage`） |
 | `src-tauri/` | デスクトップアプリ（Tauri 2、`yunagi-app`）。コアを使う。画面とコアのつなぎ（Tauri コマンド・イベント。`docs/design/01-architecture.md` 4.3） |
 | `crates/cli/` | コンソール用バイナリ `yunagi`（CLI・MCP サーバー）。コアを使う |
-| `src/` | 画面（TypeScript ＋ Svelte 5、Vite）。コアの呼び出し口は `src/lib/core.ts`。画面の外枠（サイドバー・上部のバー・凪メーター・キーの案内）は `src/shell/`、整理モードの本文（TODO・障害・振り返りの3領域）は `src/board/`（一覧の状態と操作は `src/lib/board.svelte.ts`）、データベースを開くまでの起動時の画面は `src/startup/`（操作は `src/lib/startup.svelte.ts`、入れ直し方と問い合わせ先は `src/lib/support.ts`）、色のトークンと文字の土台は `src/styles/`、同梱するフォント（配布元のファイルと許諾の表記）は `src/assets/fonts/`、画面の文言（日本語・英語）は `src/lib/i18n.ts` |
+| `src/` | 画面（TypeScript ＋ Svelte 5、Vite）。コアの呼び出し口は `src/lib/core.ts`。画面の外枠（サイドバー・上部のバー・凪メーター・キーの案内）は `src/shell/`、整理モードの本文（TODO・障害・振り返りの3領域）は `src/board/`（一覧の状態と操作は `src/lib/board.svelte.ts`）、ノートモードの本文（ノートのエディタと Outline）は `src/note/`（振り返りと共通のエディタの動きは `src/lib/doc_editor.ts`、時刻付き見出しなどの本文の扱いは `src/lib/note.ts`、等幅の書体の読み込みは `src/lib/fonts.svelte.ts`）、入力中の状態の知らせは `src/lib/ui_report.svelte.ts`、データベースを開くまでの起動時の画面は `src/startup/`（操作は `src/lib/startup.svelte.ts`、入れ直し方と問い合わせ先は `src/lib/support.ts`）、色のトークンと文字の土台は `src/styles/`、同梱するフォント（配布元のファイルと許諾の表記。フォントごとのフォルダ）は `src/assets/fonts/`、画面の文言（日本語・英語）は `src/lib/i18n.ts` |
 
 Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークスペースにまとめている。依存の版は `Cargo.lock` と `pnpm-lock.yaml` で固定する。
 

@@ -8,6 +8,10 @@ import { prefs } from "./lib/prefs.svelte";
 
 let app: ReturnType<typeof mount> | undefined;
 
+// jsdom には Range の位置が無い（CodeMirror が測るときに使う）
+Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+
 beforeEach(() => {
   prefs.lang = "ja";
   clock.today = TODAY;
@@ -38,7 +42,7 @@ function counts(c: Partial<Counts>): Counts {
 }
 
 function emptyBoard(date: string): Board {
-  return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 } };
+  return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 }, reflectionRev: 0, noteRev: 0 };
 }
 
 /** 模擬のコア（今日は 11-03 Tue。TODO 9 件のうち完了 3、障害 3 件は未解消、持ち越し 4）。 */
@@ -201,6 +205,48 @@ test("Mod+\\ で開閉し、ノートモードでは閉じて、整理モード�
   flushSync();
   expect($("main.content")?.dataset.mode).toBe("board");
   expect($(".side")).not.toBeNull();
+});
+
+test("ノートモードではノートのエディタに移り、整理モードに戻るとフォーカスのあった所に戻る。入力中の状態は1つにまとめて知らせる", async () => {
+  const calls = await start();
+  await until(() => $(".note-ed .cm-content")?.getAttribute("contenteditable") === "true");
+  await until(() => $(".ref-ed .cm-content")?.getAttribute("contenteditable") === "true");
+  const ref = $(".ref-ed .cm-content")!;
+  // 整理モードで何にもフォーカスしていなければ、戻ったときは隠したノートからフォーカスを外す
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect(document.activeElement).toBe($(".note-ed .cm-content"));
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect(document.activeElement).not.toBe($(".note-ed .cm-content"));
+  ref.focus();
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect($(".content > .mode:not([hidden]) .note-ed")).not.toBeNull();
+  expect(document.activeElement).toBe($(".note-ed .cm-content"));
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect(document.activeElement).toBe(ref);
+  // マウスで Board / Note を切り替えても（ボタンにフォーカスが移っても）、戻ると振り返りに戻る
+  const seg = () => [...document.querySelectorAll<HTMLElement>(".seg button")];
+  seg()[1].focus();
+  seg()[1].click();
+  flushSync();
+  expect(document.activeElement).toBe($(".note-ed .cm-content"));
+  seg()[0].focus();
+  seg()[0].click();
+  flushSync();
+  expect(document.activeElement).toBe(ref);
+  // ノートと振り返りの両方に書いてから、どちらの守る行も1回の知らせに入る
+  ref.querySelector(".cm-line")!.textContent = "ふりかえり";
+  ref.dispatchEvent(new Event("input", { bubbles: true }));
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  const note = $(".note-ed .cm-content")!;
+  note.querySelector(".cm-line")!.textContent = "のーと";
+  note.dispatchEvent(new Event("input", { bubbles: true }));
+  await until(() =>
+    calls.some((c) => {
+      if (c.cmd !== "report_ui_state") return false;
+      const docs = (c.args as { state: { editors: { doc: string }[] } }).state.editors.map((e) => e.doc);
+      return docs.includes("reflection") && docs.includes("note");
+    }),
+  );
 });
 
 test("ウィンドウ幅 900px 未満では閉じ、Mod+\\ で明示的に開いたときだけ出す", async () => {
