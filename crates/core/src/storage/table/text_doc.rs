@@ -90,6 +90,21 @@ pub fn save(
     Ok(rev)
 }
 
+/// `from` から `to` まで（両端を含む）の日の行を、日付の順に返す。`from` が `to` より後なら空。
+pub fn list_between(
+    conn: &Connection,
+    doc: TextDoc,
+    from: LogicalDate,
+    to: LogicalDate,
+) -> Result<Vec<TextDocRow>, StorageError> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT date, body, rev, updated_at FROM {} WHERE date BETWEEN ?1 AND ?2 ORDER BY date",
+        doc.table()
+    ))?;
+    let rows = stmt.query_map([from, to], from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// `before` より前で `after` より後（`None` なら下限なし）の日のうち、本文が空白（Unicode の空白文字）
 /// 以外の文字を含む日を、新しい順に `limit` 日まで返す。新しい日から順に読み、`limit` 日見つかったら止める。
 pub fn nonblank_dates(
@@ -206,6 +221,40 @@ mod tests {
             nonblank_dates(conn, TextDoc::Reflection, today, None, 1)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn list_between_returns_the_range_in_date_order() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let t = at("2026-11-03T01:00:00Z");
+        for d in ["2026-11-04", "2026-11-01", "2026-11-02", "2026-11-03"] {
+            let d = ensure_day(&db, d);
+            save(conn, TextDoc::Note, d, &format!("note {d}"), t).unwrap();
+        }
+        let dates = |from, to| -> Vec<String> {
+            list_between(conn, TextDoc::Note, date(from), date(to))
+                .unwrap()
+                .into_iter()
+                .map(|r| r.date.to_string())
+                .collect()
+        };
+        assert_eq!(
+            dates("2026-11-02", "2026-11-04"),
+            ["2026-11-02", "2026-11-03", "2026-11-04"]
+        );
+        assert_eq!(dates("2026-11-03", "2026-11-03"), ["2026-11-03"]);
+        assert!(dates("2026-11-04", "2026-11-01").is_empty());
+        assert!(
+            list_between(
+                conn,
+                TextDoc::Reflection,
+                date("2026-11-01"),
+                date("2026-11-04")
+            )
+            .unwrap()
+            .is_empty()
         );
     }
 
