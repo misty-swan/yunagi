@@ -182,6 +182,9 @@ abstract class Saver<P> {
     this.#pendingSince = null;
     this.#immediate = false;
     if (p === null) {
+      // 送るものが無くなった（保存済みの本文に戻したなど）。再試行するものも無いので、失敗中を終える
+      this.#failures = 0;
+      this.#failure = null;
       this.#status.update();
       return;
     }
@@ -216,10 +219,11 @@ abstract class Saver<P> {
   }
 
   /**
-   * 待たずにすぐ保存する（フォーカスが外れたとき、アプリが前面から外れたとき）。保存し終えたか、
-   * 失敗したら（再試行は後ろで続く）解決する。
+   * 待たずにすぐ保存する（フォーカスが外れたとき、アプリが前面から外れたとき）。保存し終えたら
+   * `true`、失敗したか（再試行は後ろで続く）、送り直しが上限の回数を超えて（行き違いが続いた）まだ
+   * 保存していないものがあれば `false` で解決する。
    */
-  async flush(): Promise<void> {
+  async flush(): Promise<boolean> {
     // 行き違いの取り込みのたびに送り直すので、何度か回る。無限に回らないよう上限を置く
     for (let round = 0; round < 10 && !this.#closed; round++) {
       this.#clearTimer();
@@ -227,10 +231,12 @@ abstract class Saver<P> {
         await this.#inFlight;
         continue;
       }
-      if (this.#pendingSince === null) return;
+      if (this.#pendingSince === null) return true;
       await this.#run();
-      if (this.#failure !== null) return;
+      if (this.#failure !== null) return false;
     }
+    if (this.busy) this.#schedule();
+    return !this.busy;
   }
 
   /**
@@ -271,7 +277,7 @@ export interface DocEditor {
 export class DocSaver extends Saver<Snapshot> {
   readonly doc: TextDoc;
   readonly date: LogicalDate;
-  readonly #editor: DocEditor;
+  #editor: DocEditor;
   #saved: Snapshot;
   /** 送っている間に届いた、取り込む最新（送り終えてから取り込む）。 */
   #deferred: Snapshot | null = null;
@@ -283,6 +289,22 @@ export class DocSaver extends Saver<Snapshot> {
     this.date = date;
     this.#saved = saved;
     this.#editor = editor;
+  }
+
+  /**
+   * 使うのをやめる（`Saver.close`）。この後は渡されたエディタに触れない（エディタは別の日の本文を
+   * 映しうるため）。閉じる時点の本文を手元に写し、保存に失敗していれば、それを保存し終えるまで
+   * 再試行する。
+   */
+  close(): Promise<boolean> {
+    let text = this.#editor.text();
+    this.#editor = {
+      text: () => text,
+      replace: (t: string) => {
+        text = t;
+      },
+    };
+    return super.close();
   }
 
   /** 最後に保存した（取り込んだ）本文と版。 */
@@ -424,6 +446,8 @@ class ItemSaver extends Saver<ItemPatch> {
   /** 送っている欄（入力中とみなす欄を知らせるため）。 */
   #sendingPatch: ItemPatch | null = null;
   readonly #events: ItemSaveEvents;
+  /** 作り終えた（ID が決まった）とき。 */
+  onCreated?: (s: ItemSaver) => void;
 
   constructor(status: SaveStatus, key: string, id: Id | null, create: NewItem | null, events: ItemSaveEvents) {
     super(status);
@@ -450,6 +474,13 @@ class ItemSaver extends Saver<ItemPatch> {
 
   protected take(): ItemPatch | null {
     if (isEmptyPatch(this.#pending)) return null;
+    if (this.id === null && this.#create === null) {
+      // 作るのに失敗して諦めた（reject）。作り直すと2つになりうるので、送らずに捨てて知らせる
+      const p = this.#pending;
+      this.#pending = {};
+      this.#events.rejected?.(this.key, { kind: "not_found" }, p);
+      return null;
+    }
     // 作る前は、本文が入るまで送らない（本文の無い項目は作らない。空白だけも空とみなす）
     if (this.id === null && (this.#pending.text ?? "").trim() === "") return null;
     const p = this.#pending;
@@ -464,6 +495,7 @@ class ItemSaver extends Saver<ItemPatch> {
       const item = await core.addItem(create.date, create.kind, p.text!, create.position);
       this.id = item.id;
       this.#create = null;
+      this.onCreated?.(this);
       this.#events.saved?.(this.key, item);
       // 作るのに使わなかった欄（解消メモ・状態）は、続けて保存する
       const { text: _text, ...rest } = p;
@@ -490,6 +522,9 @@ class ItemSaver extends Saver<ItemPatch> {
   }
 
   protected reject(p: ItemPatch, e: CallError) {
+    // 作るのに失敗したら、もう作らない（作れたかが分からず、作り直すと2つになりうるため。画面は
+    // ボードを読み込み直し、作れていればその ID で続ける）
+    if (this.id === null) this.#create = null;
     this.#events.rejected?.(this.key, e, p);
   }
 
@@ -531,6 +566,8 @@ export class ItemSaves {
   create(key: string, item: NewItem, text: string) {
     if (this.#savers.has(key)) throw new Error(`item ${key} already exists`);
     const s = new ItemSaver(this.#status, key, null, item, this.#events);
+    // ID が決まったら、ID でも同じ待ち行列を使う（画面が ID で呼んでも、一度に1つの決まりを守る）
+    s.onCreated = (created) => this.#savers.set(created.id!, created);
     this.#savers.set(key, s);
     s.edit({ text });
   }
@@ -570,9 +607,10 @@ export class ItemSaves {
    * （まだ保存していない入力の前の本文で分割・削除しないため）。作れていない項目なら `not_found`。
    */
   async run<T>(key: string, op: (id: Id) => Promise<T>): Promise<T> {
-    await this.flush(key);
     const s = this.#savers.get(key);
+    const done = (await s?.flush()) ?? true;
     if (s?.failure) throw new CoreError(s.failure);
+    if (!done) throw new CoreError({ kind: "internal", detail: "the item still has unsaved input" });
     const id = this.idOf(key);
     if (id === null) throw new CoreError({ kind: "not_found" });
     return op(id);
@@ -583,7 +621,7 @@ export class ItemSaves {
    * docs/design/01-architecture.md 4.1「書き込みが終わるまではフォーカスが無くても入力中」）。
    */
   unsavedFields(): EditingItem[] {
-    return [...this.#savers.values()].flatMap((s) =>
+    return [...new Set(this.#savers.values())].flatMap((s) =>
       s.id === null ? [] : s.unsavedFields().map((field) => ({ itemId: s.id!, field })),
     );
   }
@@ -594,7 +632,7 @@ export class ItemSaves {
    */
   prune() {
     for (const [key, s] of this.#savers) {
-      if (!s.busy && !s.hasPending() && s.id === key) {
+      if (!s.busy && !s.hasPending() && s.key === key && s.id === key) {
         void s.close();
         this.#savers.delete(key);
       }

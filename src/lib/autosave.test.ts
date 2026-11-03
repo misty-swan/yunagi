@@ -407,3 +407,91 @@ test("片付けても、仮の名前で作った項目は残す", async () => {
   items.prune();
   expect(items.idOf("tmp")).toBe(ID);
 });
+
+test("再試行を待つ間に保存済みの本文へ戻したら、失敗中を終える", async () => {
+  mockCore(() => {
+    throw { kind: "storage", detail: "x" };
+  });
+  const status = new SaveStatus();
+  const ed = editor("a");
+  const saver = new DocSaver(status, "note", DATE, { body: "a", rev: 1 }, ed);
+  ed.value = "ab";
+  saver.edited();
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(status.failing).toBe(true);
+  ed.value = "a";
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]);
+  expect(status.failing).toBe(false);
+  expect(status.saving).toBe(false);
+});
+
+test("作るのに失敗した項目は、続けて入力しても作り直さない", async () => {
+  const calls = mockCore(() => {
+    throw { kind: "internal", detail: "x" };
+  });
+  const rejected: unknown[] = [];
+  const items = new ItemSaves(new SaveStatus(), { rejected: (_k, e, p) => rejected.push([e.kind, p]) });
+  items.create("tmp", { date: DATE, kind: "todo", position: { at: "last" } }, "a");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  items.editText("tmp", "ab");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+  expect(calls).toHaveLength(1);
+  expect(rejected).toEqual([
+    ["internal", { text: "a" }],
+    ["not_found", { text: "ab" }],
+  ]);
+});
+
+test("作り終えた項目は、ID で呼んでも同じ待ち行列を使う", async () => {
+  let release: (() => void) | undefined;
+  const calls = mockCore(async (cmd) => {
+    if (cmd === "add_item") return item("a");
+    await new Promise<void>((r) => (release = r));
+    return { updated: true, item: item("a") };
+  });
+  const items = new ItemSaves(new SaveStatus());
+  items.create("tmp", { date: DATE, kind: "todo", position: { at: "last" } }, "a");
+  items.editResolutionNote("tmp", "メモ");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  // 作り終えてから、残りの欄（解消メモ）をすぐ送る
+  await vi.waitFor(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.map((c) => c.cmd)).toEqual(["add_item", "save_item"]);
+  });
+  items.editText(ID, "ab");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  // 前の保存の応答を待つ
+  expect(calls).toHaveLength(2);
+  expect(items.unsavedFields()).toEqual([
+    { itemId: ID, field: "text" },
+    { itemId: ID, field: "resolution_note" },
+  ]);
+  release!();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(calls).toHaveLength(3);
+  release!();
+  await vi.advanceTimersByTimeAsync(0);
+  items.prune();
+  expect(items.idOf("tmp")).toBe(ID);
+});
+
+test("閉じた後は、渡されたエディタに触れない", async () => {
+  let fail = true;
+  const calls = mockCore((): TextSave => {
+    if (fail) throw { kind: "storage", detail: "x" };
+    return { result: "saved", rev: 2, updated: true };
+  });
+  const ed = editor("a");
+  const saver = new DocSaver(new SaveStatus(), "note", DATE, { body: "a", rev: 1 }, ed);
+  ed.value = "11-03 の本文";
+  saver.edited();
+  expect(await saver.close()).toBe(false);
+  // 画面は同じエディタで別の日を映す
+  ed.value = "11-04 の本文";
+  saver.absorb({ body: "agent", rev: 5 });
+  expect(ed.value).toBe("11-04 の本文");
+  fail = false;
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[1]);
+  expect(calls.at(-1)!.args).toMatchObject({ date: DATE });
+  expect(calls.at(-1)!.args.body).not.toBe("11-04 の本文");
+});
