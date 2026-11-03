@@ -217,7 +217,9 @@ pub async fn save_text_doc(
 /// 返す（アーキテクチャ設計書 6.4）。書き出すものが無い日は書かない（何も無ければ空）。
 ///
 /// 書けなかったとき（フォルダが無い・絶対パスでない・書き込めないなど）は `Storage`（`detail` に
-/// ファイルのパスと原因）。読み取りと同じく、保存の失敗中（アーキテクチャ設計書 4.1）には数えない。
+/// ファイルのパス・置き換え終えたファイルの数・原因）。読み取りと同じく、保存の失敗中（アーキテクチャ
+/// 設計書 4.1）には数えない。書き出し先の誤りを別の種類にするかは、画面を作るときに決める（画面設計書
+/// 11章）。
 #[tauri::command]
 pub async fn export_markdown(
     core: Core<'_>,
@@ -226,8 +228,9 @@ pub async fn export_markdown(
     dir: String,
 ) -> Result<Vec<String>, CommandError> {
     blocking(&core, move |core| {
-        // データベースを使うのは読む間だけにし、ファイルを書く間はほかのコマンドを待たせない
-        let days = core.read(|conn| export::markdown_between(conn, from.0, to.0))?;
+        // データベースを使うのは読む間だけにし、文字列にしてファイルを書く間はほかのコマンドを待たせない
+        let boards = core.read(|conn| export::read_between(conn, from.0, to.0))?;
+        let days = boards.render();
         let paths =
             export::write_files(Path::new(&dir), &days).map_err(|e| CommandError::storage(&e))?;
         Ok(paths.iter().map(|p| p.display().to_string()).collect())

@@ -1,7 +1,8 @@
 //! Markdown 書き出し（要件定義書 F-11・4章、アーキテクチャ設計書 6.4）。
 //!
-//! - [`day_markdown`]・[`markdown_between`]：1日・期間のボード（TODO・障害・振り返り・ノート）を、
-//!   日ごとの Markdown の文字列にする。
+//! - [`read_between`]・[`Boards::render`]：1日・期間のボード（TODO・障害・振り返り・ノート）を読み、
+//!   日ごとの Markdown の文字列にする（[`markdown_between`]・[`day_markdown`] は両方を続けて行う）。
+//!   データベースを使うのは読む間だけで、文字列にするのは読んだ後（接続を手放してから）でよい。
 //! - [`write_files`]：日ごとの文字列を、呼び出し側が選んだフォルダに `YYYY-MM-DD.md` として書く。
 //!
 //! 書き出すだけで、読み戻し（取り込み）はしない。データベースには書かない。
@@ -10,11 +11,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Write as _};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::{error, fs};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{error, fs, thread};
 
 use rusqlite::Connection;
 
-use super::item::{CarriedTo, CloseReason, Item, ItemKind, ItemStatus};
+use super::board::{self, BoardItem};
+use super::item::{CloseReason, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
@@ -35,109 +38,121 @@ pub fn day_markdown(conn: &Connection, date: LogicalDate) -> Result<Option<Strin
         .map(|day| day.markdown))
 }
 
-/// `from` から `to` まで（両端を含む）の日ごとの Markdown を、日付の順に返す。`from` が `to` より
-/// 後なら、入れ替えた期間とする。書き出すものが無い日は入れない。
-///
-/// 期間のすべての日を、同じ時点の内容で読む（途中でほかの接続が書いても食い違わない）。
+/// `from` から `to` まで（両端を含む）の日ごとの Markdown（[`read_between`] して [`Boards::render`]）。
 pub fn markdown_between(
     conn: &Connection,
     from: LogicalDate,
     to: LogicalDate,
 ) -> Result<Vec<DayMarkdown>, StorageError> {
-    let (from, to) = if from <= to { (from, to) } else { (to, from) };
-    let days = in_read_transaction(conn, || read_days(conn, from, to))?;
-    Ok(days
-        .into_iter()
-        .filter_map(|(date, day)| {
-            day.render(date)
-                .map(|markdown| DayMarkdown { date, markdown })
-        })
-        .collect())
+    Ok(read_between(conn, from, to)?.render())
+}
+
+/// 書き出すために読んだ、期間の日ごとのボード（[`read_between`]）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Boards {
+    /// 書き出すものがある日だけ。
+    days: BTreeMap<LogicalDate, Day>,
 }
 
 /// 1日分の読んだ内容。
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Day {
-    /// その日の項目（並び順）と、それぞれの持ち越し元・持ち越し先の日付。
-    items: Vec<(Item, Option<LogicalDate>, Option<CarriedTo>)>,
+    /// その日の項目（並び順。持ち越し先付き）と、それぞれの持ち越し元の項目の日付。
+    items: Vec<(BoardItem, Option<LogicalDate>)>,
+    /// ノート・振り返りの本文。空白だけの本文は空にする。
     note: String,
     reflection: String,
 }
 
-fn read_days(
+/// `from` から `to` まで（両端を含む）の日のうち、書き出すものがある日（削除されていない項目があるか、
+/// ノートか振り返りが空白以外の文字を含む日）のボードを読む。`from` が `to` より後なら、入れ替えた
+/// 期間とする。
+///
+/// 期間のすべての日を、同じ時点の内容で読む（途中でほかの接続が書いても食い違わない）。
+pub fn read_between(
     conn: &Connection,
     from: LogicalDate,
     to: LogicalDate,
-) -> Result<BTreeMap<LogicalDate, Day>, StorageError> {
-    let items = item_table::list_between(conn, from, to)?;
-    let ids: Vec<Ulid> = items.iter().map(|i| i.id).collect();
-    let carried_to = item_table::carried_to_many(conn, &ids)?;
-    // 持ち越し元は、削除されていてもその日付を示す（持ち越してきたことは変わらないため）
-    let source_ids: Vec<Ulid> = items.iter().filter_map(|i| i.carried_from_id).collect();
-    let sources: HashMap<Ulid, LogicalDate> = item_table::get_many(conn, &source_ids)?
-        .into_iter()
-        .map(|(id, item)| (id, item.date))
-        .collect();
+) -> Result<Boards, StorageError> {
+    let (from, to) = if from <= to { (from, to) } else { (to, from) };
+    in_read_transaction(conn, || {
+        let items = board::with_carried_to(conn, item_table::list_between(conn, from, to)?)?;
+        // 持ち越し元は、削除されていてもその日付を示す（持ち越してきたことは変わらないため）
+        let source_ids: Vec<Ulid> = items
+            .iter()
+            .filter_map(|i| i.item.carried_from_id)
+            .collect();
+        let sources: HashMap<Ulid, LogicalDate> = item_table::get_many(conn, &source_ids)?
+            .into_iter()
+            .map(|(id, item)| (id, item.date))
+            .collect();
 
-    let mut days: BTreeMap<LogicalDate, Day> = BTreeMap::new();
-    for item in items {
-        let from = item
-            .carried_from_id
-            .and_then(|id| sources.get(&id).copied());
-        let to = carried_to.get(&item.id).copied();
-        days.entry(item.date)
-            .or_default()
-            .items
-            .push((item, from, to));
-    }
-    // 空白だけの本文は、書いていないものとして扱う（その日を書き出すかの判定にも入れない）
-    for doc in [TextDoc::Note, TextDoc::Reflection] {
-        for row in text_doc::list_between(conn, doc, from, to)? {
-            if row.body.trim().is_empty() {
-                continue;
-            }
-            let day = days.entry(row.date).or_default();
-            match doc {
-                TextDoc::Note => day.note = row.body,
-                TextDoc::Reflection => day.reflection = row.body,
+        let mut days: BTreeMap<LogicalDate, Day> = BTreeMap::new();
+        for item in items {
+            let from = item
+                .item
+                .carried_from_id
+                .and_then(|id| sources.get(&id).copied());
+            days.entry(item.item.date)
+                .or_default()
+                .items
+                .push((item, from));
+        }
+        for doc in [TextDoc::Note, TextDoc::Reflection] {
+            for row in text_doc::nonblank_between(conn, doc, from, to)? {
+                let day = days.entry(row.date).or_default();
+                match doc {
+                    TextDoc::Note => day.note = row.body,
+                    TextDoc::Reflection => day.reflection = row.body,
+                }
             }
         }
+        Ok(Boards { days })
+    })
+}
+
+impl Boards {
+    /// 日ごとの Markdown を、日付の順に返す。
+    pub fn render(&self) -> Vec<DayMarkdown> {
+        self.days
+            .iter()
+            .map(|(&date, day)| DayMarkdown {
+                date,
+                markdown: day.render(date),
+            })
+            .collect()
     }
-    Ok(days)
 }
 
 impl Day {
-    /// Markdown にする。書き出すものが無ければ `None`。
-    fn render(&self, date: LogicalDate) -> Option<String> {
-        if self.items.is_empty() && self.note.is_empty() && self.reflection.is_empty() {
-            return None;
-        }
+    fn render(&self, date: LogicalDate) -> String {
         let mut out = format!("# {date}\n");
         for (kind, title) in [(ItemKind::Todo, "TODO"), (ItemKind::Blocker, "Blockers")] {
             let mut items = self
                 .items
                 .iter()
-                .filter(|(i, ..)| i.kind == kind)
+                .filter(|(i, _)| i.item.kind == kind)
                 .peekable();
             if items.peek().is_none() {
                 continue;
             }
             write!(out, "\n## {title}\n\n").unwrap();
-            for (item, from, to) in items {
-                push_item(&mut out, item, *from, *to);
+            for (item, from) in items {
+                push_item(&mut out, item, *from);
             }
         }
         for (title, body) in [("Reflection", &self.reflection), ("Notes", &self.note)] {
             if !body.is_empty() {
-                write!(out, "\n## {title}\n\n{}\n", trim_body(body)).unwrap();
+                write!(out, "\n## {title}\n\n{}\n", trim_body(&to_lf(body))).unwrap();
             }
         }
-        Some(out)
+        out
     }
 }
 
 /// 項目の1行（と、解消した障害の解消メモの行）。
-fn push_item(out: &mut String, item: &Item, from: Option<LogicalDate>, to: Option<CarriedTo>) {
+fn push_item(out: &mut String, board_item: &BoardItem, from: Option<LogicalDate>) {
+    let item = &board_item.item;
     let text = one_line(&item.text);
     match item.status {
         ItemStatus::Open => write!(out, "- [ ] {text}"),
@@ -159,7 +174,7 @@ fn push_item(out: &mut String, item: &Item, from: Option<LogicalDate>, to: Optio
             .to_owned(),
         );
     }
-    if let Some(to) = to {
+    if let Some(to) = board_item.carried_to {
         notes.push(format!("carried over to {}", to.date));
     }
     if !notes.is_empty() {
@@ -180,6 +195,12 @@ fn push_item(out: &mut String, item: &Item, from: Option<LogicalDate>, to: Optio
 /// 次の行の Markdown を崩さないため）。
 fn one_line(s: &str) -> String {
     s.replace(['\r', '\n'], " ")
+}
+
+/// 改行（CRLF・CR）を LF にそろえる（書き出すファイルの改行を LF だけにするため。コアは CR を行の
+/// 文字として保存する。データモデル設計書 3章 note / reflection）。
+fn to_lf(body: &str) -> String {
+    body.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// ノート・振り返りの本文の、先頭の空白だけの行と、末尾の空白と改行を除く（ほかはそのまま）。
@@ -203,8 +224,13 @@ pub fn file_name(date: LogicalDate) -> String {
 pub enum ExportError {
     /// 書き出し先が絶対パスでない。何も書いていない。
     RelativeDir { dir: PathBuf },
-    /// ファイル `path` を書けなかった。それより前の日のファイルは書き終えている。
-    Write { path: PathBuf, source: io::Error },
+    /// ファイル `path` を書けなかった。`replaced` は、それまでに置き換え終えたファイルの数（一時
+    /// ファイルを書く段階で失敗したときは 0。[`write_files`]）。
+    Write {
+        path: PathBuf,
+        replaced: usize,
+        source: io::Error,
+    },
 }
 
 impl fmt::Display for ExportError {
@@ -215,7 +241,12 @@ impl fmt::Display for ExportError {
                 "the export folder must be an absolute path: {}",
                 dir.display()
             ),
-            Self::Write { path, .. } => write!(f, "failed to write {}", path.display()),
+            Self::Write { path, replaced, .. } => {
+                if *replaced > 0 {
+                    write!(f, "{replaced} files were exported, then ")?;
+                }
+                write!(f, "failed to write {}", path.display())
+            }
         }
     }
 }
@@ -229,37 +260,108 @@ impl error::Error for ExportError {
     }
 }
 
-/// `days` を、フォルダ `dir` に日ごとのファイル（[`file_name`]）として、日付の順に書き、書いたファイルの
-/// パスを返す。同じ名前のファイルは置き換える。フォルダは作らない（呼び出し側が選んだ、あるフォルダに書く）。
+/// 一時ファイルの名前の末尾。
+const TEMP_SUFFIX: &str = ".tmp";
+
+/// 中断で残った一時ファイルとみなすまでの時間（[`write_files`]）。書いている途中のほかの書き出しの
+/// 一時ファイルを消さないよう、十分に長くする。
+const STALE_TEMP_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// 名前の変更をやり直す回数と、1回目の待ち時間（2回目以降は、回数に比例して長くする）。Windows では、
+/// 同期のツールなどが置き換える先のファイルを開いていると、少しの間だけ名前を変えられないため。
+#[cfg(windows)]
+const RENAME_RETRIES: (u32, Duration) = (5, Duration::from_millis(100));
+#[cfg(not(windows))]
+const RENAME_RETRIES: (u32, Duration) = (0, Duration::ZERO);
+
+/// 1日分の、置き換える前の一時ファイル。
+struct Pending {
+    /// 呼び出し側に返すパス（`dir` の中の `YYYY-MM-DD.md`）。
+    path: PathBuf,
+    /// 実際に置き換えるファイル（`path` がシンボリックリンクなら、リンク先）。
+    target: PathBuf,
+    tmp: PathBuf,
+}
+
+/// `days` を、フォルダ `dir` に日ごとのファイル（[`file_name`]）として書き、書いたファイルのパス
+/// （`dir` の中のもの）を日付の順に返す。フォルダは作らない（呼び出し側が選んだ、あるフォルダに書く）。
 ///
-/// 1つずつ、同じフォルダの一時ファイルに書いてディスクに反映してから名前を変える（同期のツールや
-/// エディタが、書きかけのファイルを読まないように）。書けなかったら、その一時ファイルを消して止める
-/// （それより前に書いたファイルは残す）。
+/// - 同じ名前のファイルは置き換える。置き換えたファイルの権限は保ち、シンボリックリンクはリンク先を
+///   置き換える（リンクのまま残す）。ほかのファイルには触れない。
+/// - まずすべての日を、置き換える先と同じフォルダの一時ファイル（`.YYYY-MM-DD.md.<ULID>.tmp`）に書いて
+///   ディスクに反映し、それから日付の順に名前を変える（同期のツールやエディタが、書きかけのファイルを
+///   読まないように）。一時ファイルを書けなければ、書いた一時ファイルを消し、何も置き換えずに失敗とする。
+///   名前の変更に失敗したら、残りの一時ファイルを消して止める（それより前の日は置き換え済みで、
+///   その数をエラーに入れる）。
+/// - 始める前に、`dir` に残っている、中断で残った一時ファイル（1時間以上前に作ったもの）を
+///   消す（消せなくても続ける）。
 pub fn write_files(dir: &Path, days: &[DayMarkdown]) -> Result<Vec<PathBuf>, ExportError> {
     if !dir.is_absolute() {
         return Err(ExportError::RelativeDir {
             dir: dir.to_path_buf(),
         });
     }
-    let mut written = Vec::with_capacity(days.len());
+    remove_stale_temp_files(dir, SystemTime::now());
+
+    let mut pending: Vec<Pending> = Vec::with_capacity(days.len());
     for day in days {
-        let name = file_name(day.date);
-        let path = dir.join(&name);
-        write_replacing(dir, &name, &path, day.markdown.as_bytes()).map_err(|source| {
-            ExportError::Write {
-                path: path.clone(),
-                source,
+        let path = dir.join(file_name(day.date));
+        match write_temp(&path, day.markdown.as_bytes()) {
+            Ok(p) => pending.push(p),
+            Err(source) => {
+                remove_temps(&pending);
+                return Err(ExportError::Write {
+                    path,
+                    replaced: 0,
+                    source,
+                });
             }
-        })?;
-        written.push(path);
+        }
     }
-    Ok(written)
+
+    for (replaced, p) in pending.iter().enumerate() {
+        if let Err(source) = retry(RENAME_RETRIES, || fs::rename(&p.tmp, &p.target)) {
+            remove_temps(&pending[replaced..]);
+            return Err(ExportError::Write {
+                path: p.path.clone(),
+                replaced,
+                source,
+            });
+        }
+    }
+    sync_dirs(&pending);
+    Ok(pending.into_iter().map(|p| p.path).collect())
 }
 
-/// `bytes` を一時ファイルに書いて反映し、`path` に名前を変える。失敗したら一時ファイルを消す。
-fn write_replacing(dir: &Path, name: &str, path: &Path, bytes: &[u8]) -> io::Result<()> {
-    // 一時ファイルの名前は、ほかの書き出しと重ならないよう ULID を付け、隠しファイルにする
-    let tmp = dir.join(format!(".{name}.{}.tmp", Ulid::generate()));
+/// `path` を置き換える一時ファイルを、置き換える先と同じフォルダに書いて反映する。置き換える先に
+/// ファイルがあれば、その権限を一時ファイルに付ける。失敗したら、作りかけの一時ファイルを消す。
+fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<Pending> {
+    let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    // リンク先が無いリンクは、リンク先を求められないので失敗にする（リンクを黙ってファイルに
+    // 置き換えないように）
+    let target = if is_link {
+        fs::canonicalize(path)?
+    } else {
+        path.to_path_buf()
+    };
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+        return Err(io::Error::other("the export file has no parent folder"));
+    };
+    // ほかの書き出しと重ならないよう ULID を付け、隠しファイルにする
+    let tmp = parent.join(format!(
+        ".{}.{}{TEMP_SUFFIX}",
+        name.to_string_lossy(),
+        Ulid::generate()
+    ));
+    let existing = fs::metadata(&target).ok();
+    if existing.as_ref().is_some_and(|m| !m.is_file()) {
+        // フォルダなどは置き換えられないので、何も置き換えないうちに失敗にする
+        return Err(io::Error::new(
+            io::ErrorKind::IsADirectory,
+            "the export file name is used by something that is not a file",
+        ));
+    }
+    let permissions = existing.map(|m| m.permissions());
     let result = (|| {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -268,12 +370,96 @@ fn write_replacing(dir: &Path, name: &str, path: &Path, bytes: &[u8]) -> io::Res
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&tmp, path)
+        if let Some(permissions) = permissions {
+            fs::set_permissions(&tmp, permissions)?;
+        }
+        Ok(())
     })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+    match result {
+        Ok(()) => Ok(Pending {
+            path: path.to_path_buf(),
+            target,
+            tmp,
+        }),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e)
+        }
     }
-    result
+}
+
+fn remove_temps(pending: &[Pending]) {
+    for p in pending {
+        let _ = fs::remove_file(&p.tmp);
+    }
+}
+
+/// 名前を変えたフォルダを反映する（名前の変更が、電源が落ちても残るように）。Unix だけで行う
+/// （Windows はフォルダを開いて反映できない）。反映できなくても失敗にしない（ファイルの中身は反映済み）。
+fn sync_dirs(pending: &[Pending]) {
+    #[cfg(unix)]
+    {
+        let mut dirs: Vec<&Path> = pending.iter().filter_map(|p| p.target.parent()).collect();
+        dirs.sort_unstable();
+        dirs.dedup();
+        for dir in dirs {
+            if let Ok(d) = fs::File::open(dir) {
+                let _ = d.sync_all();
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pending;
+}
+
+/// `f` を、失敗したら `retries` 回までやり直す（`n` 回目のやり直しの前に `delay × n` 待つ）。
+fn retry<T>(
+    (retries, delay): (u32, Duration),
+    mut f: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let mut attempt = 0;
+    loop {
+        match f() {
+            Err(_) if attempt < retries => {
+                attempt += 1;
+                thread::sleep(delay * attempt);
+            }
+            result => return result,
+        }
+    }
+}
+
+/// `dir` の、中断で残った一時ファイル（`.YYYY-MM-DD.md.<ULID>.tmp` の形で、ULID の時刻が `now` より
+/// [`STALE_TEMP_AGE`] 以上前のもの）を消す。読めない・消せないものは、そのままにする。
+fn remove_stale_temp_files(dir: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let now_ms = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    let stale_ms = u64::try_from(STALE_TEMP_AGE.as_millis()).unwrap_or(u64::MAX);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(created_ms) = name.to_str().and_then(temp_file_time) else {
+            continue;
+        };
+        if now_ms.saturating_sub(created_ms) >= stale_ms
+            && entry.file_type().is_ok_and(|t| t.is_file())
+        {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// 書き出しの一時ファイルの名前（`.YYYY-MM-DD.md.<ULID>.tmp`）なら、作った時刻（UNIX 時刻のミリ秒）。
+fn temp_file_time(name: &str) -> Option<u64> {
+    let (file, ulid) = name
+        .strip_prefix('.')?
+        .strip_suffix(TEMP_SUFFIX)?
+        .rsplit_once('.')?;
+    file.strip_suffix(".md")?.parse::<LogicalDate>().ok()?;
+    Some(ulid.parse::<Ulid>().ok()?.timestamp_ms())
 }
 
 #[cfg(test)]
@@ -284,7 +470,7 @@ mod tests {
     use super::*;
     use crate::domain::carryover::{self, Decision, Selection};
     use crate::domain::day;
-    use crate::domain::item::{self, Position};
+    use crate::domain::item::{self, Item, Position};
     use crate::storage::table::item::ItemChanges;
     use crate::storage::table::test_support::{at, date, open};
 
@@ -531,6 +717,45 @@ mod tests {
     }
 
     #[test]
+    fn line_endings_become_lf() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        write(
+            conn,
+            TextDoc::Note,
+            "2026-11-02",
+            "## 10:00 定例\r\n一\r二\r\n",
+        );
+        assert_eq!(
+            day_markdown(conn, date("2026-11-02")).unwrap().unwrap(),
+            "# 2026-11-02\n\n## Notes\n\n## 10:00 定例\n一\n二\n"
+        );
+    }
+
+    #[test]
+    fn reading_and_rendering_can_be_done_separately() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        put(conn, "2026-11-02", ItemKind::Todo, "二日");
+        write(conn, TextDoc::Note, "2026-11-03", "三日");
+        let boards = read_between(conn, date("2026-11-01"), date("2026-11-03")).unwrap();
+        // 読んだ後に変えても、読んだ時点の内容で書き出す
+        put(conn, "2026-11-02", ItemKind::Todo, "後から");
+        let days = boards.render();
+        assert_eq!(
+            days.iter().map(|d| d.date.to_string()).collect::<Vec<_>>(),
+            ["2026-11-02", "2026-11-03"]
+        );
+        assert!(!days[0].markdown.contains("後から"));
+        assert_eq!(
+            read_between(conn, date("2026-12-01"), date("2026-12-31"))
+                .unwrap()
+                .render(),
+            []
+        );
+    }
+
+    #[test]
     fn trim_body_keeps_the_indent_of_the_first_line() {
         assert_eq!(trim_body("\n \n  コード\n本文 \n\n"), "  コード\n本文");
         assert_eq!(trim_body("本文"), "本文");
@@ -588,11 +813,11 @@ mod tests {
     }
 
     #[test]
-    fn write_failures_name_the_file_and_keep_earlier_days() {
+    fn nothing_is_replaced_when_a_file_cannot_be_written() {
         let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("2026-11-02.md"), "古い書き出し").unwrap();
         // 2日目の名前のフォルダがあると、置き換えられない
         fs::create_dir(dir.path().join("2026-11-03.md")).unwrap();
-        fs::write(dir.path().join("2026-11-03.md").join("x"), "").unwrap();
         let err = write_files(
             dir.path(),
             &[
@@ -602,20 +827,148 @@ mod tests {
             ],
         )
         .unwrap_err();
-        let ExportError::Write { path, .. } = &err else {
+        let ExportError::Write { path, replaced, .. } = &err else {
             panic!("{err:?}");
         };
         assert_eq!(path, &dir.path().join("2026-11-03.md"));
+        assert_eq!(*replaced, 0);
         assert!(error::Error::source(&err).is_some());
+        // 前の日も置き換えず、一時ファイルも残さない
         assert_eq!(leftovers(dir.path()), ["2026-11-02.md", "2026-11-03.md"]);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("2026-11-02.md")).unwrap(),
+            "古い書き出し"
+        );
 
         // 無いフォルダには書かない（作らない）
         let missing = dir.path().join("無い");
         assert!(matches!(
             write_files(&missing, &[day("2026-11-02", "二日\n")]),
-            Err(ExportError::Write { .. })
+            Err(ExportError::Write { replaced: 0, .. })
         ));
         assert!(!missing.exists());
+    }
+
+    #[test]
+    fn the_error_tells_how_many_files_were_replaced() {
+        let err = |replaced| {
+            ExportError::Write {
+                path: PathBuf::from("/x/2026-11-03.md"),
+                replaced,
+                source: io::Error::other("busy"),
+            }
+            .to_string()
+        };
+        assert_eq!(err(0), "failed to write /x/2026-11-03.md");
+        assert_eq!(
+            err(2),
+            "2 files were exported, then failed to write /x/2026-11-03.md"
+        );
+    }
+
+    #[test]
+    fn retry_runs_again_only_after_failures() {
+        let no_wait = Duration::ZERO;
+        let mut calls = 0;
+        let ok = retry((3, no_wait), || {
+            calls += 1;
+            if calls < 3 {
+                Err(io::Error::other("busy"))
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(ok.unwrap(), 3);
+        let mut calls = 0;
+        let failed: io::Result<()> = retry((2, no_wait), || {
+            calls += 1;
+            Err(io::Error::other("busy"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(calls, 3);
+        let mut calls = 0;
+        let failed: io::Result<()> = retry((0, no_wait), || {
+            calls += 1;
+            Err(io::Error::other("busy"))
+        });
+        assert!(failed.is_err());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn stale_temp_files_are_removed_and_fresh_ones_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+        let ulid_at = |secs_ago: u64| {
+            let ms = 1_800_000_000_000 - secs_ago * 1000;
+            Ulid::from_u128(u128::from(ms) << 80)
+        };
+        let old = format!(".2026-11-02.md.{}.tmp", ulid_at(2 * 60 * 60));
+        let fresh = format!(".2026-11-03.md.{}.tmp", ulid_at(60));
+        let others = [
+            "2026-11-02.md".to_owned(),
+            // 形の違うもの（利用者のファイル）
+            format!(".memo.md.{}.tmp", ulid_at(2 * 60 * 60)),
+            ".2026-11-02.md.tmp".to_owned(),
+        ];
+        for name in [&old, &fresh].into_iter().chain(&others) {
+            fs::write(dir.path().join(name), "").unwrap();
+        }
+        remove_stale_temp_files(dir.path(), now);
+        let mut expected: Vec<String> = others.to_vec();
+        expected.push(fresh.clone());
+        expected.sort();
+        assert_eq!(leftovers(dir.path()), expected);
+        assert_eq!(temp_file_time(&old), Some(1_800_000_000_000 - 7_200_000));
+        assert_eq!(temp_file_time("2026-11-02.md"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_keeps_permissions_and_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("2026-11-02.md");
+        fs::write(&plain, "古い").unwrap();
+        fs::set_permissions(&plain, fs::Permissions::from_mode(0o600)).unwrap();
+        let linked = vault.path().join("三日.md");
+        fs::write(&linked, "古い").unwrap();
+        symlink(&linked, dir.path().join("2026-11-03.md")).unwrap();
+
+        write_files(
+            dir.path(),
+            &[day("2026-11-02", "二日\n"), day("2026-11-03", "三日\n")],
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&plain).unwrap(), "二日\n");
+        assert_eq!(
+            fs::metadata(&plain).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // リンクはリンクのまま、リンク先が新しくなる
+        let link = dir.path().join("2026-11-03.md");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&linked).unwrap(), "三日\n");
+        assert_eq!(leftovers(vault.path()), ["三日.md"]);
+
+        // リンク先の無いリンクは、ファイルに置き換えずに失敗にする
+        fs::remove_file(&linked).unwrap();
+        assert!(matches!(
+            write_files(dir.path(), &[day("2026-11-03", "三日\n")]),
+            Err(ExportError::Write { replaced: 0, .. })
+        ));
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
@@ -623,5 +976,85 @@ mod tests {
         let err = write_files(Path::new("exports"), &[day("2026-11-02", "二日\n")]).unwrap_err();
         assert!(matches!(err, ExportError::RelativeDir { .. }));
         assert!(!Path::new("exports").exists());
+    }
+
+    /// 5年分（1,800日）の模擬データを書き出すときに、データベースを使う時間（[`read_between`]）と、
+    /// 文字列にする時間を測る（アーキテクチャ設計書 6.4。期間に上限を設けないため、画面の自動保存を
+    /// 待たせる長さを確かめる）。量はデータモデル設計書 5章の見積もり（1日あたり TODO・障害 20件、
+    /// ノート 10KB、振り返り 2KB）で、項目の4分の1は前の日から持ち越したもの。データを作るのに時間が
+    /// かかるので、普段のテストでは飛ばす。測るときは次のように走らせる：
+    ///
+    /// ```sh
+    /// cargo test --release -p yunagi-core export::tests::five_years -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "重い。測るときに --ignored で走らせる"]
+    fn five_years_of_data_are_read_quickly() {
+        use crate::storage::table::day as day_table;
+        use crate::storage::table::item::Origin;
+        const DAYS: usize = 1_800;
+        const ITEMS_PER_DAY: usize = 20;
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let first = date("2021-11-08");
+        let note =
+            "外部APIの429が増えている。上限は1分あたり600件らしい。\n".repeat(10 * 1024 / 80);
+        let reflection = "良かったこと：設計の見直しが進んだ。\n".repeat(2 * 1024 / 50);
+        conn.execute_batch("BEGIN").unwrap();
+        let mut previous: Vec<Ulid> = Vec::new();
+        let mut d = first;
+        for _ in 0..DAYS {
+            day_table::ensure(conn, d, "Asia/Tokyo", now()).unwrap();
+            let mut today = Vec::new();
+            for i in 0..ITEMS_PER_DAY {
+                let id = Ulid::generate();
+                let it = Item {
+                    id,
+                    date: d,
+                    kind: if i % 4 == 0 {
+                        ItemKind::Blocker
+                    } else {
+                        ItemKind::Todo
+                    },
+                    text: format!("API のレート制限を調査 {i}"),
+                    status: ItemStatus::Open,
+                    close_reason: None,
+                    sort_key: format!("a{i:02}"),
+                    carry_count: 0,
+                    carried_from_id: previous.get(i).filter(|_| i % 4 == 1).copied(),
+                    split_from_id: None,
+                    resolution_note: None,
+                    origin: Origin::Human,
+                    agent_client_id: None,
+                    external_ref_id: None,
+                    completed_at: None,
+                    created_at: now(),
+                    updated_at: now(),
+                    deleted_at: None,
+                };
+                item_table::insert(conn, &it).unwrap();
+                today.push(id);
+            }
+            previous = today;
+            text_doc::save(conn, TextDoc::Note, d, &note, now()).unwrap();
+            text_doc::save(conn, TextDoc::Reflection, d, &reflection, now()).unwrap();
+            d = d.add_days(1).unwrap();
+        }
+        conn.execute_batch("COMMIT").unwrap();
+        let last = d.add_days(-1).unwrap();
+
+        let started = std::time::Instant::now();
+        let boards = read_between(conn, first, last).unwrap();
+        let read = started.elapsed();
+        let started = std::time::Instant::now();
+        let days = boards.render();
+        let render = started.elapsed();
+        let bytes: usize = days.iter().map(|d| d.markdown.len()).sum();
+        println!(
+            "read {read:?}, render {render:?}, {} days, {bytes} bytes",
+            days.len()
+        );
+        assert_eq!(days.len(), DAYS);
+        assert!(read < Duration::from_secs(5), "{read:?}");
     }
 }

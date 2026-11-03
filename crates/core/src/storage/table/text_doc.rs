@@ -90,19 +90,29 @@ pub fn save(
     Ok(rev)
 }
 
-/// `from` から `to` まで（両端を含む）の日の行を、日付の順に返す。`from` が `to` より後なら空。
-pub fn list_between(
+/// `from` から `to` まで（両端を含む）の日のうち、本文が空白（Unicode の空白文字）以外の文字を含む日の
+/// 行を、日付の順に返す。`from` が `to` より後なら空。
+pub fn nonblank_between(
     conn: &Connection,
     doc: TextDoc,
     from: LogicalDate,
     to: LogicalDate,
 ) -> Result<Vec<TextDocRow>, StorageError> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT date, body, rev, updated_at FROM {} WHERE date BETWEEN ?1 AND ?2 ORDER BY date",
+        // 半角の空白・タブ・改行だけの本文は SQL で外す（[`nonblank_dates`] と同じ）。それ以外の空白
+        // （全角の空白など）は下で確かめる
+        "SELECT date, body, rev, updated_at FROM {} WHERE date BETWEEN ?1 AND ?2 \
+         AND trim(body, ' ' || char(9, 10, 11, 12, 13)) <> '' ORDER BY date",
         doc.table()
     ))?;
-    let rows = stmt.query_map([from, to], from_row)?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    let mut rows = Vec::new();
+    for row in stmt.query_map([from, to], from_row)? {
+        let row = row?;
+        if !row.body.trim().is_empty() {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
 }
 
 /// `before` より前で `after` より後（`None` なら下限なし）の日のうち、本文が空白（Unicode の空白文字）
@@ -225,29 +235,36 @@ mod tests {
     }
 
     #[test]
-    fn list_between_returns_the_range_in_date_order() {
+    fn nonblank_between_returns_the_range_in_date_order() {
         let (db, _dir) = open();
         let conn = db.connection();
         let t = at("2026-11-03T01:00:00Z");
-        for d in ["2026-11-04", "2026-11-01", "2026-11-02", "2026-11-03"] {
+        for (d, body) in [
+            ("2026-11-04", "四日"),
+            ("2026-11-01", "一日"),
+            ("2026-11-02", " \n　\t"),
+            ("2026-11-03", "三日"),
+        ] {
             let d = ensure_day(&db, d);
-            save(conn, TextDoc::Note, d, &format!("note {d}"), t).unwrap();
+            save(conn, TextDoc::Note, d, body, t).unwrap();
         }
         let dates = |from, to| -> Vec<String> {
-            list_between(conn, TextDoc::Note, date(from), date(to))
+            nonblank_between(conn, TextDoc::Note, date(from), date(to))
                 .unwrap()
                 .into_iter()
                 .map(|r| r.date.to_string())
                 .collect()
         };
+        // 空白だけの日（全角の空白を含む）は入らない
         assert_eq!(
-            dates("2026-11-02", "2026-11-04"),
-            ["2026-11-02", "2026-11-03", "2026-11-04"]
+            dates("2026-11-01", "2026-11-04"),
+            ["2026-11-01", "2026-11-03", "2026-11-04"]
         );
         assert_eq!(dates("2026-11-03", "2026-11-03"), ["2026-11-03"]);
+        assert!(dates("2026-11-02", "2026-11-02").is_empty());
         assert!(dates("2026-11-04", "2026-11-01").is_empty());
         assert!(
-            list_between(
+            nonblank_between(
                 conn,
                 TextDoc::Reflection,
                 date("2026-11-01"),
