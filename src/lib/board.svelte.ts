@@ -96,6 +96,8 @@ interface Entry {
 /** 本文の入力の取り消し。続けて入力する間は1件にまとめる。 */
 interface TextEntry extends Entry {
   key: string;
+  /** 入力を始める前の本文。 */
+  before: string;
   /** 最後に入力した本文（取り消すとき、その後にエージェントが変えていないかを比べる）。 */
   after: string;
 }
@@ -223,11 +225,20 @@ export class BoardModel {
     const byId = new Map(rows.filter((r) => r.id !== null).map((r) => [r.id!, r]));
     const ids = new Set(server.map((bi) => bi.item.id));
     const merged: Row[] = [];
+    // 作るのを送っている途中の行（応答が届く前に、作った後の読み込みが届くことがある）
+    const creating = rows.filter((r) => r.id === null && this.items.creating(r.key));
     for (const bi of server) {
       if (this.#deletedIds.has(bi.item.id)) continue;
       const old = byId.get(bi.item.id);
       const next = rowOf(bi);
       if (old === undefined) {
+        // 作っている途中の行と同じ種類・本文の、まだ知らない項目は、その行のものとみなして出さない
+        // （二重に出さないため。作り終えると ID が決まり、次の読み込みで合わせる）
+        const mine = creating.findIndex((r) => r.kind === bi.item.kind && r.text.trim() === bi.item.text);
+        if (mine >= 0) {
+          creating.splice(mine, 1);
+          continue;
+        }
         merged.push(next);
         continue;
       }
@@ -419,7 +430,7 @@ export class BoardModel {
     const entry = this.#rowEntry(row.key);
     this.#push(entry);
     // 足した直後の入力は、足したことと1つにまとめる
-    this.#textEntry = { ...entry, key: row.key, after: "" };
+    this.#textEntry = { ...entry, key: row.key, before: "", after: "" };
     return { key: row.key, field: "text", offset: 0 };
   }
 
@@ -454,6 +465,7 @@ export class BoardModel {
     } else {
       const entry: TextEntry = {
         key,
+        before,
         after: text,
         undo: async () => this.#setText(key, entry.after, before),
         redo: async () => this.#setText(key, before, entry.after),
@@ -567,7 +579,11 @@ export class BoardModel {
         const createdRow = this.row(createdKey);
         // 分けた後の2行の本文をつなぎ直す（分けた後に入力していれば、その本文で）
         const joined = createdRow === undefined ? before : r.text + createdRow.text;
-        if (createdRow !== undefined) await this.#removeRow(createdRow);
+        if (createdRow !== undefined) {
+          await this.#removeRow(createdRow);
+          // 削除できなかった（保存に失敗している間など。行は画面に戻っている）なら、つなぎ直さない
+          if (this.row(createdKey) !== undefined) return false;
+        }
         if (lockOf(r) === null && joined.trim() !== "" && joined !== r.text) {
           r.text = joined;
           this.items.editText(key, joined);
@@ -612,7 +628,16 @@ export class BoardModel {
     } else if (row.id === null) {
       void this.#removeRow(row);
     } else {
-      // 本文を消して離れた項目は、削除として取り消せるようにする
+      // 本文を消して離れた項目は、削除として取り消せるようにする。消している途中の本文（「B」など）は
+      // 送らず、消し始める前の本文に戻してから削除する（取り消すと、その本文で戻る）
+      const entry = this.#textEntry?.key === key ? this.#textEntry : null;
+      this.items.dropText(key);
+      if (entry !== null && entry.before.trim() !== "") {
+        this.#undo.splice(this.#undo.indexOf(entry), 1);
+        this.#textEntry = null;
+        row.text = entry.before;
+        this.items.editText(key, entry.before);
+      }
       this.remove(key);
     }
   }

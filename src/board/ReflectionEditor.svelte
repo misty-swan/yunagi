@@ -185,9 +185,9 @@
     presence.saver = null;
     if (prev !== null) {
       presence.closing.add(prev);
-      void prev.close().then((done) => {
-        if (done) presence.closing.delete(prev);
-      });
+      void prev.close();
+      // 保存し終えるまで再試行していても、終えたら除く
+      void prev.whenClosed().then(() => presence.closing.delete(prev));
     }
     view?.setState(stateOf("", false));
     let snap: Snapshot | null = null;
@@ -218,7 +218,8 @@
       presence.saver = null;
       if (s !== null) {
         presence.closing.add(s);
-        void s.close().then((done) => done && presence.closing.delete(s));
+        void s.close();
+        void s.whenClosed().then(() => presence.closing.delete(s));
       }
       view?.destroy();
       view = null;

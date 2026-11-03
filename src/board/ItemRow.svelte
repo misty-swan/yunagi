@@ -135,7 +135,8 @@
   }
 
   function onTextKey(e: KeyboardEvent) {
-    if (e.defaultPrevented) return;
+    // IME の変換中のキー（候補を選ぶ ↑↓ など）は、IME に任せる（操作仕様書 3章）
+    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
     if (justComposed && e.key === "Enter") {
       justComposed = false;
       e.preventDefault();

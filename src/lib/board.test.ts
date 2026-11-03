@@ -428,3 +428,69 @@ test("画面で作った行が、読み込みに2回続けて出てこなけれ�
   model.load(board([bi(item(A, "a"))]));
   expect(texts(model)).toEqual(["a"]);
 });
+
+test("足して入力した行を、送る前に取り消したら、作らない", async () => {
+  const { model, calls } = setup(() => item(NEW, "abc"));
+  model.load(board([bi(item(A, "a"))]));
+  const f = model.add("todo", A)!;
+  model.editText(f.key, "abc");
+  await model.undo();
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+  expect(texts(model)).toEqual(["a"]);
+  expect(calls).toEqual([]);
+});
+
+test("再試行を待つ分割を取り消しても、失敗の知らせを出さない", async () => {
+  const { model, notices, calls } = setup((cmd) => {
+    if (cmd === "split_item") throw { kind: "storage", detail: "x" };
+    return { updated: true, item: item(A, "a") };
+  });
+  model.load(board([bi(item(A, "設計を読む"))]));
+  model.splitAt(A, 2);
+  await vi.advanceTimersByTimeAsync(0);
+  await model.undo();
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] * 2);
+  expect(notices).toEqual([]);
+  expect(texts(model)).toEqual(["設計を読む"]);
+  expect(calls.filter((c) => c.cmd === "split_item").length).toBe(1);
+});
+
+test("本文を消して離れた項目は、消し始める前の本文で削除し、取り消すとその本文で戻る", async () => {
+  const { model, calls } = setup((cmd) => {
+    if (cmd === "delete_item") return { id: A, source: null };
+    if (cmd === "restore_item") return item(A, "Buy milk");
+    return { updated: true, item: item(A, "x") };
+  });
+  model.load(board([bi(item(A, "Buy milk"))]));
+  model.setFocus({ key: A, field: "text" });
+  model.editText(A, "B");
+  model.editText(A, "");
+  model.leave(A);
+  await model.settled();
+  // 途中の「B」は送らず、消し始める前の本文に戻してから削除する
+  expect(sent(calls)).toEqual([
+    ["save_item", { id: A, fields: { text: "Buy milk" } }],
+    ["delete_item", { id: A }],
+  ]);
+  await model.undo();
+  expect(sent(calls).at(-1)![0]).toBe("restore_item");
+});
+
+test("作っている途中に届いた読み込みで、同じ行を二重に出さない", async () => {
+  let release: () => void = () => {};
+  const { model } = setup(async () => {
+    await new Promise<void>((r) => (release = r));
+    return item(NEW, "新しい");
+  });
+  model.load(board([bi(item(A, "a"))]));
+  const f = model.add("todo", A)!;
+  model.editText(f.key, "新しい");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  // 作り終えた後の読み込みが、応答より先に届いた
+  model.load(board([bi(item(A, "a")), bi(item(NEW, "新しい"))]));
+  expect(texts(model)).toEqual(["a", "新しい"]);
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  model.load(board([bi(item(A, "a")), bi(item(NEW, "新しい"))]));
+  expect(model.todos.map((r) => r.key)).toEqual([A, f.key]);
+});

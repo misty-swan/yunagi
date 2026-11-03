@@ -254,11 +254,37 @@ abstract class Saver<P> {
     return true;
   }
 
+  /**
+   * 使うのをやめ、まだ送っていない内容を捨てる（送らない。作る前にやめた項目など）。送っている途中
+   * なら何もせず `false`。
+   */
+  abandon(): boolean {
+    if (this.#inFlight !== null) return false;
+    this.drop();
+    this.#pendingSince = null;
+    this.#failure = null;
+    this.#failures = 0;
+    this.#finish();
+    return true;
+  }
+
+  /** 送るのを待っている内容を捨てる（`abandon`）。 */
+  protected abstract drop(): void;
+
+  /** 片付け終えたら解決する（保存し終えるまで再試行を続けていても、終えた時点で）。 */
+  whenClosed(): Promise<void> {
+    return this.#closedPromise;
+  }
+
+  #resolveClosed: () => void = () => {};
+  readonly #closedPromise = new Promise<void>((r) => (this.#resolveClosed = r));
+
   #finish() {
     if (this.#closed) return;
     this.#closed = true;
     this.#clearTimer();
     this.#status.remove(this);
+    this.#resolveClosed();
   }
 }
 
@@ -387,6 +413,10 @@ export class DocSaver extends Saver<Snapshot> {
 
   protected putBack() {
     // 本文はエディタにあるので、戻すものは無い
+  }
+
+  protected drop() {
+    // 本文はエディタにあるので、捨てるものは無い（ノート・振り返りは捨てない）
   }
 
   /**
@@ -626,6 +656,19 @@ class ItemSaver extends Saver<ItemPatch> {
     this.#events.rejected?.(this.key, e, p);
   }
 
+  protected drop() {
+    this.#pending = {};
+    this.#create = null;
+    this.#split = null;
+    this.#lateFirst = undefined;
+  }
+
+  /** 送るのを待っている本文を捨てる（空白だけにして離れた行を削除する前。`ItemSaves.dropText`）。 */
+  dropText() {
+    const { text: _text, ...rest } = this.#pending;
+    this.#pending = rest;
+  }
+
   /** まだ保存し終えていない欄（送るのを待っている・送っている）。 */
   unsaved(): Set<ItemFieldName> {
     const fields = new Set<ItemFieldName>();
@@ -696,20 +739,37 @@ export class ItemSaves {
     if (this.#savers.has(key)) throw new Error(`item ${key} already exists`);
     const s = new ItemSaver(this.#status, key, null, null, this.#events, this.#lookup, { from, first });
     this.#add(s);
+    const origin = this.#savers.get(from)?.key ?? from;
+    let set = this.#splits.get(origin);
+    if (set === undefined) this.#splits.set(origin, (set = new Set()));
+    set.add(s);
     s.edit({ text: second });
     void s.flush();
   }
 
   /** 分割を送り終えていない、`key` から分ける項目の待ち行列。 */
   #splitsFrom(key: string): ItemSaver[] {
-    // 作る前の項目どうしは ID が無い（null）ので、ID で比べるのは作った項目だけ
-    const id = this.idOf(key);
-    return [...new Set(this.#savers.values())].filter(
-      (s) =>
-        s.key !== key &&
-        s.splitFrom !== null &&
-        (s.splitFrom === key || (id !== null && this.idOf(s.splitFrom) === id)),
-    );
+    // 元の項目を、分けたときの名前（仮の名前か ID）で引く。作った後に ID で呼ばれても同じ項目を指す
+    const from = this.#savers.get(key)?.key ?? key;
+    const set = this.#splits.get(from);
+    if (set === undefined) return [];
+    for (const sp of set) if (sp.splitFrom === null) set.delete(sp);
+    if (set.size === 0) this.#splits.delete(from);
+    return [...set];
+  }
+
+  /** 分けたときの元の項目の名前ごとの、分割で作る項目の待ち行列（送り終えたものは引くときに除く）。 */
+  readonly #splits = new Map<string, Set<ItemSaver>>();
+
+  /** まだ作っていない項目を、いま作っている（作るのを送っている途中）か。 */
+  creating(key: string): boolean {
+    const s = this.#savers.get(key);
+    return s !== undefined && s.id === null && s.inFlight;
+  }
+
+  /** 送るのを待っている本文を捨てる（本文を空白だけにして離れた項目を、削除する前に）。 */
+  dropText(key: string) {
+    this.#savers.get(key)?.dropText();
   }
 
   /** 項目の ID（まだ作っていなければ `null`）。 */
@@ -736,8 +796,9 @@ export class ItemSaves {
     if (s.id !== null || s.inFlight) return false;
     const from = s.splitFrom;
     const first = s.takeFirst();
+    // 送らずに捨てる（close は送ってから片付けるので使わない）
+    s.abandon();
     this.#savers.delete(key);
-    void s.close();
     if (from !== null && first !== null) this.editText(from, first);
     return true;
   }

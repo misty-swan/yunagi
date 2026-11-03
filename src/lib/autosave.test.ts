@@ -574,3 +574,20 @@ test("分割を送っている間の元の行の入力は、分割の後に元�
     ["save_item", { id: ID, fields: { text: "ab" } }],
   ]);
 });
+
+test("片付けで再試行を続けた保存も、保存し終えたら whenClosed が解決する", async () => {
+  let fail = true;
+  mockCore((): TextSave => {
+    if (fail) throw { kind: "storage", detail: "x" };
+    return { result: "saved", rev: 2, updated: true };
+  });
+  const ed = editor("a");
+  const s = new DocSaver(new SaveStatus(), "reflection", DATE, { body: "", rev: 1 }, ed);
+  s.edited();
+  expect(await s.close()).toBe(false);
+  let closed = false;
+  void s.whenClosed().then(() => (closed = true));
+  fail = false;
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[1]);
+  expect(closed).toBe(true);
+});
