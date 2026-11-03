@@ -67,7 +67,7 @@ export class Palette {
   /** いま出している検索の答えと、その検索語（前後の空白を除いたもの）。 */
   views = $state.raw<HitView[]>([]);
   viewsFor = $state("");
-  /** 検索を送って、答えを待っている。 */
+  /** 検索を送るのを待っているか、送って答えを待っている（IME の変換中は送らないので、入らない）。 */
   searching = $state(false);
   /** いまの検索語で検索できなかった。 */
   failed = $state(false);
@@ -103,43 +103,64 @@ export class Palette {
   /** 入力が変わった。`composing` は IME の変換中か（変換中は検索を送らない）。 */
   input(query: string, composing = false) {
     this.query = query;
-    if (!composing) this.#schedule();
+    if (composing) {
+      // 変換を終えるまで待つ（変換の前の検索語で送らない）
+      this.#cancel();
+      return;
+    }
+    this.#schedule();
+  }
+
+  /** いまの入力の検索語（前後の空白を除いたもの。結果を出すかどうかもこれで決める）。 */
+  get term(): string {
+    return searchTerm(this.query);
   }
 
   /** 終わったら呼ぶ（待っている検索をやめる）。 */
   stop() {
     this.close();
-    clearTimeout(this.#timer);
   }
 
   #reset() {
+    this.query = "";
+    this.#clearResults();
+  }
+
+  /** 送るのを待っている検索と、答えを待っている検索をやめる（届いた答えは捨てる）。 */
+  #cancel() {
     clearTimeout(this.#timer);
     this.#seq++;
-    this.query = "";
+    this.searching = false;
+  }
+
+  /** 出している結果と、検索の状態を消す。 */
+  #clearResults() {
+    this.#cancel();
     this.views = [];
     this.viewsFor = "";
-    this.searching = false;
     this.failed = false;
   }
 
   #schedule() {
-    clearTimeout(this.#timer);
-    const term = searchTerm(this.query);
+    const term = this.term;
     if (term === "") {
-      this.#seq++;
-      this.views = [];
-      this.viewsFor = "";
-      this.searching = false;
-      this.failed = false;
+      this.#clearResults();
       return;
     }
-    if (term === this.viewsFor && !this.failed && !this.searching) return;
+    if (term === this.viewsFor && !this.failed) {
+      // 出している結果の検索語に戻った
+      this.#cancel();
+      return;
+    }
+    this.#cancel();
+    // 前の検索語の失敗は、新しい検索語には当てはめない
+    this.failed = false;
+    this.searching = true;
     this.#timer = setTimeout(() => void this.#run(term), this.#delay);
   }
 
   async #run(term: string) {
     const n = ++this.#seq;
-    this.searching = true;
     try {
       const hits = await this.#search(term, SEARCH_LIMIT);
       if (n !== this.#seq) return;

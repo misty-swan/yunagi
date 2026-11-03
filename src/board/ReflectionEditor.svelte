@@ -130,7 +130,12 @@
 
   $effect(() => {
     const d = date;
-    if (view !== null) untrack(() => void editor.open(d));
+    if (view === null) return;
+    untrack(() => {
+      // 読み終えるまでは、前に読んだ日のままにしない（読み直している途中の空の本文へ `find` で移らないため）
+      if (loaded !== d) loaded = null;
+      void editor.open(d);
+    });
   });
 
   // ボードを読み込み直して振り返りの版が進んでいたら、最新を読み直して取り込む

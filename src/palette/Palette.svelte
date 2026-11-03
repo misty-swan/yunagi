@@ -44,13 +44,16 @@
   const commands = $derived(paletteCommands(context, m, other));
   const shownCommands = $derived(matchCommands(commands, palette.query));
   const date = $derived(dateTarget(palette.query, today));
-  const hasQuery = $derived(palette.query.trim() !== "");
+  const hasQuery = $derived(palette.term !== "");
   const views = $derived(hasQuery ? palette.views : []);
-  /** 結果の下に出す状態。答えが届くまでは、前の答えがあればそれを出したまま、何も添えない。 */
+  /**
+   * 結果の下に出す状態。答えが届くまでは、前の答えがあればそれを出したまま、何も添えない。IME の
+   * 変換中など、まだ検索を送らないときも何も添えない。
+   */
   const resultState = $derived.by((): "failed" | "searching" | "empty" | "limited" | null => {
     if (!hasQuery) return null;
     if (palette.failed) return "failed";
-    if (palette.viewsFor !== palette.query.trim()) return views.length === 0 ? "searching" : null;
+    if (palette.viewsFor !== palette.term) return palette.searching && views.length === 0 ? "searching" : null;
     if (views.length === 0) return "empty";
     return views.length >= SEARCH_LIMIT ? "limited" : null;
   });

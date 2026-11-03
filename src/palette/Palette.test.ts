@@ -85,6 +85,8 @@ const HITS: SearchHit[] = [
     resolutionNote: null,
     carriedTo: { id: "01JC", date: "2025-10-29" },
   },
+  // 検索の後に消された項目（その日のボードには無い）
+  { kind: "todo", refId: "01JGONE", date: OLD, body: "消えた項目", resolutionNote: null, carriedTo: null },
 ];
 
 interface Fake {
@@ -260,6 +262,22 @@ test("項目の結果を選ぶと、その日のボードのその項目へ移�
   press({ key: "Enter" });
   await until(() => $("main.content")?.dataset.date === OLD && $("main.content")?.dataset.mode === "board");
   await until(() => document.activeElement?.closest("li[data-key]")?.textContent?.includes("API のレート制限を調べる") === true);
+});
+
+test("項目が消されていたらその日を開くだけにし、ほかの日へ移ったら、戻っても選ばない", async () => {
+  await start();
+  await openWithKey();
+  type("消えた項目");
+  await until(() => selected().startsWith("2025.10.28 Tue TODO"));
+  press({ key: "Enter" });
+  await until(() => $("main.content")?.dataset.date === OLD);
+  press({ key: "]", code: "BracketRight", ctrlKey: true }, window);
+  await until(() => $("main.content")?.dataset.date === "2025-10-29");
+  press({ key: "[", code: "BracketLeft", ctrlKey: true }, window);
+  await until(() => $("main.content")?.dataset.date === OLD);
+  await new Promise((r) => setTimeout(r, 50));
+  flushSync();
+  expect(document.activeElement?.closest("li[data-key]") ?? null).toBeNull();
 });
 
 test("ノート・振り返りの結果を選ぶと、その日のノート・振り返りの一致した所を選ぶ", async () => {

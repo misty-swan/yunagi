@@ -136,13 +136,20 @@
     }
   }
 
-  // 持ち越し先の印・検索パレットの項目の結果：その日を開いて、その項目を選ぶ。その日を読み終えても
-  // 項目が無ければ（消された後など）、選ぶのをやめる（後で思わぬときにフォーカスを動かさないため）
-  let pendingSelect = $state<{ date: LogicalDate; id: Id; done?: () => void } | null>(null);
+  // 持ち越し先の印・検索パレットの項目の結果：その日を開いて、その項目が一覧に入ったら選ぶ（読み直しと
+  // 行き違って、まだ入っていない一覧が先に届くことがあるため）。選ぶ前にほかの日へ移ったら、選ぶのを
+  // やめる（後でその日を開いたときに、思わぬところでフォーカスを動かさないため）
+  let pendingSelect = $state<{ date: LogicalDate; id: Id } | null>(null);
   function openCarried(to: CarriedTo) {
     pendingSelect = { date: to.date, id: to.id };
     session.show(to.date);
   }
+  $effect(() => {
+    const showing = session.showing;
+    untrack(() => {
+      if (pendingSelect !== null && showing !== pendingSelect.date) pendingSelect = null;
+    });
+  });
   $effect(() => {
     const d = model.date;
     const p = pendingSelect;
@@ -151,9 +158,9 @@
     untrack(() => {
       if (p === null || d !== p.date) return;
       const row = model.todos.find((r) => r.id === p.id) ?? model.blockers.find((r) => r.id === p.id);
+      if (row === undefined) return;
       pendingSelect = null;
-      p.done?.();
-      if (row !== undefined) requestFocus({ key: row.key, field: "text", offset: "end" });
+      requestFocus({ key: row.key, field: "text", offset: "end" });
     });
   });
 
@@ -164,7 +171,10 @@
     if (tg === null || tg.n === lastTarget) return;
     lastTarget = tg.n;
     untrack(() => {
-      if ("itemId" in tg) pendingSelect = { date: tg.date, id: tg.itemId, done: onTargetDone };
+      if (!("itemId" in tg)) return;
+      // 移る先は Board が持つので、App の移る先はここで終える（その日を開くのは App）
+      pendingSelect = { date: tg.date, id: tg.itemId };
+      onTargetDone();
     });
   });
   /** 振り返りの中で移る先（その日の振り返りを読み終えたら、ReflectionEditor が移る）。 */

@@ -36,6 +36,8 @@ test("1文字ずつ打っても、打ち止めてから1回だけ検索を送る
   p.show();
   for (const q of ["れ", "れー", "れーと", "レート"]) {
     p.input(q, q !== "レート");
+    // 変換中は送らないので、探している途中にもしない
+    expect(p.searching).toBe(q === "レート");
     await vi.advanceTimersByTimeAsync(SEARCH_DELAY_MS / 2);
   }
   expect(calls).toHaveLength(0);
@@ -82,6 +84,10 @@ test("空にしたら結果を消し、検索できなければ知らせる。�
   calls[0].reject({ kind: "storage" });
   await vi.advanceTimersByTimeAsync(0);
   expect(p.failed).toBe(true);
+  // ほかの検索語を打てば、前の失敗は出さない（探している途中にする）
+  p.input("abx");
+  expect(p.failed).toBe(false);
+  expect(p.searching).toBe(true);
   p.input("  ");
   expect(p.failed).toBe(false);
   expect(p.views).toEqual([]);
