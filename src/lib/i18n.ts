@@ -47,6 +47,13 @@ const labels = {
   fromNote: "← NOTE",
   /** 持ち越しの画面の見出しの英字ラベル（画面設計書 5章）。 */
   carryOver: "CARRY OVER",
+  /** 検索パレットのグループの見出しと、結果の種類（画面設計書 6章）。 */
+  palette: {
+    goToDate: "GO TO DATE",
+    commands: "COMMANDS",
+    results: "RESULTS",
+    kind: { todo: "TODO", blocker: "BLOCKER", note: "NOTE", reflection: "REFLECTION" },
+  },
   /** 整理モードの領域の見出し（画面設計書 3章「各領域の表示」）。 */
   region: { todo: "TODO", blockers: "BLOCKERS", reflection: "REFLECTION" },
   /** 領域の見出しの右の件数（`6 left`・`3 open`）。 */
@@ -214,6 +221,40 @@ export interface Messages {
   backupFailed: string;
   startup: StartupMessages;
   carryover: CarryoverMessages;
+  palette: PaletteMessages;
+}
+
+/** 検索パレットの文言（画面設計書 6章）。 */
+export interface PaletteMessages {
+  /** 入力欄の名前（読み上げ）と、空のときの案内。 */
+  label: string;
+  placeholder: string;
+  /** いまの設定に当たるコマンドの印。 */
+  inUse: string;
+  /** 日付ジャンプの行の、日付の後ろの文。 */
+  goTo: string;
+  /** 結果の行の、持ち越し先の印（`date` は `11.03 Tue`）。 */
+  carriedTo: (date: string) => string;
+  /** 解消メモで一致したときの、解消メモの前の印。 */
+  resolutionNote: string;
+  searching: string;
+  failed: string;
+  empty: string;
+  /** 件数の上限まで出したとき。 */
+  limited: (n: number) => string;
+  commands: {
+    carryover: string;
+    saveDetail: string;
+    today: string;
+    toNote: string;
+    toBoard: string;
+    archive: string;
+    agents: string;
+    settings: string;
+    openSidebar: string;
+    closeSidebar: string;
+    layout: Record<"A" | "B" | "C", string>;
+  };
 }
 
 /** 持ち越しの画面の文言（画面設計書 5章）。 */
@@ -506,6 +547,31 @@ const ja: Messages = {
       reloaded: "前回の日が変わったため、一覧を読み直しました。",
     },
   },
+  palette: {
+    label: "検索・日付・コマンド",
+    placeholder: "検索、日付（2026-10-31・昨日）、コマンド",
+    inUse: "使用中",
+    goTo: "を開く",
+    carriedTo: (date) => `→ ${date}`,
+    resolutionNote: "解消メモ",
+    searching: "探しています",
+    failed: "検索できませんでした。入力し直すと、もう一度探します。",
+    empty: "一致するものはありません。",
+    limited: (n) => `新しい順に ${n} 件まで出しています。`,
+    commands: {
+      carryover: "持ち越しを開く",
+      saveDetail: "保存できていない理由を見る",
+      today: "今日へ移動",
+      toNote: "ノートモードにする",
+      toBoard: "整理モードにする",
+      archive: "ふりかえり（Archive）を開く",
+      agents: "エージェントの変更履歴を開く",
+      settings: "設定を開く",
+      openSidebar: "サイドバーを開く",
+      closeSidebar: "サイドバーを閉じる",
+      layout: { A: "レイアウト：A. 2段", B: "レイアウト：B. 3列", C: "レイアウト：C. 縦積み" },
+    },
+  },
 };
 
 const en: Messages = {
@@ -577,6 +643,31 @@ const en: Messages = {
       invalid: "The review choices couldn't be accepted. You can choose again.",
       loadFailed: "Couldn't load the list. Retrying.",
       reloaded: "The previous day changed, so the list was reloaded.",
+    },
+  },
+  palette: {
+    label: "Search, dates, and commands",
+    placeholder: "Search, a date (2026-10-31, yesterday), or a command",
+    inUse: "In use",
+    goTo: "Open this day",
+    carriedTo: (date) => `→ ${date}`,
+    resolutionNote: "Resolution note",
+    searching: "Searching",
+    failed: "Couldn't search. Edit the text to search again.",
+    empty: "No matches.",
+    limited: (n) => `Showing the newest ${n}.`,
+    commands: {
+      carryover: "Open carry-over",
+      saveDetail: "Show why it isn't saved",
+      today: "Go to today",
+      toNote: "Switch to Note mode",
+      toBoard: "Switch to Board mode",
+      archive: "Open Archive",
+      agents: "Open agent change history",
+      settings: "Open Settings",
+      openSidebar: "Open the sidebar",
+      closeSidebar: "Close the sidebar",
+      layout: { A: "Layout: A. Two rows", B: "Layout: B. Three columns", C: "Layout: C. Stacked" },
     },
   },
 };

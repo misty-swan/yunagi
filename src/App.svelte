@@ -8,8 +8,17 @@
   // データベースを開くまで（とバックアップから戻した結果を確かめるまで）は、外枠の代わりに起動時の画面
   // （src/startup/）を窓全体に出す。開く処理の状態は、起動時の画面の data-startup に出す（テストに使う）。定期バックアップの失敗（backup-failed）は上部のバーの知らせに出す。
   // 持ち越し（S-03。src/carryover/）は、開いたときと前面に出したときに確かめ、外枠の上に重ねて出す。
+  // 検索パレット（S-04。src/palette/）も外枠の上に重ね、選んだもの（日付・コマンド・検索結果）はここで行う。
   import type { EditorView } from "@codemirror/view";
-  import type { NoteSource } from "./lib/bindings";
+  import type { LogicalDate, NoteSource } from "./lib/bindings";
+  import {
+    Palette,
+    type BoardTarget,
+    type NoteFind,
+    type PaletteChoice,
+    type PaletteCommandId,
+  } from "./lib/palette.svelte";
+  import PalettePanel from "./palette/Palette.svelte";
   import { onDestroy, untrack } from "svelte";
   import { coreEvents } from "./lib/core";
   import { t } from "./lib/i18n";
@@ -118,8 +127,8 @@
 
   // ---- 項目から送り元のノートの行へ ----
 
-  /** 項目の「← NOTE」で移る先（ノートがその日を読み終えて移ったら `null` に戻す）。 */
-  let noteJump = $state<NoteSource | null>(null);
+  /** 項目の「← NOTE」・パレットのノートの結果で移る先（ノートがその日を読み終えて移ったら `null` に戻す）。 */
+  let noteJump = $state<NoteSource | NoteFind | null>(null);
   function openNoteSource(source: NoteSource) {
     // 押すたびに移る（同じ行へ2回目に押したときも）
     noteJump = { ...source };
@@ -142,9 +151,103 @@
       .join(","),
   );
 
-  // 検索パレット・設定・変更履歴・ふりかえりは、それぞれの画面の課題で開くようにする。パレットの
-  // 「持ち越しを開く」は、`carry.pending` があるときだけ出し、`carry.openOnRequest()` で開く（画面設計書 5章）
-  function onCommand(_c: ShellCommand) {}
+  // ---- 検索パレット（S-04。画面設計書 6章） ----
+
+  const palette = new Palette();
+  onDestroy(() => palette.stop());
+  /** 検索結果から移る、整理モードの中の先（Board が移り終えたら `null` に戻す）。 */
+  let boardTarget = $state<BoardTarget | null>(null);
+  let targetSeq = 0;
+  /** 増えたら、上部のバーの保存できていない原因の表示を開く。 */
+  let saveDetailRequest = $state(0);
+  // 持ち越しを出したら、パレットは閉じる（持ち越しを閉じた後は、パレットを開く前の所へ戻る）
+  $effect(() => {
+    if (!carry.open) return;
+    untrack(() => {
+      if (!palette.open) return;
+      carry.returnFocus = palette.returnFocus;
+      palette.returnFocus = null;
+      palette.close();
+    });
+  });
+  // 移り終える前に、ほかの日へ移ったら、移るのをやめる
+  $effect(() => {
+    const tg = boardTarget;
+    const showing = session.showing;
+    if (tg !== null && showing !== tg.date) untrack(() => (boardTarget = null));
+  });
+
+  function showDate(date: LogicalDate) {
+    if (session.showing !== date) session.show(date);
+  }
+
+  function runPalette(choice: PaletteChoice) {
+    if (choice.kind === "date") {
+      // モードは変えない（‹ › と同じ。画面設計書 3章「上部のバー」）
+      showDate(choice.date);
+      return;
+    }
+    if (choice.kind === "command") {
+      runCommand(choice.id);
+      return;
+    }
+    const { hit } = choice.view;
+    if (hit.kind === "note") {
+      noteJump = { date: hit.date, find: choice.query };
+      showDate(hit.date);
+      shell.setMode("note");
+      return;
+    }
+    boardTarget =
+      hit.kind === "reflection"
+        ? { date: hit.date, find: choice.query, n: ++targetSeq }
+        : { date: hit.date, itemId: hit.refId, n: ++targetSeq };
+    showDate(hit.date);
+    shell.setMode("board");
+  }
+
+  function runCommand(id: PaletteCommandId) {
+    switch (id) {
+      case "carryover":
+        void carry.openOnRequest();
+        return;
+      case "saveDetail":
+        saveDetailRequest++;
+        return;
+      case "today":
+        if (session.today !== null) showDate(session.today);
+        return;
+      case "mode":
+        shell.toggleMode();
+        return;
+      case "sidebar":
+        shell.toggleSidebar();
+        return;
+      case "layoutA":
+      case "layoutB":
+      case "layoutC":
+        prefs.layout = id === "layoutA" ? "A" : id === "layoutB" ? "B" : "C";
+        return;
+      case "archive":
+      case "agents":
+      case "settings":
+        openScreen(id);
+        return;
+    }
+  }
+
+  // 設定（S-05）・変更履歴（S-06）・ふりかえり（S-08）は、それぞれの画面の課題で開くようにする。
+  // サイドバー・上部のバー・キー・パレットのどこから開くときも、ここを通る（画面設計書 6章）
+  function openScreen(_c: Exclude<ShellCommand, "palette">) {}
+
+  function onCommand(c: ShellCommand) {
+    if (c === "palette") {
+      // 持ち越しを出している間は開かない（背後の操作を受け付けないため）
+      if (!carry.open) palette.show();
+      return;
+    }
+    openScreen(c);
+  }
 </script>
 
 <svelte:window onblur={onWindowBlur} onfocus={onWindowFocus} />
@@ -152,16 +255,26 @@
 {#if !ready}
   <StartupScreen startup={session.startup} actions={startupActions} />
 {:else}
-  <!-- 持ち越しを出している間は、背後の外枠と本文を操作できなくする -->
-  <div inert={carry.open}>
-    <AppShell {session} {save} {shell} {mac} notice={notice.text} {onCommand}>
+  <!-- 持ち越し・パレットを出している間は、背後の外枠と本文を操作できなくする -->
+  <div inert={carry.open || palette.open}>
+    <AppShell {session} {save} {shell} {mac} notice={notice.text} {onCommand} {saveDetailRequest}>
       <main
         class="content"
         data-mode={shell.mode}
         data-date={session.date ?? ""}
       >
         <div class="mode" hidden={shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
-          <Board {session} {save} {notice} narrow={shell.narrow} {mac} {tracker} onOpenNoteSource={openNoteSource} />
+          <Board
+            {session}
+            {save}
+            {notice}
+            narrow={shell.narrow}
+            {mac}
+            {tracker}
+            onOpenNoteSource={openNoteSource}
+            target={boardTarget}
+            onTargetDone={() => (boardTarget = null)}
+          />
         </div>
         <div class="mode" hidden={shell.mode !== "note"}>
           <NoteView
@@ -184,6 +297,19 @@
       </main>
     </AppShell>
   </div>
+  <PalettePanel
+    {palette}
+    today={session.today}
+    context={{
+      mode: shell.mode,
+      sidebarOpen: shell.sidebarOpen,
+      layout: prefs.layout,
+      carryPending: carry.pending !== null,
+      saveFailing: save.failing,
+      mac,
+    }}
+    onRun={runPalette}
+  />
   <CarryoverPanel {carry} />
 {/if}
 

@@ -60,6 +60,7 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::postpone_carryover,
         commands::mark_carryover_reshown,
         commands::confirm_carryover,
+        commands::search,
         commands::report_ui_state,
         commands::export_markdown,
     ]

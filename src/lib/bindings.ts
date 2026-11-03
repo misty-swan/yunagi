@@ -439,6 +439,32 @@ created: Array<Item>,
 closed: Array<Item>, };
 
 /**
+ * 検索結果の種類（画面設計書 6章の英字ラベル TODO / BLOCKER / NOTE / REFLECTION）。
+ */
+export type SearchKind = "todo" | "blocker" | "note" | "reflection";
+
+/**
+ * 検索結果の1件（データモデル設計書 4.1）。一致した部分の切り出しは画面が行う。
+ */
+export type SearchHit = { kind: SearchKind, 
+/**
+ * 元の行：TODO・障害は項目の id、ノート・振り返りはその日の日付（`YYYY-MM-DD`）。
+ */
+refId: string, date: LogicalDate, 
+/**
+ * 本文の全体（項目は1行の本文、ノート・振り返りは本文すべて）。
+ */
+body: string, 
+/**
+ * 解消済みの障害の解消メモ（無ければ `null`）。一致したのが本文か解消メモかは画面が見分ける。
+ */
+resolutionNote: string | null, 
+/**
+ * 項目の持ち越し先。持ち越し済みでない項目と、ノート・振り返りは `null`。
+ */
+carriedTo: CarriedTo | null, };
+
+/**
  * 画面が知らせる、入力中の状態（アーキテクチャ設計書 4.1）。変わるたびに全体を知らせ直す。
  *
  * 知らせはそれぞれ別のスレッドで処理されるので、続けて送ると届く順が入れ替わりうる。そこで

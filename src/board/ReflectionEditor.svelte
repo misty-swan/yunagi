@@ -9,7 +9,7 @@
   import { onMount, untrack } from "svelte";
   import type { SaveStatus } from "../lib/autosave.svelte";
   import type { LogicalDate } from "../lib/bindings";
-  import { TextDocEditor } from "../lib/doc_editor";
+  import { selectMatch, TextDocEditor } from "../lib/doc_editor";
   import { t } from "../lib/i18n";
   import { blank } from "../lib/note";
   import type { EditorPresence } from "../lib/ui_report.svelte";
@@ -20,6 +20,8 @@
     presence,
     rev,
     onActivity,
+    find = null,
+    onFound = () => {},
     view = $bindable(null),
   }: {
     date: LogicalDate;
@@ -28,8 +30,15 @@
     /** ボードを読んだときの振り返りの版（進んだら、コアの最新を読み直して取り込む）。 */
     rev: number;
     onActivity: () => void;
+    /** 検索パレットの結果から移る先：その日の振り返りで、検索語 `text` と一致した所（`n` は選ぶたびに変わる）。 */
+    find?: { date: LogicalDate; text: string; n: number } | null;
+    /** `find` へ移り終えた（一致する所が無ければ、先頭へ移る）。 */
+    onFound?: () => void;
     view?: EditorView | null;
   } = $props();
+
+  /** 本文を読み終えた日（`find` は、それを待ってから移る）。 */
+  let loaded = $state<LogicalDate | null>(null);
 
   let host = $state<HTMLElement | null>(null);
 
@@ -89,6 +98,20 @@
       keys: [{ key: "Mod-Shift-r", run: insertTemplate, preventDefault: true }],
     }),
     label: () => t().reflectionLabel,
+    onLoaded: (d) => (loaded = d),
+  });
+
+  // 検索パレットの結果から移る：その日の本文を読み終えてから、一致した所を選ぶ
+  let lastFind = 0;
+  $effect(() => {
+    const f = find;
+    const v = view;
+    if (f === null || v === null || loaded !== f.date || date !== f.date || f.n === lastFind) return;
+    lastFind = f.n;
+    untrack(() => {
+      selectMatch(v, f.text);
+      onFound();
+    });
   });
 
   // 言語を変えたら、読み上げ用の名前を付け直す

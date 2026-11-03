@@ -25,6 +25,7 @@
     mac,
     notice = null,
     onCommand,
+    saveDetailRequest = 0,
     children,
   }: {
     session: Session;
@@ -34,6 +35,8 @@
     /** 上部のバーに短時間だけ出す知らせ。 */
     notice?: string | null;
     onCommand: (c: ShellCommand) => void;
+    /** 増えたら、上部のバーの保存できていない原因の表示を開く。 */
+    saveDetailRequest?: number;
     children?: Snippet;
   } = $props();
 
@@ -130,6 +133,7 @@
       onToday={goToday}
       onMode={setMode}
       {onCommand}
+      {saveDetailRequest}
     />
     {#if scene && overview}
       <NagiMeter {scene} counts={overview.counts} compact={shell.mode === "note"} />

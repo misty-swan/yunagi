@@ -13,12 +13,13 @@ use std::sync::Arc;
 
 use tauri::State;
 use yunagi_core::domain::{board, carryover, export, item, note_send, text_doc};
+use yunagi_core::storage::search::{self as storage_search, SearchQuery};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
 use crate::types::{
     BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList, CarryoverStatus,
     CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, NoteMark, Overview,
-    Position, SendResult, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    Position, SearchHit, SendResult, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -361,6 +362,34 @@ pub async fn export_markdown(
         let paths = export::write_files(Path::new(&dir), boards.into_days())
             .map_err(|e| CommandError::storage(&e))?;
         Ok(paths.iter().map(|p| p.display().to_string()).collect())
+    })
+    .await
+}
+
+/// 検索の件数の上限の上限（画面が大きな値を渡しても、ノートの本文をまとめて読み過ぎないため）。
+pub const MAX_SEARCH_LIMIT: u32 = 200;
+
+/// 全日付の TODO・障害・ノート・振り返りを `text` で探す（データモデル設計書 4.1。パレット S-04、
+/// 画面設計書 6章）。並びは日付の新しい順で、`limit` 件まで（[`MAX_SEARCH_LIMIT`] を超える値はそこまで）。
+/// 一致の決まり（前後の空白を除いて全体を部分一致・空なら空）はコアの `storage::search` に従う。
+#[tauri::command]
+pub async fn search(
+    core: Core<'_>,
+    text: String,
+    limit: u32,
+) -> Result<Vec<SearchHit>, CommandError> {
+    blocking(&core, move |core| {
+        let query = SearchQuery {
+            text: &text,
+            from: None,
+            to: None,
+            kinds: &[],
+            limit: limit.min(MAX_SEARCH_LIMIT) as usize,
+        };
+        core.read(|conn| {
+            storage_search::search(conn, &query)
+                .map(|hits| hits.into_iter().map(SearchHit::from).collect())
+        })
     })
     .await
 }

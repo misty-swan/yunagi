@@ -17,6 +17,7 @@
   import type { Notice } from "../lib/notice.svelte";
   import { prefs, type Layout } from "../lib/prefs.svelte";
   import type { Session } from "../lib/session.svelte";
+  import type { BoardTarget } from "../lib/palette.svelte";
   import type { InputTracker } from "../lib/ui_report.svelte";
   import ItemList from "./ItemList.svelte";
   import ReflectionEditor from "./ReflectionEditor.svelte";
@@ -29,6 +30,8 @@
     mac,
     tracker,
     onOpenNoteSource,
+    target = null,
+    onTargetDone = () => {},
   }: {
     session: Session;
     save: SaveStatus;
@@ -40,6 +43,9 @@
     mac: boolean;
     /** 項目の「← NOTE」：送り元のノートの行へ移る（ノートモードへ移すのは App）。 */
     onOpenNoteSource: (source: NoteSource) => void;
+    /** 検索パレットの結果から移る先（項目か、振り返りの中の一致した所）。移り終えたら `onTargetDone`。 */
+    target?: BoardTarget | null;
+    onTargetDone?: () => void;
   } = $props();
 
   const m = $derived(t());
@@ -130,25 +136,39 @@
     }
   }
 
-  // 持ち越し先の印：その日を開いて、その項目を選ぶ
-  let pendingSelect: { date: LogicalDate; id: Id } | null = null;
+  // 持ち越し先の印・検索パレットの項目の結果：その日を開いて、その項目を選ぶ。その日を読み終えても
+  // 項目が無ければ（消された後など）、選ぶのをやめる（後で思わぬときにフォーカスを動かさないため）
+  let pendingSelect = $state<{ date: LogicalDate; id: Id; done?: () => void } | null>(null);
   function openCarried(to: CarriedTo) {
     pendingSelect = { date: to.date, id: to.id };
     session.show(to.date);
   }
   $effect(() => {
     const d = model.date;
+    const p = pendingSelect;
     void model.todos;
     void model.blockers;
     untrack(() => {
-      const p = pendingSelect;
       if (p === null || d !== p.date) return;
       const row = model.todos.find((r) => r.id === p.id) ?? model.blockers.find((r) => r.id === p.id);
-      if (row === undefined) return;
       pendingSelect = null;
-      requestFocus({ key: row.key, field: "text", offset: "end" });
+      p.done?.();
+      if (row !== undefined) requestFocus({ key: row.key, field: "text", offset: "end" });
     });
   });
+
+  // 検索パレットの結果（日を開くのと、モードを整理モードにするのは App）
+  let lastTarget = 0;
+  $effect(() => {
+    const tg = target;
+    if (tg === null || tg.n === lastTarget) return;
+    lastTarget = tg.n;
+    untrack(() => {
+      if ("itemId" in tg) pendingSelect = { date: tg.date, id: tg.itemId, done: onTargetDone };
+    });
+  });
+  /** 振り返りの中で移る先（その日の振り返りを読み終えたら、ReflectionEditor が移る）。 */
+  const reflectionFind = $derived(target !== null && "find" in target ? { date: target.date, text: target.find, n: target.n } : null);
 
   // ---- 入力中の状態 ----
 
@@ -193,6 +213,8 @@
           presence={tracker.reflection}
           rev={session.board?.reflectionRev ?? 0}
           onActivity={activity}
+          find={reflectionFind}
+          onFound={onTargetDone}
           bind:view={editor}
         />
       </div>
