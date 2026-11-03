@@ -255,19 +255,34 @@ fn board_items(
         .into_iter()
         .filter(|i| keep(i))
         .collect();
-    let ids: Vec<_> = items.iter().map(|i| i.id).collect();
-    let carried = item_table::carried_to_many(conn, &ids)?;
     let mut todos = Vec::new();
     let mut blockers = Vec::new();
-    for item in items {
-        let carried_to = carried.get(&item.id).copied();
-        let list = match item.kind {
+    for item in with_carried_to(conn, items)? {
+        let list = match item.item.kind {
             ItemKind::Todo => &mut todos,
             ItemKind::Blocker => &mut blockers,
         };
-        list.push(BoardItem { item, carried_to });
+        list.push(item);
     }
     Ok((todos, blockers))
+}
+
+/// 項目 `items` に持ち越し先を付ける（並びは変えない）。持ち越し先はまとめて読む
+/// （[`item_table::carried_to_many`]）。ボードと Markdown 書き出し（`crate::domain::export`）が、
+/// 同じ求め方で持ち越し先を付けるように、ここで行う。
+pub(crate) fn with_carried_to(
+    conn: &Connection,
+    items: Vec<Item>,
+) -> Result<Vec<BoardItem>, StorageError> {
+    let ids: Vec<_> = items.iter().map(|i| i.id).collect();
+    let carried = item_table::carried_to_many(conn, &ids)?;
+    Ok(items
+        .into_iter()
+        .map(|item| {
+            let carried_to = carried.get(&item.id).copied();
+            BoardItem { item, carried_to }
+        })
+        .collect())
 }
 
 // ---- Recent ----
