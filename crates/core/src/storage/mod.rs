@@ -4,6 +4,7 @@
 //! データベースは [`Database::open`] で開く。開くときに、未適用のマイグレーション
 //! （スキーマを番号順に更新する手順）を自動で適用する（`migration` モジュール）。
 //! 開く前に `yunagi.lock` のロック（[`DbLock`]）を取る（`lock` モジュール）。
+//! 場所はロックと `config.json` から求め、データベースが無いときに黙って作らない（`open` モジュール）。
 
 pub mod backup;
 pub mod cloud_sync;
@@ -12,16 +13,18 @@ mod db_copy;
 mod error;
 mod lock;
 mod migration;
+mod open;
 pub mod search;
 pub mod table;
 mod ulid;
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub use error::StorageError;
 pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
+pub use open::{DatabaseNotFound, OpenError};
 pub use ulid::{ParseUlidError, Ulid};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。
@@ -29,20 +32,25 @@ pub use ulid::{ParseUlidError, Ulid};
 /// `yunagi.lock` のロックを持っている。閉じる（drop する）と、接続を閉じてからロックを離す。
 pub struct Database {
     conn: Connection,
-    /// 開いたときに渡されたパス（バックアップの置き場所を、マイグレーションと同じに決めるため）
+    /// 開いたデータベースのパス（バックアップの置き場所を、マイグレーションと同じに決めるため）
     path: PathBuf,
     // フィールドは書いた順に drop される。接続を閉じてからロックを離すよう、conn より後に置く
     _lock: DbLock,
 }
 
 impl Database {
-    /// `path` のデータベースを開き（無ければ作り）、未適用のマイグレーションを適用する。
+    /// 保存先の `yunagi.db` を開き、未適用のマイグレーションを適用する。
     ///
+    /// - 保存先は、ロック `lock` を取った既定ディレクトリの `config.json` から求める
+    ///   （[`DbLock::database_path`]。アーキテクチャ設計書 4.2）。パスは受け取らない。
+    /// - データベースが無ければ、初めて使うとき（保存先が既定ディレクトリのままで、
+    ///   データベースの跡も無いとき）だけ新しく作る。それ以外は何も作らずに
+    ///   [`OpenError::NotFound`] を返す（同期の途中・保存先のドライブを繋いでいないときなどに、
+    ///   空のデータベースを作らない。アーキテクチャ設計書 6.3）。新しく作るのは
+    ///   [`Database::create`] で明示する。
     /// - WAL モード、`synchronous=NORMAL` で開く（アーキテクチャ設計書 3章）。
-    /// - 適用前に、`path` と同じフォルダの `backups/` にバックアップを取る。
+    /// - 適用前に、データベースと同じフォルダの `backups/` にバックアップを取る。
     ///   適用に失敗したら、バックアップに戻してから [`StorageError::MigrationFailed`] を返す。
-    ///
-    /// `path` のフォルダは呼び出し側が用意する（保存先の決め方は [`data_dir`]）。
     ///
     /// 同じデータベースを同時に開くのは1つのプロセスだけ、という前提で動く
     /// （アーキテクチャ設計書 4章）。2つが同時にマイグレーションすると、失敗した側の復元で、
@@ -52,17 +60,49 @@ impl Database {
     ///
     /// アプリは起動時に [`DbLock::acquire`] でロックを取ってから開く。直接モードの
     /// CLI・MCP は、操作ごとに [`Database::with_locked`] を使う。
-    pub fn open(lock: DbLock, path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        Self::open_with_migrations(lock, path.as_ref(), migration::MIGRATIONS)
+    pub fn open(lock: DbLock) -> Result<Self, OpenError> {
+        Self::open_located(lock, open::Intent::Open, migration::MIGRATIONS)
     }
 
-    /// マイグレーションの一覧を指定して開く。テストで失敗を模擬するために分けている。
+    /// 保存先に、新しいデータベースを作って開く（[`Database::open`] がデータベースを
+    /// 見つけられず、利用者が新しく作ることを選んだときに使う）。
+    ///
+    /// 保存先の決め方・ロック・マイグレーションは [`Database::open`] と同じ。すでにデータベース
+    /// （中身のある `yunagi.db`、中身のある `-wal`・`-journal`、`yunagi.db` のシンボリックリンク）があれば、
+    /// 上書きせずに [`OpenError::AlreadyExists`] を返す。中身の無い（0 バイトの）`yunagi.db` は
+    /// 作り直す。保存先のフォルダは作らない（繋いでいないドライブの代わりに作らないように）ので、
+    /// 無ければ [`OpenError::NotFound`]（`data_dir_exists` が `false`）を返す。
+    ///
+    /// バックアップから戻すときは、作ってから [`Database::restore_backup`] を呼ぶ。
+    pub fn create(lock: DbLock) -> Result<Self, OpenError> {
+        Self::open_located(lock, open::Intent::Create, migration::MIGRATIONS)
+    }
+
+    /// テスト用：パス `path` を、マイグレーションの一覧を指定して開く（無ければ作る）。
+    /// マイグレーションの失敗を模擬するテストで使う。
+    #[cfg(test)]
     fn open_with_migrations(
         lock: DbLock,
         path: &Path,
         migrations: &[migration::Migration],
     ) -> Result<Self, StorageError> {
-        let mut conn = Connection::open(path)?;
+        Self::connect(lock, path, migrations, true)
+    }
+
+    /// `path` のデータベースを開き、マイグレーションを適用する。`create` なら、無ければ
+    /// SQLite が作る。`create` でなければ作らず、無ければ失敗する。
+    /// 開いてよい場所かは、呼び出し側（[`Database::open_located`]）が確かめる。
+    fn connect(
+        lock: DbLock,
+        path: &Path,
+        migrations: &[migration::Migration],
+        create: bool,
+    ) -> Result<Self, StorageError> {
+        let mut flags = OpenFlags::default();
+        if !create {
+            flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
+        }
+        let mut conn = Connection::open_with_flags(path, flags)?;
         // 新しい版で作られたデータベースは、WAL への切り替えなどでファイルを書き換える前に断る
         migration::check_supported(&conn, migrations)?;
         configure(&conn)?;
