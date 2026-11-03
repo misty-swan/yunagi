@@ -12,13 +12,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::{board, export, item, note_send, text_doc};
+use yunagi_core::domain::{board, carryover, export, item, note_send, text_doc};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
 use crate::types::{
-    BackupEntry, Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome,
-    NoteMark, Overview, Position, SendResult, Snapshot, SplitResult, Startup, TextDoc, TextSave,
-    UiReport,
+    BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList, CarryoverStatus,
+    CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, NoteMark, Overview,
+    Position, SendResult, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -361,6 +361,98 @@ pub async fn export_markdown(
         let paths = export::write_files(Path::new(&dir), boards.into_days())
             .map_err(|e| CommandError::storage(&e))?;
         Ok(paths.iter().map(|p| p.display().to_string()).collect())
+    })
+    .await
+}
+
+/// 持ち越しの後回し・再表示の記録の結果。`changed` は書いたか（ほかの窓が持ち越しの状態を読み直す
+/// ように、書いたら知らせる）。
+struct CarryoverMarked<T> {
+    value: T,
+    changed: bool,
+}
+
+impl<T> Changes for CarryoverMarked<T> {
+    fn changed(&self) -> bool {
+        self.changed
+    }
+}
+
+/// 今日の持ち越しの状態（画面設計書 5章）。持ち越しを終えたか、前回の日に持ち越す項目が無ければ
+/// `null`（画面を出さず、パレットの「持ち越しを開く」も出さない）。
+#[tauri::command]
+pub async fn carryover_status(core: Core<'_>) -> Result<Option<CarryoverStatus>, CommandError> {
+    blocking(&core, |core| {
+        let today = core.today()?;
+        core.read(|conn| carryover::status(conn, today).map(|s| s.map(CarryoverStatus::from)))
+    })
+    .await
+}
+
+/// 持ち越しの画面に出す項目（前回の日の、まだ持ち越し済みでない未完了の TODO と未解消の障害）。
+/// 前回の日が無ければ `null`。
+#[tauri::command]
+pub async fn carryover_candidates(core: Core<'_>) -> Result<Option<CarryoverList>, CommandError> {
+    blocking(&core, |core| {
+        let today = core.today()?;
+        core.read(|conn| carryover::candidates(conn, today).map(|c| c.map(CarryoverList::from)))
+    })
+    .await
+}
+
+/// 持ち越しを後回しにした（Esc）ことを記録する。すでに後回しにしていれば最初の時刻のまま、持ち越しを
+/// 終えていれば何もしない。
+///
+/// 持ち越しの書き込み（この3つ）は、保存の失敗中（アーキテクチャ設計書 4.1）を始め・終えない
+/// （画面は内容を持ったまま再試行せず、失敗を画面に出して利用者が選び直すため）。
+#[tauri::command]
+pub async fn postpone_carryover(core: Core<'_>) -> Result<(), CommandError> {
+    blocking(&core, |core| {
+        let today = core.today()?;
+        // 最初の時刻のまま変えないときも、書いたかをコアは返さないので、知らせる（読み直すだけで害は無い）
+        core.screen_write(ScreenWrite::Operation, |conn| {
+            carryover::postpone(conn, today, &system_tz(), now()).map(|()| CarryoverMarked {
+                value: (),
+                changed: true,
+            })
+        })
+        .map(|r| r.value)
+    })
+    .await
+}
+
+/// 後回しにした持ち越しを、前面に出したときに自動で再表示したことを記録する。記録したら `true`
+/// （画面はそのときだけ出す）。後回しにしていない・再表示を記録済み・持ち越しを終えていれば `false`。
+#[tauri::command]
+pub async fn mark_carryover_reshown(core: Core<'_>) -> Result<bool, CommandError> {
+    blocking(&core, |core| {
+        let today = core.today()?;
+        core.screen_write(ScreenWrite::Operation, |conn| {
+            carryover::mark_reshown(conn, today, now()).map(|written| CarryoverMarked {
+                value: written,
+                changed: written,
+            })
+        })
+        .map(|r| r.value)
+    })
+    .await
+}
+
+/// 持ち越しを確定する（画面設計書 5章）。確定の時点で持ち越しの対象のものだけを扱う。
+/// 画面に出していた前回の日が今と違えば `conflict`（`previous_day_changed`）、今日の持ち越しを
+/// 終えていれば `conflict`（`carryover_done`）で、どちらも何も書かない。
+#[tauri::command]
+pub async fn confirm_carryover(
+    core: Core<'_>,
+    decision: CarryoverDecision,
+) -> Result<CarryoverConfirmed, CommandError> {
+    blocking(&core, move |core| {
+        let today = core.today()?;
+        let decision = decision.into();
+        core.screen_write(ScreenWrite::Operation, |conn| {
+            carryover::confirm(conn, today, &decision, &system_tz(), now())
+                .map(CarryoverConfirmed::from)
+        })
     })
     .await
 }

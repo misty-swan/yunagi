@@ -6,6 +6,7 @@
 // - 短く、命令形を避け、状態を淡々と伝える。感嘆符・絵文字・励ましの言葉は使わない。
 
 import type { CloseReason, RejectReason, StartupFailure } from "./bindings";
+import type { CarryMessage } from "./carryover.svelte";
 import { prefs, type Lang } from "./prefs.svelte";
 
 /** 日英で共通の英字ラベル。 */
@@ -44,6 +45,8 @@ const labels = {
   sent: "Sent",
   /** 項目の行末の、送り元のノートの行への印（画面設計書 3章「各領域の表示」）。 */
   fromNote: "← NOTE",
+  /** 持ち越しの画面の見出しの英字ラベル（画面設計書 5章）。 */
+  carryOver: "CARRY OVER",
   /** 整理モードの領域の見出し（画面設計書 3章「各領域の表示」）。 */
   region: { todo: "TODO", blockers: "BLOCKERS", reflection: "REFLECTION" },
   /** 領域の見出しの右の件数（`6 left`・`3 open`）。 */
@@ -210,6 +213,33 @@ export interface Messages {
   /** 定期バックアップを作れなかったとき（`backup-failed`。画面設計書 3章「上部のバー」）。 */
   backupFailed: string;
   startup: StartupMessages;
+  carryover: CarryoverMessages;
+}
+
+/** 持ち越しの画面の文言（画面設計書 5章）。 */
+export interface CarryoverMessages {
+  /** 見出しの文。`date` は `10.28 Wed`。 */
+  title: (date: string) => string;
+  /** 見直しの選択肢に添える文（デザインガイド 7章）。 */
+  review: (n: number) => string;
+  split: string;
+  drop: string;
+  /** 見直しを選んだ行の、本文の後ろの印。 */
+  splitState: string;
+  dropState: string;
+  /** 分割の子の入力欄の案内（読み上げにも使う）。 */
+  splitPlaceholder: string;
+  carrySelected: string;
+  carryAll: string;
+  carryNone: string;
+  later: string;
+  /** 見出しの文（前回の日が無くなったとき）。 */
+  nothing: string;
+  /** 一覧が空になったとき（エージェントが完了にしたなど）。 */
+  empty: string;
+  loading: string;
+  /** 見出しの下に出す知らせ（`Carryover.message`）。 */
+  messages: Record<CarryMessage, string>;
 }
 
 
@@ -454,6 +484,28 @@ const ja: Messages = {
   lineMenu: { label: "行の操作", toTodo: "TODO へ送る", toBlocker: "障害へ送る" },
   backupFailed: "今日のバックアップを作れませんでした。自動で作り直します",
   startup: jaStartup,
+  carryover: {
+    title: (date) => `前回の日（${date}）に残った項目`,
+    review: (n) => `${n}回持ち越しています。分割しますか？`,
+    split: "分割する",
+    drop: "やめる",
+    splitState: "分割する",
+    dropState: "やめる",
+    splitPlaceholder: "分けた TODO を1行に1件",
+    carrySelected: "選んだものを持ち越す",
+    carryAll: "すべて持ち越す",
+    carryNone: "持ち越さない",
+    later: "後回し",
+    nothing: "前回の日に残った項目",
+    empty: "持ち越す項目はありません。",
+    loading: "読み込んでいます",
+    messages: {
+      failed: "持ち越せませんでした。もう一度選べます。",
+      invalid: "見直しの選択を受け付けられませんでした。選び直せます。",
+      loadFailed: "一覧を読めませんでした。読み直しています。",
+      reloaded: "前回の日が変わったため、一覧を読み直しました。",
+    },
+  },
 };
 
 const en: Messages = {
@@ -505,6 +557,28 @@ const en: Messages = {
   lineMenu: { label: "Line actions", toTodo: "Send to TODO", toBlocker: "Send to Blockers" },
   backupFailed: "Today's backup couldn't be made. It will be retried automatically",
   startup: enStartup,
+  carryover: {
+    title: (date) => `Left on ${date}`,
+    review: (n) => `Carried over ${n} times. Split it?`,
+    split: "Split",
+    drop: "Drop",
+    splitState: "Split",
+    dropState: "Drop",
+    splitPlaceholder: "One TODO per line",
+    carrySelected: "Carry over selected",
+    carryAll: "Carry over all",
+    carryNone: "Don’t carry over",
+    later: "Later",
+    nothing: "Left on the previous day",
+    empty: "Nothing left to carry over.",
+    loading: "Loading",
+    messages: {
+      failed: "Couldn't carry over. You can choose again.",
+      invalid: "The review choices couldn't be accepted. You can choose again.",
+      loadFailed: "Couldn't load the list. Retrying.",
+      reloaded: "The previous day changed, so the list was reloaded.",
+    },
+  },
 };
 
 export const MESSAGES: Record<Lang, Messages> = { ja, en };

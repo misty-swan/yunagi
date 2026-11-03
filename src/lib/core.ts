@@ -9,6 +9,10 @@ import {
   type BackupEntry,
   type BackupFailed,
   type Board,
+  type CarryoverConfirmed,
+  type CarryoverDecision,
+  type CarryoverList,
+  type CarryoverStatus,
   type Changed,
   type CommandError,
   type Deleted,
@@ -116,6 +120,17 @@ export const core = {
     call<SendResult>("send_note_lines", { date, body, baseRev, from, to, kind }),
   /** 本文 `body`（エディタの本文）で、送信済みの印を付ける行。 */
   noteMarks: (date: LogicalDate, body: string) => call<NoteMark[]>("note_marks", { date, body }),
+  /** 今日の持ち越しの状態。終えたか、持ち越すものが無ければ `null`。 */
+  carryoverStatus: () => call<CarryoverStatus | null>("carryover_status"),
+  /** 持ち越しの画面に出す項目。前回の日が無ければ `null`。 */
+  carryoverCandidates: () => call<CarryoverList | null>("carryover_candidates"),
+  /** 持ち越しを後回しにした（Esc）ことを記録する。 */
+  postponeCarryover: () => call<null>("postpone_carryover"),
+  /** 後回しにした持ち越しを、前面に出したときに再表示したことを記録する。記録したら `true`（そのときだけ出す）。 */
+  markCarryoverReshown: () => call<boolean>("mark_carryover_reshown"),
+  /** 持ち越しを確定する。 */
+  confirmCarryover: (decision: CarryoverDecision) =>
+    call<CarryoverConfirmed>("confirm_carryover", { decision }),
   /**
    * 入力中の状態を知らせる（変わるたびに全体を知らせ直す）。届く順が入れ替わっても古いものが
    * 残らないよう、この画面の読み込みの印と、送るたびに増える番号を付ける。
@@ -123,6 +138,33 @@ export const core = {
   reportUiState: (state: Omit<UiReport, "session" | "seq">) =>
     call<null>("report_ui_state", { state: { ...state, session: PAGE_SESSION, seq: ++reportSeq } }),
 };
+
+/** イベントを聞き始められなかったとき、やり直すまでの時間。 */
+export const LISTEN_RETRY_MS = 1000;
+
+/**
+ * イベントを聞き始める。聞き始められなければ、`stopped()` になるまでやり直す（失敗するたびに
+ * `onError`）。聞き始めたら、聞くのをやめる関数で解決する。聞き始めた時点で `stopped()` なら、すぐに
+ * やめて `null` で解決する。
+ */
+export async function keepListening(
+  register: () => Promise<UnlistenFn>,
+  stopped: () => boolean,
+  onError?: (e: unknown) => void,
+): Promise<UnlistenFn | null> {
+  while (!stopped()) {
+    try {
+      const u = await register();
+      if (!stopped()) return u;
+      u();
+      return null;
+    } catch (e) {
+      onError?.(e);
+      await new Promise((resolve) => setTimeout(resolve, LISTEN_RETRY_MS));
+    }
+  }
+  return null;
+}
 
 /** コアのイベントを聞く。戻り値の関数で聞くのをやめる。 */
 export const coreEvents = {

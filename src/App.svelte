@@ -7,6 +7,7 @@
   // （docs/design/01-architecture.md 4.1「入力中の状態の知らせ」）。
   // データベースを開くまで（とバックアップから戻した結果を確かめるまで）は、外枠の代わりに起動時の画面
   // （src/startup/）を窓全体に出す。開く処理の状態は、起動時の画面の data-startup に出す（テストに使う）。定期バックアップの失敗（backup-failed）は上部のバーの知らせに出す。
+  // 持ち越し（S-03。src/carryover/）は、開いたときと前面に出したときに確かめ、外枠の上に重ねて出す。
   import type { EditorView } from "@codemirror/view";
   import type { NoteSource } from "./lib/bindings";
   import { onDestroy, untrack } from "svelte";
@@ -25,6 +26,8 @@
   import StartupScreen from "./startup/StartupScreen.svelte";
   import AppShell from "./shell/AppShell.svelte";
   import type { ShellCommand } from "./shell/commands";
+  import { Carryover } from "./lib/carryover.svelte";
+  import CarryoverPanel from "./carryover/CarryoverPanel.svelte";
 
   const session = startSession();
   onDestroy(() => void session.stop());
@@ -53,10 +56,38 @@
 
   $effect(() => applyPrefs(prefs.theme, prefs.lang));
 
+  // ---- 持ち越し（S-03。画面設計書 5章） ----
+
+  // 出すときは、今日の整理モードの上に重ねる。一覧は、まだ保存していない入力を送り終えてから読む
+  // （前の日の項目の本文・完了を送る前の内容で持ち越さないため）
+  const carry = new Carryover(async () => {
+    const flushed = save.flushAll();
+    // ノートモードから移るときは、閉じた後に、隠れたノートではなく整理モードで前にフォーカスのあった所へ戻す
+    if (shell.mode !== "board") carry.returnFocus = boardFocus;
+    shell.setMode("board");
+    const today = session.today;
+    if (today !== null && session.showing !== today) session.show(today);
+    await flushed;
+  });
+  onDestroy(() => void carry.stop());
+  // データベースを開いたら（起動は前面に出したことに数える）確かめる
+  let carryStarted = false;
+  $effect(() => {
+    if (!ready || carryStarted) return;
+    carryStarted = true;
+    untrack(() => void carry.check());
+  });
+
   // アプリが前面から外れたら、まだ保存していない入力をすぐ送り、入力中を終える
   function onWindowBlur() {
     void save.flushAll();
     tracker.setActive(false);
+  }
+
+  // 前面に出したら、入力中に戻し、持ち越しを出すかを確かめる（日付が変わった後・後回しの1回だけの再表示）
+  function onWindowFocus() {
+    tracker.setActive(true);
+    if (ready) void carry.check();
   }
 
   // ---- モードを移るときのフォーカス ----
@@ -111,44 +142,49 @@
       .join(","),
   );
 
-  // 検索パレット・設定・変更履歴・ふりかえりは、それぞれの画面の課題で開くようにする
+  // 検索パレット・設定・変更履歴・ふりかえりは、それぞれの画面の課題で開くようにする。パレットの
+  // 「持ち越しを開く」は、`carry.pending` があるときだけ出し、`carry.openOnRequest()` で開く（画面設計書 5章）
   function onCommand(_c: ShellCommand) {}
 </script>
 
-<svelte:window onblur={onWindowBlur} onfocus={() => tracker.setActive(true)} />
+<svelte:window onblur={onWindowBlur} onfocus={onWindowFocus} />
 
 {#if !ready}
   <StartupScreen startup={session.startup} actions={startupActions} />
 {:else}
-  <AppShell {session} {save} {shell} {mac} notice={notice.text} {onCommand}>
-    <main
-      class="content"
-      data-mode={shell.mode}
-      data-date={session.date ?? ""}
-    >
-      <div class="mode" hidden={shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
-        <Board {session} {save} {notice} narrow={shell.narrow} {mac} {tracker} onOpenNoteSource={openNoteSource} />
-      </div>
-      <div class="mode" hidden={shell.mode !== "note"}>
-        <NoteView
-          date={session.board?.date ?? null}
-          {save}
-          presence={tracker.note}
-          rev={session.board?.noteRev ?? 0}
-          onActivity={tracker.activity}
-          visible={shell.mode === "note"}
-          narrow={shell.narrow}
-          {mac}
-          {notice}
-          items={boardItems}
-          itemsDate={session.board?.date ?? null}
-          jump={noteJump}
-          onJumped={() => (noteJump = null)}
-          bind:view={noteView}
-        />
-      </div>
-    </main>
-  </AppShell>
+  <!-- 持ち越しを出している間は、背後の外枠と本文を操作できなくする -->
+  <div inert={carry.open}>
+    <AppShell {session} {save} {shell} {mac} notice={notice.text} {onCommand}>
+      <main
+        class="content"
+        data-mode={shell.mode}
+        data-date={session.date ?? ""}
+      >
+        <div class="mode" hidden={shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
+          <Board {session} {save} {notice} narrow={shell.narrow} {mac} {tracker} onOpenNoteSource={openNoteSource} />
+        </div>
+        <div class="mode" hidden={shell.mode !== "note"}>
+          <NoteView
+            date={session.board?.date ?? null}
+            {save}
+            presence={tracker.note}
+            rev={session.board?.noteRev ?? 0}
+            onActivity={tracker.activity}
+            visible={shell.mode === "note"}
+            narrow={shell.narrow}
+            {mac}
+            {notice}
+            items={boardItems}
+            itemsDate={session.board?.date ?? null}
+            jump={noteJump}
+            onJumped={() => (noteJump = null)}
+            bind:view={noteView}
+          />
+        </div>
+      </main>
+    </AppShell>
+  </div>
+  <CarryoverPanel {carry} />
 {/if}
 
 <style>

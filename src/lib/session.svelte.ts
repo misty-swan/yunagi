@@ -10,7 +10,7 @@
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { Board, LogicalDate, Overview, Startup } from "./bindings";
-import { core, coreEvents, errorOf, type CallError } from "./core";
+import { core, coreEvents, errorOf, keepListening, LISTEN_RETRY_MS, type CallError } from "./core";
 
 export interface Session {
   /** 開く処理の状態。問い合わせる前は `null`。 */
@@ -39,7 +39,7 @@ export interface Session {
 }
 
 /** 開く処理の状態の問い合わせや、イベントを聞き始めるのに失敗したとき、やり直すまでの時間。 */
-export const RETRY_MS = 1000;
+export const RETRY_MS = LISTEN_RETRY_MS;
 
 /** コアとつなぎ始める。 */
 export function startSession(): Session {
@@ -117,18 +117,9 @@ export function startSession(): Session {
   }
 
   // 聞き始められなければ、聞き始められるまでやり直す
-  async function keepListening(register: () => Promise<UnlistenFn>) {
-    while (!stopped) {
-      try {
-        const u = await register();
-        if (stopped) u();
-        else unlisten.push(u);
-        return;
-      } catch (e) {
-        fail(e);
-        await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
-      }
-    }
+  async function listen(register: () => Promise<UnlistenFn>) {
+    const u = await keepListening(register, () => stopped, fail);
+    if (u !== null) unlisten.push(u);
   }
 
   // 問い合わせに失敗したら、届くまで問い合わせ直す（聞き始める前に開き終わっていると、
@@ -147,13 +138,13 @@ export function startSession(): Session {
 
   // 聞き始めてから状態を問い合わせる（その間に開き終わっても取りこぼさない）
   const listening = Promise.all([
-    keepListening(() => coreEvents.onStartup(onStartup)),
-    keepListening(() =>
+    listen(() => coreEvents.onStartup(onStartup)),
+    listen(() =>
       coreEvents.onChanged(() => {
         if (startup?.state === "ready") void load(target);
       }),
     ),
-    keepListening(() => coreEvents.onTodayChanged((p) => onTodayChanged(p.today))),
+    listen(() => coreEvents.onTodayChanged((p) => onTodayChanged(p.today))),
   ]);
   void listening.then(askStartup);
 

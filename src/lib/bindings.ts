@@ -349,6 +349,96 @@ sent: Array<SentLine>,
 skipped: Array<SkippedLine>, } | { "result": "stale", body: string, rev: number, };
 
 /**
+ * 持ち越しの画面を、いつ出すか（画面設計書 5章）。
+ * - `show`：まだ後回しにしていない。表示したときに出す。
+ * - `reshow_on_focus`：後回しにしたが、まだ再表示していない。次にアプリを前面に出したとき
+ *   1回だけ出し、`mark_carryover_reshown` で記録する。
+ * - `on_request`：後回しにして、再表示も済んだ。自動では出さず、パレットの「持ち越しを開く」で開く。
+ */
+export type CarryoverPrompt = "show" | "reshow_on_focus" | "on_request";
+
+/**
+ * 今日の持ち越しが残っているときの状態（`carryover_status`）。
+ */
+export type CarryoverStatus = { 
+/**
+ * 前回の日。
+ */
+from: LogicalDate, prompt: CarryoverPrompt, };
+
+/**
+ * 持ち越しの画面に出す1件。
+ */
+export type CarryoverCandidate = { 
+/**
+ * 前回の日の項目（未完了の TODO か、未解消の障害）。
+ */
+item: Item, 
+/**
+ * 見直しの選択肢（分割する／やめる）を添えるか：持ち越し回数が見直しの回数（設定）以上の TODO。
+ */
+review: boolean, };
+
+/**
+ * 持ち越しの画面の中身（`carryover_candidates`）。
+ */
+export type CarryoverList = { 
+/**
+ * 前回の日。確定（`confirm_carryover`）にそのまま渡す。
+ */
+from: LogicalDate, 
+/**
+ * 前回の日の並び順。
+ */
+items: Array<CarryoverCandidate>, 
+/**
+ * 見直しの回数（設定）。持ち越し回数がこれ以上の印を `--warn` にする（障害にも。デザインガイド 6章）。
+ */
+reviewThreshold: number, };
+
+/**
+ * 持ち越しの画面のボタン。
+ */
+export type CarryoverSelection = { "select": "all" } | { "select": "selected", ids: Array<Id>, } | { "select": "none" };
+
+/**
+ * 見直しの選択。
+ */
+export type CarryoverReview = { "review": "drop" } | { "review": "return_external" } | { "review": "split", children: Array<string>, };
+
+/**
+ * 見直しを選んだ TODO と、その選択。
+ */
+export type CarryoverReviewChoice = { id: Id, review: CarryoverReview, };
+
+/**
+ * 持ち越しの確定の中身（`confirm_carryover`）。
+ */
+export type CarryoverDecision = { 
+/**
+ * 画面に出していた前回の日（`CarryoverList` の `from`）。
+ */
+from: LogicalDate, selection: CarryoverSelection, 
+/**
+ * 見直しを選んだ TODO（どのボタンで確定しても反映する）。同じ項目が2回あれば後のものを使う。
+ */
+reviews: Array<CarryoverReviewChoice>, };
+
+/**
+ * 持ち越しを確定した結果。確定を Mod+Z で取り消すかはまだ決めていない（画面設計書 11章）。
+ * 取り消すことにしたときは、作った項目と取りやめた項目をここから取り消しの履歴に持つ。
+ */
+export type CarryoverConfirmed = { 
+/**
+ * 今日に作った項目（持ち越した項目と分割の子）。今日の並び順。
+ */
+created: Array<Item>, 
+/**
+ * 見直しで取りやめた、前回の日の項目（操作の後）。
+ */
+closed: Array<Item>, };
+
+/**
  * 画面が知らせる、入力中の状態（アーキテクチャ設計書 4.1）。変わるたびに全体を知らせ直す。
  *
  * 知らせはそれぞれ別のスレッドで処理されるので、続けて送ると届く順が入れ替わりうる。そこで
@@ -494,7 +584,7 @@ export type RejectReason = "invalid_path" | "not_a_directory" | "no_database" | 
 /**
  * 受け付けられない状態の理由。
  */
-export type Conflict = { "reason": "carried_over", carriedToId: Id, carriedToDate: LogicalDate, } | { "reason": "user_editing" } | { "reason": "note_exists", resolutionNote: string, };
+export type Conflict = { "reason": "carried_over", carriedToId: Id, carriedToDate: LogicalDate, } | { "reason": "user_editing" } | { "reason": "note_exists", resolutionNote: string, } | { "reason": "previous_day_changed", previousDay: LogicalDate | null, } | { "reason": "carryover_done" };
 
 /**
  * 削除を戻せない理由。
