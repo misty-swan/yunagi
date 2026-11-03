@@ -10,6 +10,7 @@
   import { addDays } from "../lib/dates";
   import { shellActionOf, type ShellAction } from "../lib/keys";
   import { meterScene, minutesOfDay } from "../lib/meter";
+  import { prefs } from "../lib/prefs.svelte";
   import type { Session } from "../lib/session.svelte";
   import type { Mode, Shell } from "../lib/shell.svelte";
   import type { ShellCommand } from "./commands";
@@ -57,7 +58,7 @@
   const overview = $derived(session.overview);
   const scene = $derived(
     date !== null && today !== null && overview !== null
-      ? meterScene(date, today, minutesOfDay(today, now), overview.counts)
+      ? meterScene(date, today, minutesOfDay(today, now), overview.counts, prefs.meterHours)
       : null,
   );
 

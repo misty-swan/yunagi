@@ -10,7 +10,7 @@
   import { untrack } from "svelte";
   import { ItemSaves, type ItemSaveEvents, type SaveStatus } from "../lib/autosave.svelte";
   import type { CarriedTo, Id, ItemKind, LogicalDate, NoteSource } from "../lib/bindings";
-  import { BoardModel, CARRY_REVIEW_DEFAULT, type BoardNotice, type FocusTarget } from "../lib/board.svelte";
+  import { BoardModel, type BoardNotice, type FocusTarget } from "../lib/board.svelte";
   import { boardActionOf } from "../lib/board_keys";
   import { shortDate } from "../lib/dates";
   import { t } from "../lib/i18n";
@@ -199,7 +199,7 @@
       {model}
       {mac}
       {isToday}
-      reviewAt={CARRY_REVIEW_DEFAULT}
+      reviewAt={prefs.reviewThreshold}
       {focusReq}
       onFocus={requestFocus}
       onOpenCarried={openCarried}
@@ -212,7 +212,7 @@
       {model}
       {mac}
       {isToday}
-      reviewAt={CARRY_REVIEW_DEFAULT}
+      reviewAt={prefs.reviewThreshold}
       {focusReq}
       onFocus={requestFocus}
       onOpenCarried={openCarried}

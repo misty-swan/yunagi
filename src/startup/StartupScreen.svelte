@@ -7,8 +7,8 @@
   //   入れ直し、バックアップから戻す）・問い合わせ先・詳しい情報（ログ用の文）を出す。
   // - バックアップから戻した後：退避した前のデータベースの場所を示し、「続ける」で整理モードへ進む。
   import { getVersion } from "@tauri-apps/api/app";
+  import { backupKindLabel, backupTime } from "../lib/backups";
   import type { BackupEntry, Startup, StartupFailure } from "../lib/bindings";
-  import { shortDate } from "../lib/dates";
   import { pickFolder } from "../lib/folder";
   import { t } from "../lib/i18n";
   import type { StartupActions } from "../lib/startup.svelte";
@@ -109,26 +109,8 @@
   }
   const error = $derived(errorText());
 
-  function pad(n: number) {
-    return String(n).padStart(2, "0");
-  }
-
-  /** 作った時刻（端末のタイムゾーンで `2026.11.03 14:05`）。 */
-  function createdAt(ms: number): string {
-    const d = new Date(ms);
-    return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  function kindLabel(b: BackupEntry): string {
-    switch (b.kind.type) {
-      case "daily":
-        return m.backupDaily(shortDate(b.kind.date));
-      case "pre_migration":
-        return m.backupPreMigration(b.kind.from, b.kind.to);
-      case "pre_restore":
-        return m.backupPreRestore;
-    }
-  }
+  const createdAt = backupTime;
+  const kindLabel = (b: BackupEntry) => backupKindLabel(b, m);
 
   /** OS のフォルダ選択で選んだフォルダのパスを入力欄に入れる（記録は「このフォルダを使う」で行う）。 */
   async function pick() {

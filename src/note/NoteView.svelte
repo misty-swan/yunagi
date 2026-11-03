@@ -401,11 +401,14 @@
     v.focus();
   }
 
-  /** ほかの入力欄（上部のバーの検索欄・パレット・設定など）にフォーカスがあるか。 */
+  /**
+   * ほかの入力欄（上部のバーの検索欄・パレット・設定など）にフォーカスがあるか。設定を開いている間は、
+   * フォーカスがボタンにあるときも、ノートのキーを受けない（画面設計書 7章、操作仕様書 2章「ノートの編集」）。
+   */
   function typingElsewhere(): boolean {
     const a = document.activeElement;
     if (!(a instanceof HTMLElement) || view?.dom.contains(a)) return false;
-    return a.isContentEditable || a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement;
+    return a.closest("[data-settings]") !== null || a.isContentEditable || a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement;
   }
 
   function onKeydown(e: KeyboardEvent) {

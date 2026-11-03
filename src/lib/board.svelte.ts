@@ -35,9 +35,6 @@ import { core, errorOf, type CallError } from "./core";
 /** 入力中とみなす、最後の入力からの時間（docs/design/01-architecture.md 4.1）。 */
 export const EDITING_MS = 10_000;
 
-/** 持ち越し回数をこの値以上で `--warn` にする（設定「操作」の持ち越し見直しの回数の既定値）。 */
-export const CARRY_REVIEW_DEFAULT = 3;
-
 /** 一覧の1行。 */
 export interface Row {
   /** 画面での名前（読み込んだ項目は ID、画面で足した行は仮の名前）。行の間で変わらない。 */
