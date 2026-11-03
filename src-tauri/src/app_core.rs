@@ -10,7 +10,7 @@
 //!
 //! Tauri には依存しない（知らせ先は [`Notify`] で受け取る）。Tauri とのつなぎは `crate::run`。
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use std::{fs, io};
@@ -74,10 +74,9 @@ pub struct AppCore {
     screen: ScreenState,
     /// 最後に確かめた今日の論理日付（変わったかを見るため）。
     today: Mutex<Option<LogicalDate>>,
-    /// 定期バックアップを作っている間に持つ。保存先の変更と復元（画面の作業で作る）も、これを
-    /// 持ってから行い、バックアップと同時に走らないようにする（`DailyBackup` の説明）。
-    maintenance: Mutex<()>,
-    /// 定期バックアップの進み具合。
+    /// 定期バックアップの進み具合。保存先の変更と復元（画面の作業で作る）は、バックアップと同時に
+    /// 走らせない（`DailyBackup` の説明）。作るときは、作っている途中のものを
+    /// [`AppCore::wait_for_backup`] で待ち、その間に次が始まらないようにする。
     backup: Mutex<BackupState>,
     notify: Notify,
 }
@@ -115,6 +114,17 @@ pub fn system_tz() -> TimeZone {
 /// 今の時刻（ミリ秒まで。コアが記録する精度）。
 pub fn now() -> Timestamp {
     yunagi_core::storage::table::now()
+}
+
+/// 画面からの書き込みの種類（[`AppCore::screen_write`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenWrite {
+    /// 保存：利用者が入力・選んだ内容の書き込み（項目の追加・本文・状態・解消メモ・分割、
+    /// ノート・振り返り）。画面は失敗したら内容を持ったまま再試行する（画面設計書 3章）ので、
+    /// 保存の失敗中（アーキテクチャ設計書 4.1）を始め・終える。
+    Save,
+    /// それ以外の操作（削除・削除の取り消し・並べ替え）。保存の失敗中を変えない。
+    Operation,
 }
 
 /// コマンドの結果が、データを変えたか（変えたら画面に知らせる）。
@@ -194,7 +204,6 @@ impl AppCore {
             db: Mutex::new(Slot::Opening),
             screen: ScreenState::default(),
             today: Mutex::new(None),
-            maintenance: Mutex::new(()),
             backup: Mutex::new(BackupState::default()),
             notify,
         })
@@ -206,8 +215,8 @@ impl AppCore {
     pub fn start(self: &Arc<Self>) {
         let core = Arc::clone(self);
         spawn("yunagi-open", move || core.open());
-        let weak = Arc::downgrade(self);
-        spawn("yunagi-today", move || watch_today(&weak));
+        let core = Arc::clone(self);
+        spawn("yunagi-today", move || watch_today(&core));
     }
 
     /// 既定ディレクトリの `yunagi.lock` を取り、データベースを開く（アーキテクチャ設計書 4章 4、
@@ -234,10 +243,20 @@ impl AppCore {
         Ok(self.startup())
     }
 
+    /// 開いた結果を、まだ開いている途中のとき（[`Slot::Opening`]）だけ記録する。開いている間に
+    /// アプリが終わった（[`AppCore::close`]）ときは、開いたデータベースをすぐ閉じ、知らせもしない。
     fn open_with(self: &Arc<Self>, open: fn(DbLock) -> Result<Database, OpenError>) {
         let slot = open_database(open);
         let ready = matches!(slot, Slot::Open(_));
-        *lock(&self.db) = slot;
+        {
+            let mut current = lock(&self.db);
+            if !matches!(*current, Slot::Opening) {
+                drop(current);
+                close_slot(slot);
+                return;
+            }
+            *current = slot;
+        }
         self.notify(Notice::Startup(self.startup()));
         if ready {
             self.check_today(now());
@@ -289,22 +308,26 @@ impl AppCore {
     /// 画面からの書き込み。
     ///
     /// - 変えたら [`Notice::Changed`]（`by: screen`）を知らせる。
-    /// - 書き込みに失敗したら（[`CommandError::Storage`]）、次に成功するまで、画面の保存の失敗中と
-    ///   して記録する（その間、エージェントの書き込みは `storage_unavailable`。アーキテクチャ設計書
-    ///   4.1）。引数の誤りなど、保存先に関係なく失敗したものは数えない。
+    /// - `kind` が [`ScreenWrite::Save`] のとき：書き込みに失敗したら（[`CommandError::Storage`]）、
+    ///   次に保存が成功するまで、画面の保存の失敗中として記録する（その間、エージェントの書き込みは
+    ///   `storage_unavailable`。アーキテクチャ設計書 4.1・4.3）。引数の誤りなど、保存先に関係なく
+    ///   失敗したものは数えない。保存の行き違い（[`TextSave::Stale`]）は成功に数えない。
     ///
     /// 保存の失敗中かは、データベースを使っている間に記録する（2つの保存の結果が、書いた順と
     /// 逆に記録されないように）。
     pub fn screen_write<T: Changes, E: Into<CommandError>>(
         &self,
+        kind: ScreenWrite,
         f: impl FnOnce(&Connection) -> Result<T, E>,
     ) -> Result<T, CommandError> {
         let result = self.with_db(|db| {
             let result = f(db.connection()).map_err(Into::into);
-            match &result {
-                Ok(r) if r.committed() => self.screen.set_save_failing(false),
-                Err(CommandError::Storage { .. }) => self.screen.set_save_failing(true),
-                _ => {}
+            if kind == ScreenWrite::Save {
+                match &result {
+                    Ok(r) if r.committed() => self.screen.set_save_failing(false),
+                    Err(CommandError::Storage { .. }) => self.screen.set_save_failing(true),
+                    _ => {}
+                }
             }
             result
         });
@@ -388,10 +411,7 @@ impl AppCore {
         };
         let core = Arc::clone(self);
         state.running = spawn("yunagi-backup", move || {
-            let result = {
-                let _maintenance = lock(&core.maintenance);
-                job.ensure(today)
-            };
+            let result = job.ensure(today);
             let mut state = lock(&core.backup);
             match result {
                 Ok(_) => state.done_for = Some(today),
@@ -422,13 +442,16 @@ impl AppCore {
     /// 終了時）。待たずに離すと、写している途中で CLI・MCP がロックを取ってデータベースを書き換えうる
     /// ため。閉じた後のコマンドは [`CommandError::NotReady`]。
     pub fn close(&self) {
-        self.wait_for_backup();
+        // 先に閉じた状態にして、次のバックアップが始まらないようにしてから待つ。データベース
+        // （ロック）は、待ち終わるまで手元に持つ
         let slot = std::mem::replace(&mut *lock(&self.db), Slot::Closed);
-        if let Slot::Open(db) = slot
-            && let Err(e) = db.close()
-        {
-            eprintln!("yunagi: failed to close the database: {}", chain(&e));
-        }
+        self.wait_for_backup();
+        close_slot(slot);
+    }
+
+    /// 閉じたか（[`AppCore::close`]）。
+    fn is_closed(&self) -> bool {
+        matches!(*lock(&self.db), Slot::Closed)
     }
 
     fn notify_changed(&self, by: ChangeSource) {
@@ -440,12 +463,23 @@ impl AppCore {
     }
 }
 
-/// `weak` のコアが残っている間、[`TODAY_CHECK_INTERVAL`] ごとに今日の論理日付を確かめる。
-fn watch_today(weak: &Weak<AppCore>) {
+/// コアを閉じるまで、[`TODAY_CHECK_INTERVAL`] ごとに今日の論理日付を確かめる。
+fn watch_today(core: &Arc<AppCore>) {
     loop {
         thread::sleep(TODAY_CHECK_INTERVAL);
-        let Some(core) = weak.upgrade() else { return };
+        if core.is_closed() {
+            return;
+        }
         core.check_today(now());
+    }
+}
+
+/// 開いていれば閉じ、ロックを離す。閉じるのに失敗したら標準エラーに書く。
+fn close_slot(slot: Slot) {
+    if let Slot::Open(db) = slot
+        && let Err(e) = db.close()
+    {
+        eprintln!("yunagi: failed to close the database: {}", chain(&e));
     }
 }
 

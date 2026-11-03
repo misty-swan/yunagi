@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tauri::State;
 use yunagi_core::domain::{board, item, text_doc};
 
-use crate::app_core::{AppCore, now, system_tz};
+use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
 use crate::types::{
     Board, CommandError, Date, Deleted, Id, Item, ItemKind, ItemOutcome, Millis, Position,
     Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
@@ -72,7 +72,7 @@ pub async fn add_item(
     position: Position,
 ) -> Result<Item, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Save, |conn| {
             item::add(
                 conn,
                 date.0,
@@ -96,7 +96,9 @@ pub async fn save_item_text(
     text: String,
 ) -> Result<ItemOutcome, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| item::save_text(conn, id.0, &text, now()).map(ItemOutcome::from))
+        core.screen_write(ScreenWrite::Save, |conn| {
+            item::save_text(conn, id.0, &text, now()).map(ItemOutcome::from)
+        })
     })
     .await
 }
@@ -110,7 +112,7 @@ pub async fn set_item_closed(
     closed_at: Option<Millis>,
 ) -> Result<ItemOutcome, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Save, |conn| {
             item::set_closed(conn, id.0, closed_at.map(|m| m.0), now()).map(ItemOutcome::from)
         })
     })
@@ -125,7 +127,7 @@ pub async fn save_resolution_note(
     note: String,
 ) -> Result<ItemOutcome, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Save, |conn| {
             item::save_resolution_note(conn, id.0, &note, now()).map(ItemOutcome::from)
         })
     })
@@ -136,7 +138,9 @@ pub async fn save_resolution_note(
 #[tauri::command]
 pub async fn delete_item(core: Core<'_>, id: Id) -> Result<Deleted, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| item::delete(conn, id.0, now()).map(Deleted::from))
+        core.screen_write(ScreenWrite::Operation, |conn| {
+            item::delete(conn, id.0, now()).map(Deleted::from)
+        })
     })
     .await
 }
@@ -146,7 +150,7 @@ pub async fn delete_item(core: Core<'_>, id: Id) -> Result<Deleted, CommandError
 pub async fn restore_item(core: Core<'_>, deleted: Deleted) -> Result<Item, CommandError> {
     blocking(&core, move |core| {
         let source = deleted.source.map(|s| s.into_core());
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Operation, |conn| {
             item::restore(conn, deleted.id.0, source.as_ref(), now()).map(Item::from)
         })
     })
@@ -161,7 +165,7 @@ pub async fn move_item(
     position: Position,
 ) -> Result<ItemOutcome, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Operation, |conn| {
             item::move_item(conn, id.0, position.into(), now()).map(ItemOutcome::from)
         })
     })
@@ -177,7 +181,7 @@ pub async fn split_item(
     second: String,
 ) -> Result<SplitResult, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Save, |conn| {
             item::split(conn, id.0, &first, &second, now()).map(|(original, created)| SplitResult {
                 original: original.into(),
                 created: created.into(),
@@ -211,7 +215,7 @@ pub async fn save_text_doc(
     base_rev: i64,
 ) -> Result<TextSave, CommandError> {
     blocking(&core, move |core| {
-        core.screen_write(|conn| {
+        core.screen_write(ScreenWrite::Save, |conn| {
             match text_doc::save(
                 conn,
                 doc.into(),

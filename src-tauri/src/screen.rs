@@ -23,6 +23,8 @@ struct Inner {
     save_failing: bool,
     editing: HashSet<(Ulid, ItemField)>,
     editors: HashMap<(TextDoc, LogicalDate), ProtectedLines>,
+    /// 最後に受け付けた知らせの `session` と `seq`。
+    last_report: Option<(String, u32)>,
 }
 
 impl ScreenState {
@@ -32,6 +34,9 @@ impl ScreenState {
 
     /// 画面から知らされた入力中の状態で置き換える。守る行の番号は昇順にし、重なりを除く。
     /// 番号が 0 の行があれば、何も変えずに [`InvalidReason::InvalidLine`]。
+    ///
+    /// 最後に受け付けたものと `session` が同じで `seq` がそれ以下の知らせ（後から送られたものに
+    /// 追い越された古い知らせ）は、何も変えずに捨てる（成功を返す）。
     pub fn report(&self, report: UiReport) -> Result<(), CommandError> {
         let mut editors = HashMap::new();
         for e in report.editors {
@@ -57,8 +62,15 @@ impl ScreenState {
             .map(|e| (e.item_id.0, e.field.into()))
             .collect();
         let mut inner = self.lock();
+        if let Some((session, seq)) = &inner.last_report
+            && *session == report.session
+            && *seq >= report.seq
+        {
+            return Ok(());
+        }
         inner.editing = editing;
         inner.editors = editors;
+        inner.last_report = Some((report.session, report.seq));
         Ok(())
     }
 
@@ -91,6 +103,43 @@ mod tests {
         s.parse().unwrap()
     }
 
+    /// 入力中のものが無い知らせ。
+    fn report(session: &str, seq: u32) -> UiReport {
+        UiReport {
+            session: session.into(),
+            seq,
+            ..UiReport::default()
+        }
+    }
+
+    fn editing(session: &str, seq: u32, item: Ulid) -> UiReport {
+        UiReport {
+            editing_items: vec![EditingItem {
+                item_id: types::Id(item),
+                field: types::ItemField::Text,
+            }],
+            ..report(session, seq)
+        }
+    }
+
+    #[test]
+    fn older_reports_of_the_same_page_are_ignored() {
+        let screen = ScreenState::default();
+        let a = Ulid::from_u128(1);
+        // 入力を始めた知らせ（1）が、終えた知らせ（2）に追い越されて後から届いた
+        screen.report(report("page", 2)).unwrap();
+        screen.report(editing("page", 1, a)).unwrap();
+        assert!(!screen.is_editing(a, ItemField::Text));
+        // 同じ番号も捨てる
+        screen.report(editing("page", 2, a)).unwrap();
+        assert!(!screen.is_editing(a, ItemField::Text));
+        screen.report(editing("page", 3, a)).unwrap();
+        assert!(screen.is_editing(a, ItemField::Text));
+        // 画面を読み込み直すと番号は 0 に戻るが、session が変わるので受け付ける
+        screen.report(report("reloaded", 0)).unwrap();
+        assert!(!screen.is_editing(a, ItemField::Text));
+    }
+
     #[test]
     fn reports_replace_the_whole_state() {
         let screen = ScreenState::default();
@@ -99,6 +148,8 @@ mod tests {
         let d = date("2026-11-03");
         screen
             .report(UiReport {
+                session: "s".into(),
+                seq: 1,
                 editing_items: vec![EditingItem {
                     item_id: types::Id(a),
                     field: types::ItemField::Text,
@@ -137,7 +188,7 @@ mod tests {
         );
 
         // 知らせ直すと、前の状態は残らない
-        screen.report(UiReport::default()).unwrap();
+        screen.report(report("s", 2)).unwrap();
         assert!(!screen.is_editing(a, ItemField::Text));
         assert_eq!(screen.protected_lines(TextDoc::Note, d), None);
     }
@@ -152,11 +203,15 @@ mod tests {
         }];
         screen
             .report(UiReport {
-                editing_items: editing.clone(),
+                session: "s".into(),
+                seq: 1,
+                editing_items: editing,
                 editors: vec![],
             })
             .unwrap();
         let bad = UiReport {
+            session: "s".into(),
+            seq: 2,
             editing_items: vec![],
             editors: vec![EditorLines {
                 doc: types::TextDoc::Note,
@@ -181,7 +236,7 @@ mod tests {
         screen.set_save_failing(true);
         assert!(screen.save_failing());
         // 入力中の状態を知らせ直しても、保存の失敗は画面からは変えられない
-        screen.report(UiReport::default()).unwrap();
+        screen.report(report("s", 1)).unwrap();
         assert!(screen.save_failing());
         screen.set_save_failing(false);
         assert!(!screen.save_failing());

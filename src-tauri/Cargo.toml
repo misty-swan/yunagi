@@ -19,12 +19,13 @@ jiff.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ts-rs.workspace = true
 
 [dev-dependencies]
 # 結合テスト（tests/）で、WebView を開かずにコマンドとイベントを呼ぶ（tauri::test）
 tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
+# 画面と共有する型の TypeScript の定義を作る（src/bindings.rs のテスト。配るアプリには含めない）
+ts-rs.workspace = true
 
 # 画面とコアの結合テスト。既定ディレクトリを一時フォルダにするため、環境変数を設定してから
 # 1つのスレッドで順に走らせる（テストの仕組み（harness）を使わず、main から走らせる）

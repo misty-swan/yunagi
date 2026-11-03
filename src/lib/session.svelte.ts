@@ -22,8 +22,8 @@ export interface Session {
   stop(): Promise<void>;
 }
 
-/** 開く処理の状態の問い合わせに失敗したとき、問い合わせ直すまでの時間。 */
-export const STARTUP_RETRY_MS = 1000;
+/** 開く処理の状態の問い合わせや、イベントを聞き始めるのに失敗したとき、やり直すまでの時間。 */
+export const RETRY_MS = 1000;
 
 /** コアとつなぎ始める。 */
 export function startSession(): Session {
@@ -37,7 +37,7 @@ export function startSession(): Session {
   // 読んでいる（読み終えた）日。日付が変わって新しい日を読んでいる途中に changed が届いても、
   // 前の日を読み直さないよう、読み始めた時点で進める
   let target: LogicalDate | undefined;
-  const unlisten: Promise<UnlistenFn>[] = [];
+  const unlisten: UnlistenFn[] = [];
 
   const fail = (e: unknown) => {
     error = e instanceof CoreError ? e.error : { kind: "bad_request", message: String(e) };
@@ -64,14 +64,21 @@ export function startSession(): Session {
     if (s.state === "ready") void load();
   }
 
-  // 聞き始めてから状態を問い合わせる（その間に開き終わっても取りこぼさない）
-  unlisten.push(coreEvents.onStartup(onStartup));
-  unlisten.push(
-    coreEvents.onChanged(() => {
-      if (startup?.state === "ready") void load(target);
-    }),
-  );
-  unlisten.push(coreEvents.onTodayChanged((p) => void load(p.today)));
+  // 聞き始められなければ、聞き始められるまでやり直す
+  async function keepListening(register: () => Promise<UnlistenFn>) {
+    while (!stopped) {
+      try {
+        const u = await register();
+        if (stopped) u();
+        else unlisten.push(u);
+        return;
+      } catch (e) {
+        fail(e);
+        await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+      }
+    }
+  }
+
   // 問い合わせに失敗したら、届くまで問い合わせ直す（聞き始める前に開き終わっていると、
   // startup はもう届かないため）
   async function askStartup() {
@@ -82,10 +89,21 @@ export function startSession(): Session {
     } catch (e) {
       if (stopped || startup !== null) return;
       fail(e);
-      setTimeout(() => void askStartup(), STARTUP_RETRY_MS);
+      setTimeout(() => void askStartup(), RETRY_MS);
     }
   }
-  void Promise.all(unlisten).then(askStartup, fail);
+
+  // 聞き始めてから状態を問い合わせる（その間に開き終わっても取りこぼさない）
+  const listening = Promise.all([
+    keepListening(() => coreEvents.onStartup(onStartup)),
+    keepListening(() =>
+      coreEvents.onChanged(() => {
+        if (startup?.state === "ready") void load(target);
+      }),
+    ),
+    keepListening(() => coreEvents.onTodayChanged((p) => void load(p.today))),
+  ]);
+  void listening.then(askStartup);
 
   return {
     get startup() {
@@ -102,8 +120,9 @@ export function startSession(): Session {
     },
     async stop() {
       stopped = true;
-      const fns = await Promise.allSettled(unlisten);
-      for (const r of fns) if (r.status === "fulfilled") r.value();
+      for (const u of unlisten.splice(0)) u();
+      // 聞き始めている途中のものは、終わったところで（stopped を見て）やめる
+      await listening;
     },
   };
 }

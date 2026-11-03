@@ -42,7 +42,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 8] = [
+    let tests: [(&str, Test); 9] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -62,6 +62,10 @@ fn main() {
             logical_date_changes_notify_and_back_up,
         ),
         (
+            "closing_before_the_open_finishes_keeps_it_closed",
+            closing_before_the_open_finishes_keeps_it_closed,
+        ),
+        (
             "backup_failures_are_reported_once_and_retried",
             backup_failures_are_reported_once_and_retried,
         ),
@@ -70,12 +74,22 @@ fn main() {
             missing_database_is_reported_and_can_be_created,
         ),
     ];
+    // `cargo test <名前>` の名前（`-` で始まらない引数）があれば、名前にそれを含むものだけを走らせる
+    let filters: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+    let mut passed = 0;
     for (name, test) in tests {
+        if !filters.is_empty() && !filters.iter().any(|f| name.contains(f.as_str())) {
+            continue;
+        }
         print!("test {name} ... ");
         test(default_dir.path());
         println!("ok");
+        passed += 1;
     }
-    println!("\ntest result: ok. {} passed", tests.len());
+    println!("\ntest result: ok. {passed} passed");
 }
 
 // ---- 道具 ----
@@ -475,6 +489,8 @@ fn agent_writes_use_the_same_events_and_the_screen_state(_: &Path) {
     h.ok(
         "report_ui_state",
         json!({ "state": {
+            "session": "t",
+            "seq": 1,
             "editingItems": [{ "itemId": id.to_string(), "field": "text" }],
             "editors": [{ "doc": "note", "date": date, "rev": 3, "lines": [2, 5] }],
         } }),
@@ -512,7 +528,7 @@ fn agent_writes_use_the_same_events_and_the_screen_state(_: &Path) {
     // 入力を終えたと知らせ直すと、受け付ける
     h.ok(
         "report_ui_state",
-        json!({ "state": { "editingItems": [], "editors": [] } }),
+        json!({ "state": { "session": "t", "seq": 2, "editingItems": [], "editors": [] } }),
     );
     assert!(!h.core.screen().is_editing(id, ItemField::Text));
     assert_eq!(h.core.screen().protected_lines(TextDoc::Note, ld), None);
@@ -551,7 +567,7 @@ fn agent_writes_use_the_same_events_and_the_screen_state(_: &Path) {
     assert_eq!(
         h.err(
             "report_ui_state",
-            json!({ "state": { "editingItems": [], "editors": [{ "doc": "note", "date": date, "rev": 1, "lines": [0] }] } })
+            json!({ "state": { "session": "t", "seq": 3, "editingItems": [], "editors": [{ "doc": "note", "date": date, "rev": 1, "lines": [0] }] } })
         ),
         json!({ "kind": "invalid_argument", "reason": "invalid_line" })
     );
@@ -579,12 +595,14 @@ fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
         json!({ "id": id.to_string(), "text": "" }),
     );
     assert!(!h.core.screen().save_failing());
+    let other = h.add_todo(date, "削除する");
+    let other_id = other["id"].as_str().unwrap().to_owned();
 
     // 書き込みを失敗させる（この接続だけの一時的なトリガー）
     h.core
         .read(|conn| {
             conn.execute_batch(
-                "CREATE TEMP TRIGGER fail_item_update BEFORE UPDATE ON item \
+                "CREATE TEMP TRIGGER fail_item_update BEFORE UPDATE OF text ON item \
                  BEGIN SELECT RAISE(FAIL, 'disk is full'); END;",
             )
             .map_err(StorageError::from)
@@ -604,6 +622,10 @@ fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
         agent_edit("エージェント"),
         Err(ItemError::StorageUnavailable(_))
     ));
+    // 保存でない操作（削除）は、成功しても保存の失敗中を終えない（削除は item を UPDATE するが、
+    // トリガーは本文の更新だけを止める）
+    h.ok("delete_item", json!({ "id": other_id }));
+    assert!(h.core.screen().save_failing());
     // 読み取りは受け付ける
     h.ok("get_board", json!({ "date": date }));
 
@@ -619,6 +641,35 @@ fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
     );
     assert!(!h.core.screen().save_failing());
     agent_edit("エージェント").unwrap();
+
+    // 保存でない操作の失敗は、保存の失敗中を始めない
+    h.add_todo(date, "後ろの項目");
+    h.core
+        .read(|conn| {
+            conn.execute_batch(
+                "CREATE TEMP TRIGGER fail_item_move BEFORE UPDATE OF sort_key ON item \
+                 BEGIN SELECT RAISE(FAIL, 'disk is full'); END;",
+            )
+            .map_err(StorageError::from)
+        })
+        .unwrap();
+    let e = h.err(
+        "move_item",
+        json!({ "id": id.to_string(), "position": { "at": "last" } }),
+    );
+    assert_eq!(e["kind"], "storage");
+    assert!(!h.core.screen().save_failing());
+}
+
+/// データベースを開いている途中でアプリが終わったら、開き終わっても閉じたままにし、ロックを離す。
+fn closing_before_the_open_finishes_keeps_it_closed(_: &Path) {
+    let h = Harness::new();
+    h.core.close();
+    h.core.open();
+    h.assert_no_event();
+    assert_eq!(h.err("today", json!({})), json!({ "kind": "not_ready" }));
+    let dir = yunagi_core::storage::data_dir::default_dir().unwrap();
+    drop(yunagi_core::storage::DbLock::acquire(&dir, Duration::ZERO).unwrap());
 }
 
 /// 論理日付が変わったら `today-changed` を知らせ、その日の定期バックアップを作る（6.2）。

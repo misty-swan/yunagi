@@ -49,6 +49,10 @@ function toCallError(e: unknown): CallError {
   return { kind: "bad_request", message: String(e) };
 }
 
+/** この画面の読み込みの印（読み込み直すと変わる。読み込みごとに違えばよく、秘密ではない）。 */
+const PAGE_SESSION = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+let reportSeq = 0;
+
 async function call<T>(cmd: string, args?: InvokeArgs): Promise<T> {
   try {
     return await invoke<T>(cmd, args);
@@ -83,8 +87,12 @@ export const core = {
   /** `baseRev` はもとにした版。古ければ `{ result: "stale" }` で最新が返る。 */
   saveTextDoc: (doc: TextDoc, date: LogicalDate, body: string, baseRev: number) =>
     call<TextSave>("save_text_doc", { doc, date, body, baseRev }),
-  /** 入力中の状態を知らせる（変わるたびに全体を知らせ直す）。 */
-  reportUiState: (state: UiReport) => call<null>("report_ui_state", { state }),
+  /**
+   * 入力中の状態を知らせる（変わるたびに全体を知らせ直す）。届く順が入れ替わっても古いものが
+   * 残らないよう、この画面の読み込みの印と、送るたびに増える番号を付ける。
+   */
+  reportUiState: (state: Omit<UiReport, "session" | "seq">) =>
+    call<null>("report_ui_state", { state: { ...state, session: PAGE_SESSION, seq: ++reportSeq } }),
 };
 
 /** コアのイベントを聞く。戻り値の関数で聞くのをやめる。 */

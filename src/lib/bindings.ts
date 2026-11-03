@@ -1,5 +1,5 @@
 // このファイルは src-tauri/src/bindings.rs が Rust の型から作る。手で書き換えない。
-// 作り直すには：UPDATE_BINDINGS=1 cargo test -p yunagi-app bindings
+// 作り直すには：UPDATE_BINDINGS=1 cargo test -p yunagi-app --lib bindings
 
 /**
  * 項目などの ID（ULID の 26 文字）。
@@ -173,8 +173,20 @@ export type TextSave = { "result": "saved", rev: number, updated: boolean, } | {
 
 /**
  * 画面が知らせる、入力中の状態（アーキテクチャ設計書 4.1）。変わるたびに全体を知らせ直す。
+ *
+ * 知らせはそれぞれ別のスレッドで処理されるので、続けて送ると届く順が入れ替わりうる。そこで
+ * 画面の読み込みごとの `session` と、その中で増える `seq` を添え、コアは同じ `session` の古い
+ * 知らせ（`seq` が最後に受け付けたもの以下）を捨てる。`src/lib/core.ts` が付ける。
  */
 export type UiReport = { 
+/**
+ * 画面の読み込みごとに変わる文字列（読み込み直すと `seq` が 0 に戻るため）。
+ */
+session: string, 
+/**
+ * 同じ `session` の中で、送るたびに増える番号。
+ */
+seq: number, 
 /**
  * 入力中の項目の欄（フォーカスがあり最後の入力から 10 秒以内か IME の変換中、
  * またはまだ保存していない入力の書き込みを待っている欄）。

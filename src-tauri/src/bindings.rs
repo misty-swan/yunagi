@@ -1,7 +1,7 @@
 //! 画面と共有する型の TypeScript の定義（`src/lib/bindings.ts`）を作り、置いてあるものと
 //! 同じかを確かめる（`pnpm check` で走る）。
 //!
-//! 型（`crate::types`）やイベントの名前を変えたら、`UPDATE_BINDINGS=1 cargo test -p yunagi-app bindings`
+//! 型（`crate::types`）やイベントの名前を変えたら、`UPDATE_BINDINGS=1 cargo test -p yunagi-app --lib bindings`
 //! で作り直す（作り直したファイルも確かめる）。
 
 use std::path::Path;
@@ -77,7 +77,7 @@ fn render() -> String {
     );
     format!(
         "// このファイルは src-tauri/src/bindings.rs が Rust の型から作る。手で書き換えない。\n\
-         // 作り直すには：UPDATE_BINDINGS=1 cargo test -p yunagi-app bindings\n\n{}\n{events}",
+         // 作り直すには：UPDATE_BINDINGS=1 cargo test -p yunagi-app --lib bindings\n\n{}\n{events}",
         decls.join("\n")
     )
 }
@@ -97,6 +97,6 @@ fn bindings_are_up_to_date() {
         .replace("\r\n", "\n");
     assert!(
         actual == expected,
-        "{RELATIVE_PATH} が Rust の型と食い違っている。{UPDATE_ENV}=1 cargo test -p yunagi-app bindings で作り直す"
+        "{RELATIVE_PATH} が Rust の型と食い違っている。{UPDATE_ENV}=1 cargo test -p yunagi-app --lib bindings で作り直す"
     );
 }

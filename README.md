@@ -18,7 +18,7 @@ Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークス�
 画面とコアが受け渡す型は Rust（`src-tauri/src/types.rs`）に書き、TypeScript の定義 `src/lib/bindings.ts` は ts-rs でそこから作る（手で書き換えない）。Rust の型やイベントの名前を変えたら、次で作り直す。
 
 ```sh
-UPDATE_BINDINGS=1 cargo test -p yunagi-app bindings   # bindings.ts を Rust の型から作り直す
+UPDATE_BINDINGS=1 cargo test -p yunagi-app --lib bindings   # bindings.ts を Rust の型から作り直す
 ```
 
 作り直さないまま `pnpm check` を走らせると、`bindings.ts` が Rust の型と食い違っているとして失敗する。

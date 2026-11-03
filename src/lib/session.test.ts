@@ -4,7 +4,7 @@ import { flushSync } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 import { EVENTS, type Board, type Startup } from "./bindings";
 import { core, CoreError } from "./core";
-import { STARTUP_RETRY_MS, startSession, type Session } from "./session.svelte";
+import { RETRY_MS, startSession, type Session } from "./session.svelte";
 
 let session: Session | undefined;
 
@@ -221,7 +221,7 @@ test("開く処理の状態の問い合わせに失敗したら、問い合わ�
     session = startSession();
     const s = session;
     await vi.waitFor(() => expect(s.error?.kind).toBe("internal"));
-    await vi.advanceTimersByTimeAsync(STARTUP_RETRY_MS);
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
     await vi.waitFor(() => {
       flushSync();
       expect(s.board).not.toBeNull();
@@ -231,4 +231,52 @@ test("開く処理の状態の問い合わせに失敗したら、問い合わ�
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("イベントを聞き始めるのに失敗したら、やり直してから状態を問い合わせる", async () => {
+  vi.useFakeTimers();
+  try {
+    let listens = 0;
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "plugin:event|listen") {
+        listens += 1;
+        if (listens === 1) throw "listen failed";
+        return listens;
+      }
+      if (cmd === "plugin:event|unlisten") return null;
+      if (cmd === "startup_status") return { state: "ready" };
+      if (cmd === "today") return "2026-11-03";
+      if (cmd === "get_board") return board("2026-11-03", "x");
+    });
+    session = startSession();
+    const s = session;
+    await vi.waitFor(() => expect(s.error?.kind).toBe("bad_request"));
+    expect(calls).not.toContain("startup_status");
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    await vi.waitFor(() => {
+      flushSync();
+      expect(s.board).not.toBeNull();
+    });
+    // 3つのイベントを聞き、1つはやり直した
+    expect(listens).toBe(4);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("入力中の状態には、読み込みの印と増える番号を付ける", async () => {
+  const sent: { session: string; seq: number }[] = [];
+  mockIPC((cmd, args) => {
+    if (cmd === "report_ui_state") {
+      sent.push((args as { state: { session: string; seq: number } }).state);
+      return null;
+    }
+  });
+  await core.reportUiState({ editingItems: [], editors: [] });
+  await core.reportUiState({ editingItems: [], editors: [] });
+  expect(sent[0].session).not.toBe("");
+  expect(sent[1].session).toBe(sent[0].session);
+  expect(sent[1].seq).toBe(sent[0].seq + 1);
 });

@@ -3,12 +3,14 @@
 //! コアの型をそのまま渡さず、ここで画面向けの形（名前は camelCase、ID・日付は文字列、時刻は
 //! UNIX ミリ秒の数）にする。コアの型は CLI・MCP とも共有するので、画面の都合を持ち込まないため。
 //! TypeScript の定義は ts-rs でここから作り、`src/lib/bindings.ts` に置く（`crate::bindings`）。
+//! 作るのはテストだけなので、ts-rs の derive はテストのビルドにだけ付ける（配るアプリに含めない）。
 
 use std::fmt;
 use std::str::FromStr;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+#[cfg(test)]
 use ts_rs::TS;
 use yunagi_core::domain::agent::ItemField as CoreItemField;
 use yunagi_core::domain::board;
@@ -47,19 +49,22 @@ macro_rules! string_value {
 }
 
 /// 項目などの ID（ULID の 26 文字）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TS)]
-pub struct Id(#[ts(type = "string")] pub Ulid);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(TS))]
+pub struct Id(#[cfg_attr(test, ts(type = "string"))] pub Ulid);
 string_value!(Id, Ulid, "a ULID");
 
 /// 論理日付（`YYYY-MM-DD`）。TypeScript では、組み込みの `Date` と分けて `LogicalDate` と呼ぶ。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TS)]
-#[ts(rename = "LogicalDate")]
-pub struct Date(#[ts(type = "string")] pub LogicalDate);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(rename = "LogicalDate"))]
+pub struct Date(#[cfg_attr(test, ts(type = "string"))] pub LogicalDate);
 string_value!(Date, LogicalDate, "a date (YYYY-MM-DD)");
 
 /// 時刻：UNIX 時刻のミリ秒（JavaScript の `Date.now()` と同じ）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TS)]
-pub struct Millis(#[ts(type = "number")] pub Timestamp);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS))]
+pub struct Millis(#[cfg_attr(test, ts(type = "number"))] pub Timestamp);
 
 impl Serialize for Millis {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -83,7 +88,8 @@ impl<'de> Deserialize<'de> for Millis {
 macro_rules! mirror_enum {
     ($(#[$meta:meta])* $name:ident <=> $core:ty { $($variant:ident),+ $(,)? }) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[cfg_attr(test, derive(TS))]
         #[serde(rename_all = "snake_case")]
         pub enum $name {
             $($variant),+
@@ -140,7 +146,8 @@ mirror_enum! {
 // ---- 項目 ----
 
 /// TODO か障害の1件（データモデル設計書 3章 item）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
     pub id: Id,
@@ -151,7 +158,7 @@ pub struct Item {
     pub close_reason: Option<CloseReason>,
     /// 並び順のキー。文字列の大小で並ぶ。
     pub sort_key: String,
-    #[ts(type = "number")]
+    #[cfg_attr(test, ts(type = "number"))]
     pub carry_count: i64,
     pub carried_from_id: Option<Id>,
     pub split_from_id: Option<Id>,
@@ -192,7 +199,8 @@ impl From<core_item::Item> for Item {
 }
 
 /// 項目を入れる・動かす位置（同じ日の並びの中）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(tag = "at", rename_all = "snake_case")]
 pub enum Position {
     /// その日の先頭。
@@ -217,7 +225,8 @@ impl From<Position> for core_item::Position {
 }
 
 /// 項目の書き込みの結果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ItemOutcome {
     /// 実際に何かを変えたか。`false` なら何も書いていない。
@@ -236,7 +245,8 @@ impl From<core_item::Outcome> for ItemOutcome {
 }
 
 /// 項目を2つに分けた結果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct SplitResult {
     /// 操作の後の元の項目。
@@ -246,7 +256,8 @@ pub struct SplitResult {
 }
 
 /// 削除した項目。削除の取り消し（Mod+Z）のために画面が持ち、そのまま `restore_item` に渡す。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Deleted {
     /// 削除した項目の ID。
@@ -256,7 +267,8 @@ pub struct Deleted {
 }
 
 /// 持ち越し先を削除した時点の、持ち越し元の項目の欄（`restore_item` が変わっていないかを確かめる）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct SourceState {
     pub id: Id,
@@ -297,7 +309,8 @@ impl SourceState {
 // ---- ボード ----
 
 /// 持ち越し先：持ち越して作った項目と、その日付。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct CarriedTo {
     pub id: Id,
@@ -305,7 +318,8 @@ pub struct CarriedTo {
 }
 
 /// ボードの項目の1件：項目と、持ち越し先（持ち越し済みでなければ `null`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct BoardItem {
     pub item: Item,
@@ -313,7 +327,8 @@ pub struct BoardItem {
 }
 
 /// ノートの時刻付き見出し（`## 10:00 定例`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct TimeHeading {
     /// 見出しの行の番号（1始まり）。
@@ -339,7 +354,8 @@ impl From<note_body::TimeHeading> for TimeHeading {
 }
 
 /// ボードのノート：見出しと長さだけ（本文は `get_text_doc` で読む）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct NoteOutline {
     pub headings: Vec<TimeHeading>,
@@ -348,7 +364,8 @@ pub struct NoteOutline {
 }
 
 /// その日のボード。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Board {
     pub date: Date,
@@ -390,11 +407,12 @@ impl From<board::Board> for Board {
 // ---- ノート・振り返り ----
 
 /// ある時点の本文と版の番号（まだ書いていない日は空の本文と版 0）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub body: String,
-    #[ts(type = "number")]
+    #[cfg_attr(test, ts(type = "number"))]
     pub rev: i64,
 }
 
@@ -408,19 +426,20 @@ impl From<text_doc::Snapshot> for Snapshot {
 }
 
 /// 画面からのノート・振り返りの保存の結果（アーキテクチャ設計書 4.1「保存の行き違いを防ぐ」）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum TextSave {
     /// 保存した（本文が同じなら書かずに `updated: false`）。`rev` は保存の後の版。
     Saved {
-        #[ts(type = "number")]
+        #[cfg_attr(test, ts(type = "number"))]
         rev: i64,
         updated: bool,
     },
     /// もとにした版が古いので書かなかった。いまの本文と版。画面は取り込んでから保存し直す。
     Stale {
         body: String,
-        #[ts(type = "number")]
+        #[cfg_attr(test, ts(type = "number"))]
         rev: i64,
     },
 }
@@ -428,9 +447,18 @@ pub enum TextSave {
 // ---- 画面の入力中の状態 ----
 
 /// 画面が知らせる、入力中の状態（アーキテクチャ設計書 4.1）。変わるたびに全体を知らせ直す。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, TS)]
+///
+/// 知らせはそれぞれ別のスレッドで処理されるので、続けて送ると届く順が入れ替わりうる。そこで
+/// 画面の読み込みごとの `session` と、その中で増える `seq` を添え、コアは同じ `session` の古い
+/// 知らせ（`seq` が最後に受け付けたもの以下）を捨てる。`src/lib/core.ts` が付ける。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct UiReport {
+    /// 画面の読み込みごとに変わる文字列（読み込み直すと `seq` が 0 に戻るため）。
+    pub session: String,
+    /// 同じ `session` の中で、送るたびに増える番号。
+    pub seq: u32,
     /// 入力中の項目の欄（フォーカスがあり最後の入力から 10 秒以内か IME の変換中、
     /// またはまだ保存していない入力の書き込みを待っている欄）。
     pub editing_items: Vec<EditingItem>,
@@ -439,7 +467,8 @@ pub struct UiReport {
 }
 
 /// 入力中の項目の欄。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct EditingItem {
     pub item_id: Id,
@@ -447,13 +476,14 @@ pub struct EditingItem {
 }
 
 /// ノート・振り返りの守る行。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct EditorLines {
     pub doc: TextDoc,
     pub date: Date,
     /// 行番号を数えた本文（最後に保存した本文）の版。
-    #[ts(type = "number")]
+    #[cfg_attr(test, ts(type = "number"))]
     pub rev: i64,
     /// 守る行の番号（1始まり）。
     pub lines: Vec<usize>,
@@ -463,7 +493,8 @@ pub struct EditorLines {
 
 /// データベースを開く処理の状態（起動直後に画面が `startup_status` で問い合わせ、変わると
 /// `startup` イベントでも届く）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Startup {
     /// 開いている途中（ロックを待っているときは最大 5 秒）。
@@ -491,7 +522,8 @@ pub enum Startup {
 }
 
 /// データベースを開けなかった理由。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "snake_case")]
 pub enum StartupFailure {
     /// 既定ディレクトリを求められない（環境変数が無い）か、作れない。
@@ -510,14 +542,16 @@ pub enum StartupFailure {
 
 /// `changed` イベント：コアでデータが変わった。画面は表示中のデータを読み込み直す
 /// （アーキテクチャ設計書 4章 6）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Changed {
     pub by: ChangeSource,
 }
 
 /// 変えたもの。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeSource {
     /// 画面からの保存（自分の保存の後にも届く。行き違いの判定で記録が変わることがあるため）。
@@ -527,14 +561,16 @@ pub enum ChangeSource {
 }
 
 /// `today-changed` イベント：今日の論理日付が変わった（切り替わり時刻を越えた）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct TodayChanged {
     pub today: Date,
 }
 
 /// `backup-failed` イベント：定期バックアップを作れなかった。`detail` はログ用の文（英語）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct BackupFailed {
     pub detail: String,
@@ -544,7 +580,8 @@ pub struct BackupFailed {
 
 /// コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
 /// （Display の文をそのまま使わない。README「エラーの表示」）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandError {
     /// データベースをまだ開いていない（開いている途中・見つからない・開けなかった）。
@@ -569,7 +606,8 @@ pub enum CommandError {
 }
 
 /// 引数の誤りの種類。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "snake_case")]
 pub enum InvalidReason {
     /// 操作と違う種類の項目（TODO に解消メモなど）。
@@ -595,7 +633,8 @@ pub enum InvalidReason {
 }
 
 /// 受け付けられない状態の理由。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum Conflict {
     /// 項目は持ち越し済み。持ち越し先とその日付。
@@ -612,7 +651,8 @@ pub enum Conflict {
 }
 
 /// 削除を戻せない理由。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum RestoreRefused {
     /// 削除した後に、持ち越し元の項目が変わった。
