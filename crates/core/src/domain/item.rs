@@ -1101,9 +1101,8 @@ fn key_at(
     let at = match position {
         Position::First => 0,
         Position::Last => items.len(),
-        Position::Before(_) | Position::After(_) => {
-            same.get(nth).copied().unwrap_or_else(|| same[nth - 1] + 1)
-        }
+        Position::Before(_) => same[nth],
+        Position::After(_) => same[nth - 1] + 1,
     };
     let before = at.checked_sub(1).map(|i| items[i].sort_key.as_str());
     let after = items.get(at).map(|i| i.sort_key.as_str());
@@ -2180,6 +2179,19 @@ mod tests {
                 .updated
         );
         assert_eq!(texts(conn, "2026-11-03"), ["t2", "t1", "b2", "b1"]);
+        // 基準の後は、並び全体でも基準のすぐ後（次の同じ種類の前ではない）
+        let t1_after = Position::After(t1.id);
+        add(
+            conn,
+            date("2026-11-03"),
+            ItemKind::Todo,
+            "t3",
+            t1_after,
+            &tokyo(),
+            at(T1),
+        )
+        .unwrap();
+        assert_eq!(texts(conn, "2026-11-03"), ["t2", "t1", "t3", "b2", "b1"]);
     }
 
     #[test]

@@ -107,6 +107,16 @@ fn open_items(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, Storage
     Ok(items)
 }
 
+/// その日に持ち越しの対象が1件でもあるか（見つかったら止める）。
+fn has_pending(conn: &Connection, date: LogicalDate) -> Result<bool, StorageError> {
+    for item in item_table::list_by_date(conn, date)? {
+        if is_pending(conn, &item)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// 持ち越しの対象か：未完了・未解消で、まだ持ち越し済みでない。
 fn is_pending(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
     Ok(item.status == ItemStatus::Open && carried_to(conn, item.id)?.is_none())
@@ -145,14 +155,7 @@ pub fn status(conn: &Connection, today: LogicalDate) -> Result<Option<Pending>, 
         return Ok(None);
     };
     // 1件あれば足りる（前面に出すたびに呼ばれるので、全件をたどらない）
-    let mut pending = false;
-    for item in item_table::list_by_date(conn, from)? {
-        if is_pending(conn, &item)? {
-            pending = true;
-            break;
-        }
-    }
-    if !pending {
+    if !has_pending(conn, from)? {
         return Ok(None);
     }
     let prompt = match row {
@@ -168,7 +171,8 @@ pub fn status(conn: &Connection, today: LogicalDate) -> Result<Option<Pending>, 
     Ok(Some(Pending { from, prompt }))
 }
 
-/// 持ち越しを後回しにした（Esc）ことを記録する。その日の day の行が無ければ作る。
+/// 持ち越しを後回しにした（Esc）ことを記録する。その日の day の行が無ければ作る。持ち越しを
+/// 終えていれば何も書かない（古い画面からの後回し）。
 /// すでに後回しにしていれば、最初の時刻のまま変えない（再表示やパレットから開いて、もう一度
 /// 後回しにしても、自動の再表示は増えない）。
 pub fn postpone(
@@ -179,12 +183,16 @@ pub fn postpone(
 ) -> Result<(), StorageError> {
     in_transaction(conn, || {
         day::ensure(conn, today, tz, now)?;
+        if is_done(conn, today)? {
+            return Ok(());
+        }
         mark_once(conn, today, CarryoverMark::Postponed, now).map(|_| ())
     })
 }
 
 /// 後回しにした持ち越しを、前面に出したときに自動で再表示したことを記録する。記録したら `true`。
-/// 後回しにしていないか、すでに再表示を記録していれば、何も書かずに `false`（自動の再表示は1回だけ）。
+/// 後回しにしていないか、すでに再表示を記録したか、持ち越しを終えていれば、何も書かずに `false`
+/// （自動の再表示は1回だけ）。
 pub fn mark_reshown(
     conn: &Connection,
     today: LogicalDate,
@@ -193,12 +201,21 @@ pub fn mark_reshown(
     in_transaction(conn, || {
         // 後回しにしたときに day の行を作っているので、行が無ければ後回しにしていない
         match day_table::get(conn, today)? {
-            Some(d) if d.carryover_postponed_at.is_some() && d.carryover_reshown_at.is_none() => {
+            Some(d)
+                if d.carryover_done_at.is_none()
+                    && d.carryover_postponed_at.is_some()
+                    && d.carryover_reshown_at.is_none() =>
+            {
                 day_table::set_carryover(conn, today, CarryoverMark::Reshown, Some(now))
             }
             _ => Ok(false),
         }
     })
+}
+
+/// 今日の持ち越しを終えているか。
+fn is_done(conn: &Connection, today: LogicalDate) -> Result<bool, StorageError> {
+    Ok(day_table::get(conn, today)?.is_some_and(|d| d.carryover_done_at.is_some()))
 }
 
 /// 持ち越しの時刻 `mark` が未設定なら `now` を書く。書いたら `true`。day の行は呼び出し側が先に作る。
@@ -341,8 +358,8 @@ enum NewEntry<'a> {
 ///   扱う。画面を開いた後に完了・解消した項目や、持ち越し済みになった項目は、選んでいても、見直しを
 ///   選んでいても何もしない。本文などは確定の時点の値を写す。
 /// - 持ち越す項目は、今日に新しく作る：`carried_from_id` は元の項目、`carry_count` は元の値＋1、
-///   状態は未完了・未解消。本文・種類・作ったもの（`origin`・エージェント）・外部課題との紐付けは
-///   元の項目から写し、解消メモは写さない。元の項目は変えない。
+///   状態は未完了・未解消、`origin = human`。本文・種類・外部課題との紐付けは元の項目から写し、
+///   解消メモは写さない。元の項目は変えない。
 /// - 見直しを選んだ TODO は持ち越さず、元の項目を取りやめた TODO にする（[`Review`]）。分割の子は
 ///   未完了の TODO で、`split_from_id` が元の項目、`carry_count` は 0、`origin = human`。
 /// - 作った項目（持ち越した項目と分割の子）は、今日の並びの先頭に、前回の日の順のまま入れる。
@@ -355,7 +372,7 @@ pub fn confirm(
     now: Timestamp,
 ) -> Result<Confirmed, CarryoverError> {
     in_transaction(conn, || {
-        if day_table::get(conn, today)?.is_some_and(|d| d.carryover_done_at.is_some()) {
+        if is_done(conn, today)? {
             return Err(CarryoverError::AlreadyDone);
         }
         let from = previous_day(conn, today)?;
@@ -406,10 +423,9 @@ pub fn confirm(
                 close_reason: Some(Some(reason)),
                 ..ItemChanges::default()
             };
-            if !item_table::update_fields(conn, source.id, &changes, now)? {
-                // 同じトランザクションで読んだばかりなので、ふつうは起きない
-                return Err(rusqlite::Error::QueryReturnedNoRows.into());
-            }
+            let updated = item_table::update_fields(conn, source.id, &changes, now)?;
+            // 同じトランザクション（BEGIN IMMEDIATE）で、削除されていない行を読んだばかり
+            debug_assert!(updated, "the source was read in the same transaction");
             closed.push(changes.applied_to(source, now));
         }
         mark_once(conn, today, CarryoverMark::Done, now)?;
@@ -494,8 +510,10 @@ fn insert_at_start(
                 carried_from_id: Some(source.id),
                 split_from_id: None,
                 resolution_note: None,
-                origin: source.origin,
-                agent_client_id: source.agent_client_id,
+                // 持ち越しは人の操作で、change_log にも記録しないので、エージェントが作った項目には
+                // しない（作ったものは元の項目に残る）
+                origin: item::Origin::Human,
+                agent_client_id: None,
                 external_ref_id: source.external_ref_id,
                 completed_at: None,
                 created_at: now,
@@ -813,8 +831,8 @@ mod tests {
             assert_eq!(copy.carry_count, source.carry_count + 1);
             assert_eq!(copy.split_from_id, None);
             assert_eq!(copy.resolution_note, None);
-            assert_eq!(copy.origin, source.origin);
-            assert_eq!(copy.agent_client_id, source.agent_client_id);
+            assert_eq!(copy.origin, Origin::Human);
+            assert_eq!(copy.agent_client_id, None);
             assert_eq!(copy.completed_at, None);
             assert!(crate::domain::sort_key::is_valid(&copy.sort_key));
             // 元の項目は変えない（過去日のボードは当時のまま）
@@ -1190,9 +1208,18 @@ mod tests {
         assert_eq!(row.carryover_reshown_at, Some(at(T1)));
         assert_eq!(status(conn, today).unwrap(), pending(Prompt::OnRequest));
 
-        // 持ち越しを終えると出さない
+        // 持ち越しを終えると出さない。古い画面からの後回し・再表示も記録しない
         carry_all(conn, "2026-11-02", "2026-11-03");
         assert_eq!(status(conn, today).unwrap(), None);
+        let (db2, _dir2) = open();
+        let c2 = db2.connection();
+        todo(c2, "2026-11-02", "A");
+        confirm_at(c2, "2026-11-03", &decision("2026-11-02", Selection::None));
+        postpone(c2, today, &tokyo(), at(T2)).unwrap();
+        assert!(!mark_reshown(c2, today, at(T2)).unwrap());
+        let row = day_table::get(c2, today).unwrap().unwrap();
+        assert_eq!(row.carryover_postponed_at, None);
+        assert_eq!(row.carryover_reshown_at, None);
         // 次の日は、今日を前回の日として改めて出す
         assert_eq!(
             status(conn, date("2026-11-04")).unwrap(),
