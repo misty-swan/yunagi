@@ -1,6 +1,6 @@
 //! 全日付の TODO・障害・ノート・振り返りの横断検索（docs/design/02-data-model.md 4章）。
 //!
-//! 索引（FTS5 の `search_index`）はマイグレーション 2 で作り、item・note・reflection の
+//! 索引（FTS5 の `search_index` と、行の種類・日付を持つ `search_index_ref`）はマイグレーション 2 で作り、item・note・reflection の
 //! 更新のたびにトリガーでそろえる（`migrations/0002_search_index.sql`）。ここは検索だけを行う。
 //!
 //! # 一致の決まり
@@ -127,27 +127,38 @@ const KIND_ORDER: [SearchKind; 4] = [
     SearchKind::Reflection,
 ];
 
-/// 索引で探す文。`?1` は FTS5 の句（[`fts_phrase`]）。
-const INDEXED_SQL: &str = concat!(
-    "SELECT kind, ref_id, date, (SELECT body FROM search_index WHERE rowid = hit.id) FROM (",
-    "SELECT rowid AS id, kind, ref_id, date FROM search_index ",
+/// `$inner`（種類・ref_id・日付を並べて件数を切った副問い合わせ）の各行に、元の表の本文を付ける。
+macro_rules! with_body {
+    ($($inner:expr),+ $(,)?) => {
+        concat!(
+            "SELECT kind, ref_id, date, CASE kind ",
+            "WHEN 'note' THEN (SELECT body FROM note WHERE date = hit.ref_id) ",
+            "WHEN 'reflection' THEN (SELECT body FROM reflection WHERE date = hit.ref_id) ",
+            "ELSE (SELECT text FROM item WHERE id = hit.ref_id) END FROM (",
+            $($inner,)+
+            ") AS hit ORDER BY ",
+            order!(),
+        )
+    };
+}
+
+/// 索引で探す文。`?1` は FTS5 の句（[`fts_phrase`]）。索引は本文の写しを持たないので、
+/// 種類・日付は search_index_ref から読む。
+const INDEXED_SQL: &str = with_body!(
+    "SELECT r.kind AS kind, r.ref_id AS ref_id, r.date AS date ",
+    "FROM search_index JOIN search_index_ref AS r ON r.id = search_index.rowid ",
     "WHERE search_index MATCH ?1 AND ",
     date_filter!(),
     " AND ",
     kind_filter!("kind"),
     " ORDER BY ",
     order!(),
-    " LIMIT ?5) AS hit ORDER BY ",
-    order!(),
+    " LIMIT ?5",
 );
 
 /// 元の表への部分一致で探す文。`?1` は LIKE の型（[`like_pattern`]）。
 /// 絞り込みは表ごとに入れ、対象外の種類の表は読まない。
-const LIKE_SQL: &str = concat!(
-    "SELECT kind, ref_id, date, CASE kind ",
-    "WHEN 'note' THEN (SELECT body FROM note WHERE date = hit.ref_id) ",
-    "WHEN 'reflection' THEN (SELECT body FROM reflection WHERE date = hit.ref_id) ",
-    "ELSE (SELECT text FROM item WHERE id = hit.ref_id) END FROM (",
+const LIKE_SQL: &str = with_body!(
     // UNION ALL の ORDER BY には式を書けないので、つないだものを包んでから並べる
     "SELECT kind, ref_id, date FROM (",
     "SELECT kind, id AS ref_id, date FROM item WHERE deleted_at IS NULL AND ",
@@ -164,11 +175,10 @@ const LIKE_SQL: &str = concat!(
     kind_filter!("'reflection'"),
     " AND ",
     date_filter!(),
-    " AND body LIKE ?1 ESCAPE '\\' ",
+    " AND body LIKE ?1 ESCAPE '\\'",
     ") ORDER BY ",
     order!(),
-    " LIMIT ?5) AS hit ORDER BY ",
-    order!(),
+    " LIMIT ?5",
 );
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
@@ -268,9 +278,12 @@ mod tests {
             .collect()
     }
 
-    /// 索引が元の表と食い違っていないか。元の表（論理削除していない項目、ノート、振り返り）の
-    /// 種類・id・日付・本文の組と、索引の組が同じで、行番号の表が索引の各行を指していること。
-    /// FTS5 の `integrity-check` で、索引そのものが壊れていないことも確かめる。
+    /// 索引が元の表と食い違っていないか。
+    ///
+    /// - search_index_ref の種類・id・日付の組が、元の表（論理削除していない項目、ノート、振り返り）と同じ
+    /// - 索引の行と search_index_ref の行が同じ数で、元の各行の本文（3文字以上）で索引を引くと、
+    ///   その行の行番号が見つかる（索引は本文の写しを持たないので、引いて確かめる）
+    /// - FTS5 の `integrity-check` で、索引そのものが壊れていない
     fn assert_index_consistent(db: &Database) {
         let conn = db.connection();
         conn.execute(
@@ -278,18 +291,10 @@ mod tests {
             [],
         )
         .unwrap();
-        let rows = |sql: &str| -> Vec<String> {
+        let rows = |sql: &str| -> Vec<(String, String, String, String)> {
             let mut stmt = conn.prepare(sql).unwrap();
-            let mut v: Vec<String> = stmt
-                .query_map([], |r| {
-                    Ok(format!(
-                        "{} {} {} {:?}",
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?
-                    ))
-                })
+            let mut v: Vec<_> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
                 .unwrap()
                 .map(Result::unwrap)
                 .collect();
@@ -297,26 +302,43 @@ mod tests {
             v
         };
         let source = rows(
-            "SELECT kind, id, date, text FROM item WHERE deleted_at IS NULL \
-             UNION ALL SELECT 'note', date, date, body FROM note \
-             UNION ALL SELECT 'reflection', date, date, body FROM reflection",
+            "SELECT 'item', id, kind, date FROM item WHERE deleted_at IS NULL \
+             UNION ALL SELECT 'note', date, 'note', date FROM note \
+             UNION ALL SELECT 'reflection', date, 'reflection', date FROM reflection",
         );
         assert_eq!(
-            rows("SELECT kind, ref_id, date, body FROM search_index"),
+            rows("SELECT source, ref_id, kind, date FROM search_index_ref"),
             source
         );
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         assert_eq!(
-            rows(
-                "SELECT s.kind, s.ref_id, s.date, s.body FROM search_index AS s \
-                 JOIN search_index_ref AS r ON r.id = s.rowid AND r.ref_id = s.ref_id \
-                 AND r.source = CASE WHEN s.kind IN ('note', 'reflection') THEN s.kind ELSE 'item' END"
-            ),
-            source
+            count("SELECT count(*) FROM search_index"),
+            count("SELECT count(*) FROM search_index_ref")
         );
-        let refs: i64 = conn
-            .query_row("SELECT count(*) FROM search_index_ref", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(refs as usize, source.len());
+        let bodies = rows(
+            "SELECT CAST(r.id AS TEXT), i.text, '', '' FROM search_index_ref AS r \
+             JOIN item AS i ON r.source = 'item' AND r.ref_id = i.id \
+             UNION ALL SELECT CAST(r.id AS TEXT), n.body, '', '' FROM search_index_ref AS r \
+             JOIN note AS n ON r.source = 'note' AND r.ref_id = n.date \
+             UNION ALL SELECT CAST(r.id AS TEXT), d.body, '', '' FROM search_index_ref AS r \
+             JOIN reflection AS d ON r.source = 'reflection' AND r.ref_id = d.date",
+        );
+        for (id, body, _, _) in bodies {
+            if body.chars().count() < MIN_INDEXED_CHARS {
+                continue;
+            }
+            let found: Vec<i64> = conn
+                .prepare("SELECT rowid FROM search_index WHERE search_index MATCH ?1")
+                .unwrap()
+                .query_map([fts_phrase(&body)], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert!(
+                found.contains(&id.parse().unwrap()),
+                "{body:?} is not indexed"
+            );
+        }
     }
 
     #[test]
@@ -332,6 +354,8 @@ mod tests {
             .unwrap();
         assert!(sql.contains("USING fts5"), "{sql}");
         assert!(sql.contains("tokenize = 'trigram'"), "{sql}");
+        // 本文の写しを持たない
+        assert!(sql.contains("content = ''"), "{sql}");
     }
 
     #[test]
@@ -354,7 +378,13 @@ mod tests {
                  || CASE WHEN pk THEN '!' ELSE '' END \
                  FROM pragma_table_info('search_index_ref') ORDER BY cid"
             ),
-            ["id INTEGER?!", "source TEXT", "ref_id TEXT"]
+            [
+                "id INTEGER?!",
+                "source TEXT",
+                "ref_id TEXT",
+                "kind TEXT",
+                "date TEXT"
+            ]
         );
         assert_eq!(
             names(
@@ -824,12 +854,13 @@ mod tests {
         }
 
         let (db, dir) = open();
+        let mut d;
         let started = std::time::Instant::now();
         {
             let mut rng = Rng(0x2026_1103);
             let conn = db.connection();
             conn.execute_batch("BEGIN").unwrap();
-            let mut d = date("2021-11-08");
+            d = date("2021-11-08");
             for _ in 0..DAYS {
                 crate::storage::table::day::ensure(conn, d, "Asia/Tokyo", at(T0)).unwrap();
                 for i in 0..ITEMS_PER_DAY {
@@ -872,12 +903,10 @@ mod tests {
                 .unwrap()
         };
         println!(
-            "generated {DAYS} days in {:.1?}: yunagi.db {:.1} MB \
-             (search index {:.1} MB, of which copied text {:.1} MB)",
+            "generated {DAYS} days in {:.1?}: yunagi.db {:.1} MB (search index {:.1} MB)",
             started.elapsed(),
             mb(size as i64),
             mb(bytes_of("search_index%")),
-            mb(bytes_of("search_index_content")),
         );
 
         let all = [
@@ -927,6 +956,26 @@ mod tests {
                 },
             ),
         ];
+        // 自動保存：ノート（10KB）を書き直すたびに、索引も入れ直す
+        {
+            let mut rng = Rng(7);
+            let today = d.yesterday().unwrap();
+            let mut times: Vec<Duration> = (0..RUNS)
+                .map(|_| {
+                    let body = rng.text(NOTE_BYTES);
+                    let t = std::time::Instant::now();
+                    text_doc::save(db.connection(), TextDoc::Note, today, &body, at(T0)).unwrap();
+                    t.elapsed()
+                })
+                .collect();
+            times.sort();
+            println!(
+                "{:<34} median={:>8.1?}  p95={:>8.1?}",
+                "save a 10KB note (autosave)",
+                times[RUNS / 2],
+                times[(RUNS * 95).div_ceil(100) - 1]
+            );
+        }
         let mut worst = Duration::ZERO;
         for (label, q) in &cases {
             let mut times: Vec<Duration> = (0..RUNS)
