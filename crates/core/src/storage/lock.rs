@@ -211,12 +211,20 @@ impl Database {
     /// 閉じるのに失敗したら（WAL の書き戻しの失敗など）、閉じられなかったデータベースを
     /// [`CloseError`] で返す（ロックだけは返さない）。
     pub fn close_keeping_lock(self) -> Result<DbLock, Box<CloseError>> {
-        let Self { conn, _lock: lock } = self;
+        let Self {
+            conn,
+            path,
+            _lock: lock,
+        } = self;
         match conn.close() {
             Ok(()) => Ok(lock),
             Err((conn, e)) => Err(Box::new(CloseError {
                 error: StorageError::from(e),
-                db: Database { conn, _lock: lock },
+                db: Database {
+                    conn,
+                    path,
+                    _lock: lock,
+                },
             })),
         }
     }

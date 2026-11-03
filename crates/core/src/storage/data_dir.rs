@@ -520,7 +520,7 @@ fn copy_symlink(from: &Path, to: &Path, created: &mut Created) -> Result<(), Dat
 }
 
 /// データベース `from` を `to` に写し、写したものの整合性を確かめる。
-fn copy_database(from: &Path, to: &Path) -> Result<(), DataDirError> {
+pub(super) fn copy_database(from: &Path, to: &Path) -> Result<(), DataDirError> {
     // オンラインバックアップは、WAL にだけある（まだ本体に書き戻していない）書き込みも含めて写す。
     // 元は読み取り専用で開く（元のファイルに書かず、閉じるときに WAL を書き戻すこともしない）。
     // Connection::backup は、元が使用中なら間を置いて再試行する（マイグレーションのバックアップと同じ）
@@ -594,7 +594,7 @@ fn copy_file_synced(from: &Path, to: &Path) -> io::Result<()> {
 
 /// フォルダの中の名前の変更・追加をディスクに反映する。Unix 系だけで行う
 /// （Windows はフォルダを開いて反映する方法を std が持たない）。失敗しても続ける。
-fn sync_dir(dir: &Path) {
+pub(super) fn sync_dir(dir: &Path) {
     #[cfg(unix)]
     if let Ok(f) = fs::File::open(dir) {
         let _ = f.sync_all();
