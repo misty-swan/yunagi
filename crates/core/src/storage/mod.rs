@@ -11,6 +11,7 @@ pub mod data_dir;
 mod error;
 mod lock;
 mod migration;
+pub mod search;
 pub mod table;
 mod ulid;
 
