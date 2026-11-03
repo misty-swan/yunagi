@@ -67,7 +67,7 @@ impl Database {
     /// 見つけられず、利用者が新しく作ることを選んだときに使う）。
     ///
     /// 保存先の決め方・ロック・マイグレーションは [`Database::open`] と同じ。すでにデータベース
-    /// （中身のある `yunagi.db`、その `-wal`、`yunagi.db` のシンボリックリンク）があれば、
+    /// （中身のある `yunagi.db`、中身のある `-wal`・`-journal`、`yunagi.db` のシンボリックリンク）があれば、
     /// 上書きせずに [`OpenError::AlreadyExists`] を返す。中身の無い（0 バイトの）`yunagi.db` は
     /// 作り直す。保存先のフォルダは作らない（繋いでいないドライブの代わりに作らないように）ので、
     /// 無ければ [`OpenError::NotFound`]（`data_dir_exists` が `false`）を返す。

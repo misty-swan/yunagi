@@ -35,8 +35,9 @@ impl Database {
         migrations: &[Migration],
     ) -> Result<Self, OpenError> {
         let default_dir = lock.default_dir().path().to_path_buf();
-        let path = lock.database_path()?;
-        let data_dir = path.parent().unwrap_or(&default_dir).to_path_buf();
+        // DbLock::database_path と同じ決め方
+        let data_dir = data_dir::resolve_data_dir(lock.default_dir())?;
+        let path = data_dir::database_path(&data_dir);
         // 表記が違っても（シンボリックリンク・大文字小文字など）、実体が同じなら既定ディレクトリのまま
         let customized = data_dir::resolve(&data_dir) != data_dir::resolve(&default_dir);
         let not_found = |path: PathBuf, data_dir: PathBuf| {
@@ -47,7 +48,12 @@ impl Database {
                 data_dir,
             })
         };
-        let exists = has_database(&path);
+        // 保存先のフォルダが無い（ドライブを繋いでいない、同期の途中など）。作るときも、
+        // 繋いでいないドライブの代わりに別の場所へ作らないよう、フォルダは作らない
+        if !data_dir.is_dir() {
+            return Err(not_found(path, data_dir));
+        }
+        let exists = has_database(&path)?;
         let create = match intent {
             Intent::Open if exists => false,
             Intent::Open => {
@@ -61,16 +67,17 @@ impl Database {
                 if let Some(trace) = trace_of_database(&path) {
                     return Err(OpenError::AlreadyExists(trace));
                 }
-                // 繋いでいないドライブの代わりに、別の場所へ作らないよう、フォルダは作らない
-                if !data_dir.is_dir() {
-                    return Err(not_found(path, data_dir));
-                }
                 true
             }
         };
         // 今あるものを開くときは、作らない形で開く（確かめた後でファイルが消えても、
-        // SQLite に空のデータベースを作らせない）
-        Ok(Self::connect(lock, &path, migrations, create)?)
+        // SQLite に空のデータベースを作らせない）。消えていたら、見つからないときと同じに扱う
+        match Self::connect(lock, &path, migrations, create) {
+            Err(_) if !create && !has_database(&path).unwrap_or(true) => {
+                Err(not_found(path, data_dir))
+            }
+            result => Ok(result?),
+        }
     }
 }
 
@@ -79,11 +86,12 @@ impl Database {
 /// 0 バイトのファイルは無いものとみなす（同期の途中で中身がまだ届いていないファイルや、
 /// 初めて作る途中で止まったもの）。SQLite は 0 バイトのファイルを空のデータベースとして開くため、
 /// 区別しないと空のデータベースを作るのと同じことになる。
-/// 調べられない（権限が無いなど）ときは「ある」とし、開くときの SQLite の失敗に任せる。
-fn has_database(path: &Path) -> bool {
+/// 調べられない（権限が無いなど）ときは、そのエラーを返す（あるとも無いとも決めない）。
+fn has_database(path: &Path) -> Result<bool, StorageError> {
     match fs::metadata(path) {
-        Ok(m) => !(m.is_file() && m.len() == 0),
-        Err(e) => e.kind() != io::ErrorKind::NotFound,
+        Ok(m) => Ok(!(m.is_file() && m.len() == 0)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(StorageError::Io(e)),
     }
 }
 
@@ -91,21 +99,28 @@ fn has_database(path: &Path) -> bool {
 ///
 /// - 宛先の無い `yunagi.db` のシンボリックリンク（リンク先のドライブを繋いでいないなど）。
 ///   作ると、SQLite がリンク先に作ってしまう。
-/// - 中身のある `-wal`。作ると、SQLite が新しいデータベースに写し込んでしまう
-///   （0 バイトの `-wal` は SQLite が使わないので、跡とみなさない）。
+/// - 中身のある `-wal`・`-journal`。作ると、SQLite が新しいデータベースに写し込んでしまう
+///   （0 バイトのものは SQLite が使わないので、跡とみなさない。`-shm` は SQLite が作り直すので見ない）。
+///
+/// 調べられない（権限が無いなど）ものは、跡とみなす（黙って作らない）。
 fn trace_of_database(db_path: &Path) -> Option<PathBuf> {
     if db_path.is_symlink() {
         return Some(db_path.to_path_buf());
     }
-    let mut name = db_path.file_name()?.to_os_string();
-    name.push("-wal");
-    let wal = db_path.with_file_name(name);
-    match fs::symlink_metadata(&wal) {
-        Ok(m) if m.is_file() && m.len() == 0 => None,
-        Ok(_) => Some(wal),
-        Err(_) => None,
-    }
+    JOURNAL_SUFFIXES.iter().find_map(|suffix| {
+        let mut name = db_path.as_os_str().to_os_string();
+        name.push(suffix);
+        let side = PathBuf::from(name);
+        match fs::symlink_metadata(&side) {
+            Ok(m) if m.is_file() && m.len() == 0 => None,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            _ => Some(side),
+        }
+    })
 }
+
+/// SQLite がデータベースの横に作る、書き込みの途中の内容を持つファイルの接尾辞。
+const JOURNAL_SUFFIXES: [&str; 2] = ["-wal", "-journal"];
 
 /// 保存先 `data_dir` の `backups/` に、データベースがあった証拠になるバックアップがあるか。
 ///
@@ -129,7 +144,8 @@ pub enum OpenError {
     DataDir(DataDirError),
     /// 保存先にデータベースが無く、初めて使うときでもない。何も作っていない。
     NotFound(DatabaseNotFound),
-    /// 新しく作ろうとした場所に、すでにデータベース（またはその `-wal`）がある。
+    /// 新しく作ろうとした場所に、すでにデータベース（またはその `-wal`・`-journal`、
+    /// シンボリックリンク）がある。
     /// 上書きしないので、何も変えていない。
     AlreadyExists(PathBuf),
     /// 開く・マイグレーションを適用するのに失敗した。
@@ -182,10 +198,11 @@ impl fmt::Display for DatabaseNotFound {
                 self.data_dir.display()
             )?;
         }
+        // 何ができるか（新しく作る・復元するなど）は呼び出し側によって違うので、ここでは
+        // 考えられる理由だけを書く
         write!(
             f,
-            "; wait for syncing to finish or connect the drive, choose the data directory again, \
-             restore from a backup, or create a new database"
+            "; it may not have finished syncing, or the drive holding it may not be connected"
         )
     }
 }
@@ -195,7 +212,8 @@ impl std::error::Error for OpenError {
         match self {
             Self::DataDir(e) => Some(e),
             Self::Storage(e) => Some(e),
-            Self::NotFound(_) | Self::AlreadyExists(_) => None,
+            Self::NotFound(e) => Some(e),
+            Self::AlreadyExists(_) => None,
         }
     }
 }
@@ -356,6 +374,26 @@ mod tests {
         env.point_config_to(&alias);
         drop(env.open().unwrap());
         assert!(database_path(&env.default).exists());
+    }
+
+    #[test]
+    fn leftover_rollback_journal_is_a_trace_of_a_database() {
+        let env = Env::new();
+        let journal = env.default.join("yunagi.db-journal");
+        fs::write(&journal, b"hot").unwrap();
+        not_found(env.open());
+        assert!(matches!(env.create(), Err(OpenError::AlreadyExists(p)) if p == journal));
+        assert!(!database_path(&env.default).exists());
+    }
+
+    #[test]
+    fn data_dir_that_is_a_file_is_not_found() {
+        let env = Env::new();
+        let file = env.root.join("file");
+        fs::write(&file, b"not a folder").unwrap();
+        env.point_config_to(&file);
+        assert!(!not_found(env.open()).data_dir_exists);
+        assert!(!not_found(env.create()).data_dir_exists);
     }
 
     #[test]
