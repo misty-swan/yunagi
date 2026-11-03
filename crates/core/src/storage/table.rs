@@ -33,7 +33,7 @@ use rusqlite::{Connection, Params, Row, ToSql};
 use crate::domain::logical_date::LogicalDate;
 
 /// 時刻を保存する形の文字列にする。0〜9999 年の外の時刻は桁数がそろわないので、
-/// 保存するときは [`Time`] を通して範囲を確かめる。
+/// 保存するときは `Time` を通して範囲を確かめる。
 pub fn format_time(t: Timestamp) -> String {
     t.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
@@ -183,7 +183,7 @@ macro_rules! text_enum {
 }
 pub(crate) use text_enum;
 
-/// [`text_enum!`] で定義した型が知らない文字列。
+/// `text_enum!` で定義した型が知らない文字列。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownValue {
     /// 型の名前。

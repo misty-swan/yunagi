@@ -110,7 +110,7 @@ macro_rules! kind_filter {
     };
 }
 
-/// 並び。日付の新しい順、同じ日は [`KIND_ORDER`] の順、その中は ref_id の順。
+/// 並び。日付の新しい順、同じ日は `KIND_ORDER` の順、その中は ref_id の順。
 macro_rules! order {
     () => {
         "date DESC, CASE kind WHEN 'todo' THEN 0 WHEN 'blocker' THEN 1 \
