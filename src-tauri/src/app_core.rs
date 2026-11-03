@@ -252,7 +252,7 @@ impl AppCore {
     }
 
     /// 見つからなかった・開けなかったときに、もう一度開く（同期が終わった、ドライブを繋いだ、
-    /// CLI・MCP の操作が終わったなど。画面設計書 11章「起動時の画面」）。開いている途中・開いた
+    /// CLI・MCP の操作が終わったなど。画面設計書 10.1）。開いている途中・開いた
     /// 後は [`CommandError::InvalidState`]。結果は [`AppCore::open`] と同じく知らせる。
     pub fn retry_open(self: &Arc<Self>) -> Result<Startup, CommandError> {
         self.begin(|s| matches!(s, Slot::NotFound(_) | Slot::Failed { .. }))?;
@@ -264,15 +264,17 @@ impl AppCore {
     /// 保存先として記録してから開く（保存先の選び直し。アーキテクチャ設計書 6章・6.3）。
     ///
     /// `dir` を使えなければ、何も変えずに [`CommandError::Rejected`]（状態は見つからないまま）。
-    /// 記録した後に開けなかったときは、`Ok` で開けなかった状態を返す。それ以外の状態では
-    /// [`CommandError::InvalidState`]。
+    /// 記録した後に開けなかったときは、`Ok` で開けなかった状態を返す。ロックが取れないなど、選び直す
+    /// 前に止まったときは [`CommandError::NotReady`]（状態は [`Notice::Startup`] で届く）。それ以外の
+    /// 状態では [`CommandError::InvalidState`]。
     pub fn choose_data_dir(self: &Arc<Self>, dir: &Path) -> Result<Startup, CommandError> {
         self.begin(|s| matches!(s, Slot::NotFound(_)))?;
         let lock = match acquire_lock() {
             Ok(lock) => lock,
             Err(slot) => {
+                // ロックが取れないなど、選び直す前に止まった（状態は startup で届く）
                 self.finish(*slot);
-                return Ok(self.startup());
+                return Err(CommandError::NotReady);
             }
         };
         let chosen = data_dir::use_existing_data_dir(&lock, dir);
@@ -297,7 +299,10 @@ impl AppCore {
     /// `backups/` に退避し、その場所を返す。
     ///
     /// 戻せなかったときは、開き直して元の状態に戻してから、エラーを返す（使えないバックアップは
-    /// [`CommandError::Rejected`]）。それ以外の状態では [`CommandError::InvalidState`]。
+    /// [`CommandError::Rejected`]、前のデータベースを元の場所に戻せなかったときは
+    /// [`CommandError::PutBackFailed`]）。ロックが取れないなど、戻す前に止まったときは
+    /// [`CommandError::NotReady`]（状態は [`Notice::Startup`] で届く）。それ以外の状態では
+    /// [`CommandError::InvalidState`]。
     pub fn restore_at_startup(
         self: &Arc<Self>,
         backup: &Path,
@@ -736,6 +741,11 @@ fn recover_error(e: &RecoverError) -> CommandError {
             BackupError::Sqlite(_) | BackupError::NotABackup(_) => reject(RejectReason::Unreadable),
             _ => CommandError::storage(e),
         },
+        // 前のデータベースが退避した場所に残っている。画面はその場所を示す
+        RecoverError::PutBackFailed { set_aside, .. } => CommandError::PutBackFailed {
+            set_aside: set_aside.display().to_string(),
+            detail: chain(e),
+        },
         _ => CommandError::storage(e),
     }
 }
@@ -826,5 +836,21 @@ mod tests {
             }),
             (StartupFailure::Storage, None)
         );
+    }
+
+    #[test]
+    fn a_failed_put_back_keeps_where_the_previous_database_is() {
+        let e = RecoverError::PutBackFailed {
+            source: Box::new(RecoverError::NoDataDir("/d".into())),
+            put_back_error: io::Error::other("busy"),
+            set_aside: "/d/backups/damaged-1.db".into(),
+        };
+        match recover_error(&e) {
+            CommandError::PutBackFailed { set_aside, detail } => {
+                assert_eq!(set_aside, "/d/backups/damaged-1.db");
+                assert!(detail.contains("busy"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

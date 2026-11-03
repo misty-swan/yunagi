@@ -29,7 +29,9 @@ pub(super) fn with_side_files(db: &Path) -> [PathBuf; 4] {
     [db.to_path_buf(), wal, shm, journal]
 }
 
-fn side_file(db: &Path, suffix: &str) -> PathBuf {
+/// データベースのファイル `db` の横のファイル（`db` の名前に `suffix` を付けたもの。OS の文字列のまま
+/// 付けるので、UTF-8 でない名前でも崩れない）。
+pub(super) fn side_file(db: &Path, suffix: &str) -> PathBuf {
     let mut name = db.as_os_str().to_os_string();
     name.push(suffix);
     PathBuf::from(name)

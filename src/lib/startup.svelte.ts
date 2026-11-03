@@ -1,11 +1,12 @@
-// 起動時の画面の操作（画面設計書 11章「起動時の画面」、アーキテクチャ設計書 4.3・6.2・6.3）。
+// 起動時の画面の操作（画面設計書 10.1、アーキテクチャ設計書 4.3・6.2・6.3）。
 // 見た目は src/startup/StartupScreen.svelte が持つ。
 //
 // - やり直す・新しく作る・保存先を選び直す・バックアップから戻すを、一度に1つだけ行う（`busy`）。
 //   結果の状態は、コアの `startup` イベントで session に届く。
 // - 失敗したら、どの操作の失敗かと中身を `error` に持つ（次の操作を始めると消す）。
 // - バックアップから戻したら、退避した前のデータベースの場所を `restored` に持ち、利用者が
-//   確かめる（`acknowledge`）まで起動時の画面に出し続ける。
+//   確かめる（`acknowledge`）まで起動時の画面に出し続ける。戻している間（`busy` が "restore"）も
+//   起動時の画面のままにする（開いた知らせが、戻した結果より先に届くため。src/App.svelte）。
 
 import type { BackupEntry, StartupRestored } from "./bindings";
 import { core, errorOf, type CallError } from "./core";
@@ -56,7 +57,14 @@ export class StartupActions {
   /** バックアップ `path` から戻す。 */
   restore(path: string) {
     return this.#run("restore", async () => {
-      this.restored = await core.restoreAtStartup(path);
+      try {
+        this.restored = await core.restoreAtStartup(path);
+      } catch (e) {
+        // 戻せなくても状態が変わらないことがあるので、一覧はここで読み直す（使えなかったものが
+        // 消えていたり、退避したものが増えていたりする）
+        void this.loadBackups();
+        throw e;
+      }
     });
   }
 

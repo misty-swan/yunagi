@@ -810,6 +810,11 @@ pub enum CommandError {
     /// 選んだバックアップ・保存先を使えないので、何も変えなかった（起動時の
     /// `restore_at_startup`・`choose_data_dir`）。
     Rejected { reason: RejectReason },
+    /// バックアップから戻すのに失敗し、退避した前のデータベースを元の場所に戻すこともできなかった
+    /// （`restore_at_startup`）。前のデータベースは `set_aside`（とその横のファイル）に残っている。
+    /// `detail` はログ用の文。
+    #[serde(rename_all = "camelCase")]
+    PutBackFailed { set_aside: String, detail: String },
     /// アプリの不具合（コマンドの処理が途中で止まった）。`detail` はログ用の文。
     Internal { detail: String },
 }

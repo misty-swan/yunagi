@@ -25,6 +25,9 @@ use crate::error::ErrorChain;
 
 /// 退避したデータベースの名前の頭（`backups/damaged-<秒>.db`）。
 const DAMAGED_PREFIX: &str = "damaged-";
+/// 置く前に写す一時ファイルの名前の頭（`backups/restore-<秒>.db.tmp`）。中断で残ったものは、
+/// 次の回復と定期バックアップのときに消す（`backup` モジュール）。
+pub(super) const RESTORE_TEMP_PREFIX: &str = "restore-";
 
 /// [`Database::open_from_backup`] の結果。
 pub struct Recovered {
@@ -83,8 +86,10 @@ impl Database {
         fs::create_dir_all(&backups_dir)
             .map_err(|e| RecoverError::io("create directory", &backups_dir, e))?;
 
-        // 写したものを置くまで、今のデータベースには触れない
-        let tmp = free_name(&data_dir, "yunagi-restore-", db_files::TEMP_SUFFIX);
+        // 写したものを置くまで、今のデータベースには触れない。一時ファイルは backups/ に置き、
+        // 中断で残ったものを片付ける（保存先の直下に置くと、片付ける機会が無い）
+        backup::remove_stale_temp_files(&backups_dir);
+        let tmp = free_name(&backups_dir, RESTORE_TEMP_PREFIX, db_files::TEMP_SUFFIX);
         db_copy::copy(&src, &tmp).map_err(|e| RecoverError::from_copy(e, backup))?;
         drop(src);
 
@@ -103,13 +108,7 @@ impl Database {
 
         let pre_migration_before = backup::pre_migration_paths(&backups_dir);
         let result = super::connect(&path, migrations, false);
-        // 古いスキーマから戻すと、マイグレーションが戻したものの写しを作る。選んだバックアップと
-        // 同じ内容なので消す（旧版の再導入に備えた、本来のマイグレーション前のものを押し出さない）
-        for p in backup::pre_migration_paths(&backups_dir) {
-            if !pre_migration_before.contains(&p) {
-                let _ = fs::remove_file(&p);
-            }
-        }
+        backup::remove_new_pre_migration(&backups_dir, &pre_migration_before);
         match result {
             Ok(conn) => Ok(Recovered {
                 database: Database {
@@ -153,28 +152,23 @@ impl SetAside {
     /// `db` と横のファイルのうち、あるもの（シンボリックリンクは辿らない）を `backups_dir` へ動かす。
     /// 途中で失敗したら、動かした分を戻してからエラーを返す。
     fn run(db: &Path, backups_dir: &Path) -> Result<Self, RecoverError> {
-        let present: Vec<PathBuf> = db_files::with_side_files(db)
-            .into_iter()
-            .filter(|p| {
-                !matches!(fs::symlink_metadata(p), Err(e) if e.kind() == io::ErrorKind::NotFound)
-            })
+        let exists = |p: &Path| !matches!(fs::symlink_metadata(p), Err(e) if e.kind() == io::ErrorKind::NotFound);
+        let suffixes: Vec<&str> = std::iter::once("")
+            .chain(db_files::SIDE_SUFFIXES)
+            .filter(|suffix| exists(&db_files::side_file(db, suffix)))
             .collect();
         let mut set_aside = Self {
             name: None,
             moved: Vec::new(),
         };
-        if present.is_empty() {
+        if suffixes.is_empty() {
             return Ok(set_aside);
         }
         let name = free_name(backups_dir, DAMAGED_PREFIX, ".db");
-        for from in present {
+        for suffix in suffixes {
             // 横のファイルは、退避した名前に同じ接尾辞を付ける（SQLite が組にして読めるように）
-            let suffix = from
-                .to_string_lossy()
-                .strip_prefix(&*db.to_string_lossy())
-                .unwrap_or_default()
-                .to_owned();
-            let to = PathBuf::from(format!("{}{suffix}", name.display()));
+            let from = db_files::side_file(db, suffix);
+            let to = db_files::side_file(&name, suffix);
             if let Err(e) = fs::rename(&from, &to) {
                 set_aside.name = Some(name);
                 return Err(set_aside.put_back(RecoverError::io("move", &from, e)));
@@ -460,9 +454,9 @@ mod tests {
         assert_eq!(listed, [backup]);
         // 一時ファイルは残らない
         assert!(
-            !names(&env.dir).iter().any(|n| n.contains(".tmp")),
+            !names(&env.backups()).iter().any(|n| n.contains(".tmp")),
             "{:?}",
-            names(&env.dir)
+            names(&env.backups())
         );
     }
 
@@ -574,10 +568,26 @@ mod tests {
             "{left:?}"
         );
         assert!(
-            !names(&env.dir).iter().any(|n| n.contains(".tmp")),
+            !names(&env.backups()).iter().any(|n| n.contains(".tmp")),
             "{:?}",
-            names(&env.dir)
+            names(&env.backups())
         );
+    }
+
+    #[test]
+    fn a_temp_file_left_by_an_interrupted_restore_is_removed() {
+        let env = Env::new();
+        let backup = env.backup("b", &[V1]);
+        let stale = env.backups().join("restore-1.db.tmp");
+        fs::write(&stale, b"half written").unwrap();
+        fs::write(format!("{}-journal", stale.display()), b"j").unwrap();
+        // 利用者が置いたもの（名前の形に合わないもの）には触れない
+        let other = env.backups().join("mine.db.tmp");
+        fs::write(&other, b"mine").unwrap();
+        env.recover(&backup, &[V1]).unwrap();
+        let left = names(&env.backups());
+        assert!(!left.iter().any(|n| n.starts_with("restore-")), "{left:?}");
+        assert!(other.exists());
     }
 
     #[test]
@@ -616,7 +626,7 @@ mod tests {
         let err = RecoverError::PutBackFailed {
             source: Box::new(RecoverError::io(
                 "rename",
-                Path::new("/d/yunagi-restore-1.db.tmp"),
+                Path::new("/d/backups/restore-1.db.tmp"),
                 io::Error::new(io::ErrorKind::PermissionDenied, "permission denied"),
             )),
             put_back_error: io::Error::other("could not move /d/backups/damaged-1.db back: busy"),
@@ -624,7 +634,7 @@ mod tests {
         };
         assert_eq!(
             ErrorChain(&err).to_string(),
-            "putting the previous database back failed (could not move /d/backups/damaged-1.db back: busy), so it is left at /d/backups/damaged-1.db; restoring from the backup failed: could not rename /d/yunagi-restore-1.db.tmp: permission denied"
+            "putting the previous database back failed (could not move /d/backups/damaged-1.db back: busy), so it is left at /d/backups/damaged-1.db; restoring from the backup failed: could not rename /d/backups/restore-1.db.tmp: permission denied"
         );
     }
 }

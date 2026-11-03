@@ -403,7 +403,7 @@ export type BackupFailed = { detail: string, };
  * コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
  * （Display の文をそのまま使わない。README「エラーの表示」）。
  */
-export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" } | { "kind": "not_found" } | { "kind": "invalid_argument", reason: InvalidReason, } | { "kind": "conflict" } & Conflict | { "kind": "restore_refused" } & RestoreRefused | { "kind": "storage", detail: string, } | { "kind": "rejected", reason: RejectReason, } | { "kind": "internal", detail: string, };
+export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" } | { "kind": "not_found" } | { "kind": "invalid_argument", reason: InvalidReason, } | { "kind": "conflict" } & Conflict | { "kind": "restore_refused" } & RestoreRefused | { "kind": "storage", detail: string, } | { "kind": "rejected", reason: RejectReason, } | { "kind": "put_back_failed", setAside: string, detail: string, } | { "kind": "internal", detail: string, };
 
 /**
  * 引数の誤りの種類。

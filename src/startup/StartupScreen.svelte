@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 起動時の画面（画面設計書 11章「起動時の画面」）。データベースを開くまでの間、窓全体に出す。
+  // 起動時の画面（画面設計書 10.1）。データベースを開くまでの間、窓全体に出す。
   // - 開いている途中：静かに「データを開いています」。1 秒を超えたら、ロックを待っていることを添える。
   // - 見つからない：探した場所と、待ってやり直す・保存先を選び直す・バックアップから戻す・新しく作るの
   //   4つの案内（アーキテクチャ設計書 6.3）。
@@ -84,9 +84,20 @@
 
   const busy = $derived(actions.busy !== null);
 
+  /**
+   * 操作の欄の外（見出しの下）に出す失敗：始める前に止まったときは、状態が変わってその欄が消えている
+   * ことがあり、前のデータベースを戻せなかったときは、問い合わせ先と一緒に示すため。
+   */
+  const topError = $derived.by((): string | null => {
+    const e = actions.error?.error;
+    if (e?.kind === "not_ready") return m.notAttempted;
+    if (e?.kind === "put_back_failed") return m.putBackFailed(e.setAside);
+    return null;
+  });
+
   function errorText(): string | null {
     const e = actions.error;
-    if (e === null) return null;
+    if (e === null || topError !== null) return null;
     if (e.error.kind === "rejected") return m.rejected[e.error.reason];
     return {
       retry: m.retryFailed,
@@ -127,6 +138,13 @@
 {#snippet errorLine(action: string)}
   {#if error !== null && actions.error?.action === action}
     <p class="error" role="alert">{error}</p>
+  {/if}
+{/snippet}
+
+{#snippet topErrorBlock()}
+  {#if topError !== null}
+    <p class="error" role="alert">{topError}</p>
+    {#if actions.error?.error.kind === "put_back_failed"}{@render contact()}{/if}
   {/if}
 {/snippet}
 
@@ -171,6 +189,15 @@
   </section>
 {/snippet}
 
+{#snippet contact()}
+  <section class="option" aria-labelledby="startup-contact">
+    <h2 id="startup-contact">{m.contactTitle}</h2>
+    <p>{m.contactBody}</p>
+    {@render path(m.contactIssues, ISSUES_URL)}
+    {@render path(m.contactMail, SUPPORT_MAIL)}
+  </section>
+{/snippet}
+
 {#snippet install(title: string, body: string, version?: string)}
   <section class="option" aria-label={title}>
     <h2>{title}</h2>
@@ -195,6 +222,7 @@
       {#if slow}<p class="muted">{m.openingWait}</p>{/if}
     {:else if startup?.state === "not_found"}
       <h1 tabindex="-1" bind:this={heading}>{m.notFoundTitle}</h1>
+      {@render topErrorBlock()}
       {@render path(m.searched, startup.path)}
       {#if startup.configuredIn !== null}<p class="muted">{m.configuredIn(startup.configuredIn)}</p>{/if}
       <p>{startup.dataDirExists ? m.maybeSyncing : m.noFolder}</p>
@@ -245,6 +273,7 @@
       </section>
     {:else if startup?.state === "failed"}
       <h1 tabindex="-1" bind:this={heading}>{m.failedTitle[startup.reason]}</h1>
+      {@render topErrorBlock()}
       <p>{m.failedBody[startup.reason]}</p>
       {@render path(m.databaseAt, startup.database)}
       {@render path(m.backupAt, startup.backup)}
@@ -273,13 +302,8 @@
         {@render install(m.upgradeTitle, m.upgradeBody(version))}
       {/if}
 
-      {#if CONTACT.includes(startup.reason)}
-        <section class="option" aria-labelledby="startup-contact">
-          <h2 id="startup-contact">{m.contactTitle}</h2>
-          <p>{m.contactBody}</p>
-          {@render path(m.contactIssues, ISSUES_URL)}
-          {@render path(m.contactMail, SUPPORT_MAIL)}
-        </section>
+      {#if CONTACT.includes(startup.reason) && actions.error?.error.kind !== "put_back_failed"}
+        {@render contact()}
       {/if}
 
       <details class="detail">

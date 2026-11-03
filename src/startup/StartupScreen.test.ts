@@ -1,4 +1,4 @@
-// 起動時の画面（画面設計書 11章「起動時の画面」）：アプリ全体を描き、コアの状態ごとの案内と操作を確かめる。
+// 起動時の画面（画面設計書 10.1）：アプリ全体を描き、コアの状態ごとの案内と操作を確かめる。
 import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushSync, mount, unmount } from "svelte";
@@ -289,4 +289,53 @@ test("定期バックアップを作れなかったら、上部のバーに知�
   await until(() => $(".top") !== null);
   await emit(EVENTS.backupFailed, { detail: "could not create directory /data/backups" });
   await until(() => text(".top .notice") === "今日のバックアップを作れませんでした。自動で作り直します");
+});
+
+test("戻している途中に開いた知らせが先に届いても、結果を確かめるまで整理モードを出さない", async () => {
+  let sawShell: boolean | null = null;
+  await start(failed("corrupted"), (cmd) => {
+    if (cmd !== "restore_at_startup") return undefined;
+    // コアは、コマンドの結果を返す前に startup（ready）を出す
+    return (async () => {
+      await emit(EVENTS.startup, { state: "ready" });
+      flushSync();
+      sawShell = $(".top") !== null;
+      return { setAside: null };
+    })();
+  });
+  await until(() => document.querySelectorAll(".backup").length === 2);
+  click("選んだバックアップから戻す");
+  await until(() => text(".startup h1") === "バックアップから戻しました");
+  expect(sawShell).toBe(false);
+  expect(text(".startup")).not.toContain("残しています");
+});
+
+test("戻せなかったときは一覧を読み直し、前のデータベースを戻せなかったときはその場所と問い合わせ先を出す", async () => {
+  const calls = await start(failed("corrupted"), (cmd) => {
+    if (cmd === "restore_at_startup") {
+      throw { kind: "put_back_failed", setAside: "/data/backups/damaged-5.db", detail: "x" };
+    }
+    return undefined;
+  });
+  await until(() => document.querySelectorAll(".backup").length === 2);
+  const lists = calls.filter((c) => c.cmd === "list_backups").length;
+  click("選んだバックアップから戻す");
+  await until(() => text(".startup .error").includes("/data/backups/damaged-5.db"));
+  await until(() => calls.filter((c) => c.cmd === "list_backups").length > lists);
+  // 問い合わせ先は1つだけ出す
+  expect([...document.querySelectorAll(".startup h2")].filter((h) => h.textContent === "問い合わせ先")).toHaveLength(1);
+});
+
+test("始める前に止まったときは、見出しの下に知らせる", async () => {
+  await start(NOT_FOUND, (cmd) => {
+    if (cmd === "choose_data_dir") throw { kind: "not_ready" };
+    return undefined;
+  });
+  const input = $(".choose input") as HTMLInputElement;
+  input.value = "/mnt/x";
+  input.dispatchEvent(new Event("input"));
+  flushSync();
+  click("このフォルダを使う");
+  await until(() => text(".startup .error").startsWith("始める前に止まりました"));
+  expect(document.querySelectorAll(".startup .error")).toHaveLength(1);
 });

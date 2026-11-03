@@ -64,7 +64,7 @@ export function agentLabel(name: string): string {
 export type SaveCause = "storage" | "not_ready" | "internal";
 
 
-/** 起動時の画面の文言（画面設計書 11章「起動時の画面」）。 */
+/** 起動時の画面の文言（画面設計書 10.1）。 */
 export interface StartupMessages {
   opening: string;
   /** 開くのに時間がかかっているとき（ロックを待っているとき）。 */
@@ -122,6 +122,10 @@ export interface StartupMessages {
   /** 選んだバックアップ・保存先を使えなかったとき。 */
   rejected: Record<RejectReason, string>;
   restoreFailed: string;
+  /** 起動時の操作を始める前に止まった（ロックが取れないなど。`not_ready`）。 */
+  notAttempted: string;
+  /** 戻すのに失敗し、前のデータベースを元の場所に戻せなかった（`put_back_failed`）。 */
+  putBackFailed: (path: string) => string;
   chooseFailed: string;
   createFailed: string;
   retryFailed: string;
@@ -270,6 +274,9 @@ const jaStartup: StartupMessages = {
     newer_schema: "新しい版の Yunagi で作られているため、この版では使えません。",
   },
   restoreFailed: "戻す途中で失敗したため、元の状態のままにしました。",
+  notAttempted: "始める前に止まりました（ほかの処理がデータを使っているなど）。今の状態は上のとおりです。",
+  putBackFailed: (path) =>
+    `戻す途中で失敗し、それまでのデータベースを元の場所に戻すこともできませんでした。それまでのデータベースは ${path} に残っています。ファイルを動かさずに、問い合わせ先へ知らせてください。`,
   chooseFailed: "保存先を記録できませんでした。",
   createFailed: "データベースを作れませんでした。",
   retryFailed: "開き直せませんでした。",
@@ -362,6 +369,9 @@ const enStartup: StartupMessages = {
     newer_schema: "It was made by a newer version of Yunagi and can't be used by this one.",
   },
   restoreFailed: "Restoring failed partway, so everything was left as it was.",
+  notAttempted: "It stopped before starting (for example, something else is using the data). The current state is shown above.",
+  putBackFailed: (path) =>
+    `Restoring failed partway, and the previous database couldn't be moved back either. It is kept at ${path}. Please leave the files as they are and contact support.`,
   chooseFailed: "Couldn't record the data folder.",
   createFailed: "Couldn't create the database.",
   retryFailed: "Couldn't open it again.",

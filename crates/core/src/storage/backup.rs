@@ -162,14 +162,7 @@ impl Database {
             });
         }
         drop(src);
-        // 古いスキーマから復元すると、マイグレーションが復元したものの写しを
-        // pre-migration-*.db として作る。選んだバックアップと同じ内容なので消す
-        // （旧版の再導入に備えて残している、本来のマイグレーション前のものを押し出さないように）
-        for path in pre_migration_paths(&dir) {
-            if !pre_migration_before.contains(&path) {
-                let _ = fs::remove_file(&path);
-            }
-        }
+        remove_new_pre_migration(&dir, &pre_migration_before);
         // データはもう置き換わっているので、片付けに失敗しても復元は失敗にしない。
         // 時計が戻っていても、退避したばかりのものは消さない
         if let Ok(backups) = list_in(&dir) {
@@ -307,6 +300,21 @@ pub(super) fn pre_migration_paths(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// `dir` のマイグレーション前のバックアップのうち、`before`（前に [`pre_migration_paths`] で
+/// 求めたもの）に無いものを消す（消せなくても続ける）。
+///
+/// 古いスキーマのバックアップから戻すと、マイグレーションが戻したものの写しを `pre-migration-*.db` と
+/// して作る。選んだバックアップと同じ内容なので消す（旧版の再導入に備えて残している、本来の
+/// マイグレーション前のものを押し出さないように）。復元（[`Database::restore_backup`]）と、開けない
+/// データベースからの回復（[`Database::open_from_backup`]）が使う。
+pub(super) fn remove_new_pre_migration(dir: &Path, before: &[PathBuf]) {
+    for path in pre_migration_paths(dir) {
+        if !before.contains(&path) {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
 /// データベース `db_path` を `dir` に `<stem>.db` として写し、写したものを返す。
 fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, BackupError> {
     fs::create_dir_all(dir).map_err(|e| BackupError::io("create directory", dir, e))?;
@@ -334,13 +342,15 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
     Ok(backup)
 }
 
-/// 書きかけのまま残った定期・復元前のバックアップの一時ファイルを消す（SQLite が横に作る
+/// 書きかけのまま残った定期・復元前のバックアップと、回復で写した一時ファイルを消す（SQLite が横に作る
 /// `-journal` などを含む。[`db_files::remove_stale_temp_files`]）。マイグレーション前のものは
 /// `migration` モジュールが消す。
-fn remove_stale_temp_files(dir: &Path) {
+pub(super) fn remove_stale_temp_files(dir: &Path) {
     db_files::remove_stale_temp_files(dir, |name| {
         parse(Path::new(name))
             .is_some_and(|b| matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore))
+            // 開けないデータベースからの回復で、置く前に写したもの（`recover` モジュール）
+            || name.starts_with(super::recover::RESTORE_TEMP_PREFIX)
     });
 }
 
