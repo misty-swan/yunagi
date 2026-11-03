@@ -23,12 +23,11 @@
 //! - 並びは日付の新しい順。同じ日の中は TODO・障害・ノート・振り返りの順、その中は id の順。
 //! - 項目の結果には、持ち越し先（[`SearchHit::carried_to`]）を付ける（MCP・CLI 仕様書 3章「読み取り」）。
 
-use rusqlite::types::Type;
 use rusqlite::{Connection, Row, params};
 
 use super::table::item::{self as item_table, CarriedTo};
 use super::table::text_enum;
-use super::{StorageError, Ulid};
+use super::{StorageError, Ulid, in_read_transaction};
 use crate::domain::logical_date::LogicalDate;
 
 text_enum! {
@@ -95,24 +94,24 @@ pub fn search(conn: &Connection, query: &SearchQuery<'_>) -> Result<Vec<SearchHi
     } else {
         (LIKE_SQL, like_pattern(text))
     };
-    let mut stmt = conn.prepare_cached(sql)?;
-    let rows = stmt.query_map(
-        params![pattern, query.from, query.to, kinds, limit],
-        from_row,
-    )?;
-    let mut hits = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    for hit in &mut hits {
-        if matches!(hit.kind, SearchKind::Todo | SearchKind::Blocker) {
-            // 項目の ref_id は item.id なので、いつも ULID として読める
-            let id: Ulid = hit.ref_id.parse().map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(1, Type::Text, Box::new(e))
-            })?;
-            hit.carried_to = item_table::carried_to(conn, id, None)?
-                .as_ref()
-                .map(CarriedTo::from);
+    // 結果の行と持ち越し先は、同じ時点の内容を読む
+    in_read_transaction(conn, || {
+        let mut stmt = conn.prepare_cached(sql)?;
+        let rows = stmt.query_map(
+            params![pattern, query.from, query.to, kinds, limit],
+            from_row,
+        )?;
+        let (mut hits, item_ids): (Vec<_>, Vec<_>) = rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .unzip();
+        let ids: Vec<Ulid> = item_ids.iter().flatten().copied().collect();
+        let carried = item_table::carried_to_many(conn, &ids)?;
+        for (hit, id) in hits.iter_mut().zip(item_ids) {
+            hit.carried_to = id.and_then(|id| carried.get(&id)).map(CarriedTo::from);
         }
-    }
-    Ok(hits)
+        Ok(hits)
+    })
 }
 
 // どちらの文も、`?1` が検索語、`?2` が期間の始め、`?3` が終わり、`?4` が種類（JSON の配列）、
@@ -215,15 +214,23 @@ const LIKE_SQL: &str = with_body!(
     " LIMIT ?5",
 );
 
-fn from_row(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
-    Ok(SearchHit {
-        kind: row.get(0)?,
+/// 結果の1行と、項目なら項目の id（持ち越し先を読むため）。
+fn from_row(row: &Row<'_>) -> rusqlite::Result<(SearchHit, Option<Ulid>)> {
+    let kind: SearchKind = row.get(0)?;
+    // 項目の ref_id は item.id なので、ULID として読む（ノート・振り返りは日付）
+    let item_id = match kind {
+        SearchKind::Todo | SearchKind::Blocker => Some(row.get(1)?),
+        SearchKind::Note | SearchKind::Reflection => None,
+    };
+    let hit = SearchHit {
+        kind,
         ref_id: row.get(1)?,
         date: row.get(2)?,
         body: row.get(3)?,
         resolution_note: row.get(4)?,
         carried_to: None,
-    })
+    };
+    Ok((hit, item_id))
 }
 
 /// 検索語を、FTS5 の1つの句（`"…"`）にする。句の中の `"` は2つ重ねる。

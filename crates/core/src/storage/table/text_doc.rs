@@ -115,7 +115,10 @@ pub fn nonblank_dates(
         return Ok(found);
     }
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT date, body FROM {} WHERE date < ?1 AND date > ?2 ORDER BY date DESC",
+        // 半角の空白・タブ・改行だけの本文は SQL で外し、読む本文を減らす（空白の行が多くても、
+        // 本文をすべて読まずに済むように）。それ以外の空白（全角の空白など）は下で確かめる
+        "SELECT date, body FROM {} WHERE date < ?1 AND date > ?2 \
+         AND trim(body, ' ' || char(9, 10, 11, 12, 13)) <> '' ORDER BY date DESC",
         doc.table()
     ))?;
     // 下限なしは空の文字列（どの日付より小さい）にして、主キーの範囲で読めるようにする

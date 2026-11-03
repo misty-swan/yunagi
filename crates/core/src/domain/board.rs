@@ -11,15 +11,14 @@
 use std::collections::BTreeMap;
 use std::ops::{Add, AddAssign};
 
-use jiff::civil::Weekday;
 use rusqlite::Connection;
 
 use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
-use crate::storage::StorageError;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
+use crate::storage::{StorageError, in_read_transaction};
 
 // ---- 件数 ----
 
@@ -139,25 +138,17 @@ pub struct WeekCounts {
 }
 
 /// `date` を含む週の日：月曜から金曜まで（画面設計書 9章。土日の日付では、その前の月曜から金曜）。
-/// 古い順。暦の端（0001-01-01・9999-12-31）の外の日は入れない。
+/// 古い順で、いつも5日。
 pub fn week_days(date: LogicalDate) -> Vec<LogicalDate> {
-    // 土曜・日曜も、その週の月曜から数える（月曜は 0、日曜は 6）
+    // 月曜は 0、日曜は 6。0001-01-01 は月曜なので、月曜までさかのぼる日はいつも暦の中にある
     let from_monday = date.as_date().weekday().to_monday_zero_offset();
-    let mut monday = Some(date);
-    for _ in 0..from_monday {
-        monday = monday.and_then(LogicalDate::yesterday);
-    }
-    // 月曜が暦の外なら、扱える最初の日から始める（0001-01-01 は月曜なので、実際には起きない）
-    let mut day = monday.or(Some(LogicalDate::MIN));
-    let mut days = Vec::with_capacity(5);
-    while let Some(d) = day {
-        if days.len() == 5 || d.as_date().weekday() == Weekday::Saturday {
-            break;
-        }
-        days.push(d);
-        day = d.tomorrow();
-    }
-    days
+    let monday = (0..from_monday).fold(date, |d, _| {
+        d.yesterday().expect("Monday of a week is in the calendar")
+    });
+    // 9999-12-31 は金曜なので、金曜までの日もいつも暦の中にある
+    std::iter::successors(Some(monday), |d| d.tomorrow())
+        .take(5)
+        .collect()
 }
 
 /// `date` を含む週（[`week_days`]）の日ごとの件数と合計。
@@ -221,7 +212,13 @@ pub struct OpenBoard {
 }
 
 /// その日のボード。項目の無い日は、項目が空で、振り返りが空、ノートは見出しが無く長さ 0。
+///
+/// 項目・持ち越し先・振り返り・ノートは、同じ時点の内容を読む（途中でほかの接続が書いても食い違わない）。
 pub fn get_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageError> {
+    in_read_transaction(conn, || read_board(conn, date))
+}
+
+fn read_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageError> {
     let (todos, blockers) = board_items(conn, date, |_| true)?;
     let reflection = text_doc::get(conn, TextDoc::Reflection, date)?
         .map(|row| row.body)
@@ -246,8 +243,11 @@ pub fn get_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageE
 
 /// その日の未完了の TODO と未解消の障害（`status = open`）。過去の日の項目は持ち越しても `status` を
 /// 変えないので、持ち越し済みの項目も入る（件数の「残り」と同じく、その日の終わりの状態を表す）。
+/// 項目と持ち越し先は、同じ時点の内容を読む。
 pub fn open_board(conn: &Connection, date: LogicalDate) -> Result<OpenBoard, StorageError> {
-    let (todos, blockers) = board_items(conn, date, |i| i.status == ItemStatus::Open)?;
+    let (todos, blockers) = in_read_transaction(conn, || {
+        board_items(conn, date, |i| i.status == ItemStatus::Open)
+    })?;
     Ok(OpenBoard {
         date,
         todos,
@@ -261,15 +261,16 @@ fn board_items(
     date: LogicalDate,
     keep: impl Fn(&Item) -> bool,
 ) -> Result<(Vec<BoardItem>, Vec<BoardItem>), StorageError> {
+    let items: Vec<Item> = item_table::list_by_date(conn, date)?
+        .into_iter()
+        .filter(|i| keep(i))
+        .collect();
+    let ids: Vec<_> = items.iter().map(|i| i.id).collect();
+    let carried = item_table::carried_to_many(conn, &ids)?;
     let mut todos = Vec::new();
     let mut blockers = Vec::new();
-    for item in item_table::list_by_date(conn, date)? {
-        if !keep(&item) {
-            continue;
-        }
-        let carried_to = item_table::carried_to(conn, item.id, None)?
-            .as_ref()
-            .map(CarriedTo::from);
+    for item in items {
+        let carried_to = carried.get(&item.id).map(CarriedTo::from);
         let list = match item.kind {
             ItemKind::Todo => &mut todos,
             ItemKind::Blocker => &mut blockers,
@@ -297,14 +298,18 @@ pub fn recent_days(
         return Ok(Vec::new());
     };
     // 項目のある日とノートのある日を、それぞれ新しい順に `before` 日まで読み、合わせて新しい順に切る
-    let mut days = item_table::dates_before(conn, today, before)?;
-    days.extend(text_doc::nonblank_dates(
-        conn,
-        TextDoc::Note,
-        today,
-        None,
-        before,
-    )?);
+    // （2つを同じ時点の内容で読む）
+    let mut days = in_read_transaction(conn, || {
+        let mut days = item_table::dates_before(conn, today, before)?;
+        days.extend(text_doc::nonblank_dates(
+            conn,
+            TextDoc::Note,
+            today,
+            None,
+            before,
+        )?);
+        Ok::<_, StorageError>(days)
+    })?;
     days.sort_unstable_by(|a, b| b.cmp(a));
     days.dedup();
     days.truncate(before);
