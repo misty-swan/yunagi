@@ -403,7 +403,9 @@ pub fn resolve_blocker(
         let mut changes = ItemChanges::default();
         if let Some(note) = note {
             match item.resolution_note.as_deref() {
-                Some(existing) if existing == note => {}
+                // 保存済みの解消メモはいつも前後の空白を除いた形だが、除かずに入った値でも
+                // 同じ本文と判定する（やり直しが note_exists にならないように）
+                Some(existing) if existing.trim() == note => {}
                 Some(existing) if !existing.trim().is_empty() => {
                     return Err(Conflict::NoteExists {
                         resolution_note: existing.to_owned(),
@@ -439,11 +441,7 @@ fn add_by_agent(
 ) -> Result<Item, ItemError> {
     in_transaction(conn, || {
         agent::require_scope(conn, agent.client_id, op.scope())?;
-        let text = one_line(
-            text,
-            InvalidArgument::EmptyText,
-            InvalidArgument::MultilineText,
-        )?;
+        let text = one_line_text(text)?;
         if agent.ui.save_failing() {
             return Err(ItemError::StorageUnavailable);
         }
@@ -475,16 +473,9 @@ fn edit_by_agent(
 ) -> Result<Outcome, ItemError> {
     in_transaction(conn, || {
         let item = target_for_agent(conn, agent, op, id)?;
-        let text = one_line(
-            text,
-            InvalidArgument::EmptyText,
-            InvalidArgument::MultilineText,
-        )?;
+        let text = one_line_text(text)?;
         ready_for_agent(conn, agent, &item, Some(ItemField::Text))?;
-        let changes = ItemChanges {
-            text: (text != item.text).then_some(text),
-            ..ItemChanges::default()
-        };
+        let changes = text_change(&item, text);
         apply(conn, Some((agent, op)), item, changes, now)
     })
 }
@@ -562,11 +553,7 @@ pub fn add(
     now: Timestamp,
 ) -> Result<Item, ItemError> {
     in_transaction(conn, || {
-        let text = one_line(
-            text,
-            InvalidArgument::EmptyText,
-            InvalidArgument::MultilineText,
-        )?;
+        let text = one_line_text(text)?;
         insert_new(
             conn,
             NewItem {
@@ -592,18 +579,9 @@ pub fn save_text(
     now: Timestamp,
 ) -> Result<Outcome, ItemError> {
     in_transaction(conn, || {
-        let item = load(conn, id)?;
-        check_not_dropped(&item)?;
-        let text = one_line(
-            text,
-            InvalidArgument::EmptyText,
-            InvalidArgument::MultilineText,
-        )?;
-        check_not_carried(conn, &item)?;
-        let changes = ItemChanges {
-            text: (text != item.text).then_some(text),
-            ..ItemChanges::default()
-        };
+        let text = one_line_text(text)?;
+        let item = target_for_screen(conn, id)?;
+        let changes = text_change(&item, text);
         apply(conn, None, item, changes, now)
     })
 }
@@ -620,9 +598,7 @@ pub fn set_closed(
     now: Timestamp,
 ) -> Result<Outcome, ItemError> {
     in_transaction(conn, || {
-        let item = load(conn, id)?;
-        check_not_dropped(&item)?;
-        check_not_carried(conn, &item)?;
+        let item = target_for_screen(conn, id)?;
         let closed = match item.kind {
             ItemKind::Todo => ItemStatus::Done,
             ItemKind::Blocker => ItemStatus::Resolved,
@@ -641,14 +617,6 @@ pub fn save_resolution_note(
     now: Timestamp,
 ) -> Result<Outcome, ItemError> {
     in_transaction(conn, || {
-        let item = load(conn, id)?;
-        if item.kind != ItemKind::Blocker {
-            return Err(InvalidArgument::WrongKind {
-                item_kind: item.kind,
-                use_operation: None,
-            }
-            .into());
-        }
         let note = match one_line(
             note,
             InvalidArgument::EmptyNote,
@@ -658,7 +626,14 @@ pub fn save_resolution_note(
             Err(InvalidArgument::EmptyNote) => None,
             Err(e) => return Err(e.into()),
         };
-        check_not_carried(conn, &item)?;
+        let item = target_for_screen(conn, id)?;
+        if item.kind != ItemKind::Blocker {
+            return Err(InvalidArgument::WrongKind {
+                item_kind: item.kind,
+                use_operation: None,
+            }
+            .into());
+        }
         let changes = ItemChanges {
             resolution_note: (note != item.resolution_note).then_some(note),
             ..ItemChanges::default()
@@ -689,7 +664,7 @@ pub fn move_item(
 ) -> Result<Outcome, ItemError> {
     in_transaction(conn, || {
         let item = load(conn, id)?;
-        let key = key_at(conn, item.date, position, Some(&item), now)?;
+        let key = key_at(conn, item.date, position, Some(&item))?;
         let changes = ItemChanges {
             sort_key: (key != item.sort_key).then_some(key),
             ..ItemChanges::default()
@@ -712,19 +687,9 @@ pub fn split(
     now: Timestamp,
 ) -> Result<(Item, Item), ItemError> {
     in_transaction(conn, || {
-        let item = load(conn, id)?;
-        check_not_dropped(&item)?;
-        let first = one_line(
-            first,
-            InvalidArgument::EmptyText,
-            InvalidArgument::MultilineText,
-        )?;
-        let second = one_line(
-            second,
-            InvalidArgument::EmptyText,
-            InvalidArgument::MultilineText,
-        )?;
-        check_not_carried(conn, &item)?;
+        let first = one_line_text(first)?;
+        let second = one_line_text(second)?;
+        let item = target_for_screen(conn, id)?;
         // 項目があるので day の行もある。tz は使われない
         let new = insert_new(
             conn,
@@ -739,12 +704,10 @@ pub fn split(
             &TimeZone::UTC,
             now,
         )?;
-        let changes = ItemChanges {
-            text: (first != item.text).then_some(first),
-            ..ItemChanges::default()
-        };
-        let outcome = apply(conn, None, item, changes, now)?;
-        Ok((outcome.item, new))
+        let changes = text_change(&item, first);
+        apply(conn, None, item, changes, now)?;
+        // 新しい項目を入れたときに、その日のキーを付け直していることがあるので、読み直す
+        Ok((load(conn, id)?, new))
     })
 }
 
@@ -779,6 +742,32 @@ fn load(conn: &Connection, id: Ulid) -> Result<Item, ItemError> {
         Some(item) if item.deleted_at.is_none() => Ok(item),
         _ => Err(ItemError::NotFound),
     }
+}
+
+/// 画面で本文・状態・解消メモを変える項目を読む。取りやめた TODO と持ち越し済みの項目は変えられない
+/// （操作仕様書 2章。削除と並べ替えはこれを使わない）。
+fn target_for_screen(conn: &Connection, id: Ulid) -> Result<Item, ItemError> {
+    let item = load(conn, id)?;
+    check_not_dropped(&item)?;
+    check_not_carried(conn, &item)?;
+    Ok(item)
+}
+
+/// 本文を `text`（整えたもの）にする書き換え。今と同じなら何も変えない。
+fn text_change(item: &Item, text: String) -> ItemChanges {
+    ItemChanges {
+        text: (text != item.text).then_some(text),
+        ..ItemChanges::default()
+    }
+}
+
+/// 項目の本文を整える（[`one_line`]）。
+fn one_line_text(text: &str) -> Result<String, InvalidArgument> {
+    one_line(
+        text,
+        InvalidArgument::EmptyText,
+        InvalidArgument::MultilineText,
+    )
 }
 
 /// 取りやめた TODO なら [`InvalidArgument::Dropped`]。
@@ -867,7 +856,7 @@ fn apply(
         // 同じトランザクションで読んだばかりなので、ふつうは起きない
         return Err(ItemError::NotFound);
     }
-    let after = load(conn, item.id)?;
+    let after = changes.applied_to(&item, now);
     if let Some((agent, op)) = by {
         record(
             conn,
@@ -903,7 +892,7 @@ fn insert_new(
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Item, ItemError> {
-    let sort_key = key_at(conn, new.date, new.position, None, now)?;
+    let sort_key = key_at(conn, new.date, new.position, None)?;
     day::ensure(conn, new.date, tz, now)?;
     let item = Item {
         id: Ulid::generate(),
@@ -939,7 +928,6 @@ fn key_at(
     date: LogicalDate,
     position: Position,
     moving: Option<&Item>,
-    now: Timestamp,
 ) -> Result<String, ItemError> {
     let items: Vec<Item> = item_table::list_by_date(conn, date)?
         .into_iter()
@@ -969,16 +957,13 @@ fn key_at(
     if let Some(key) = sort_key::between(before, after) {
         return Ok(key);
     }
-    // 付け直す。`at` の位置を空けておく
+    // 付け直す。`at` の位置を空けておく。並び順は変わらないので、updated_at は変えず、
+    // エージェントの操作でも記録しない（データモデル設計書 3章 item）
     let keys = sort_key::spread(items.len() + 1);
     for (i, item) in items.iter().enumerate() {
         let key = &keys[if i < at { i } else { i + 1 }];
         if &item.sort_key != key {
-            let changes = ItemChanges {
-                sort_key: Some(key.clone()),
-                ..ItemChanges::default()
-            };
-            item_table::update_fields(conn, item.id, &changes, now)?;
+            item_table::renumber_sort_key(conn, item.id, key)?;
         }
     }
     Ok(keys[at].clone())
@@ -1649,9 +1634,24 @@ mod tests {
         );
         assert_eq!(json(&log.after)["resolution_note"], "DNS が原因");
 
-        // 同じ本文なら何も変えない
+        // 同じ本文なら何も変えない。保存済みの側に前後の空白があっても同じ本文とみなす
         let again = resolve_blocker(conn, &cli(), b.id, Some("DNS が原因"), at(T2)).unwrap();
         assert!(!again.updated());
+        conn.execute(
+            "UPDATE item SET resolution_note = 'DNS が原因 ' WHERE id = ?1",
+            [b.id],
+        )
+        .unwrap();
+        assert!(
+            !resolve_blocker(conn, &cli(), b.id, Some("DNS が原因"), at(T2))
+                .unwrap()
+                .updated()
+        );
+        conn.execute(
+            "UPDATE item SET resolution_note = 'DNS が原因' WHERE id = ?1",
+            [b.id],
+        )
+        .unwrap();
         // 違う本文なら note_exists
         assert_eq!(
             conflict(resolve_blocker(conn, &cli(), b.id, Some("別"), at(T2))),
@@ -1997,6 +1997,30 @@ mod tests {
         assert_eq!(ids, [first.id, c.id, second.id]);
         assert!(items.iter().all(|i| sort_key::is_valid(&i.sort_key)));
         assert!(items.windows(2).all(|w| w[0].sort_key < w[1].sort_key));
+        // 付け直した項目の updated_at は変えない
+        assert_eq!(get(conn, first.id).updated_at, at(T0));
+        assert_eq!(get(conn, second.id).updated_at, at(T0));
+    }
+
+    #[test]
+    fn split_returns_the_original_as_saved_after_renumbering() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let a = todo(conn, "abc");
+        let b = todo(conn, "z");
+        // 同じキーで、間に作れない
+        conn.execute("UPDATE item SET sort_key = 'a'", []).unwrap();
+        let (first, second) = if a.id < b.id { (a, b) } else { (b, a) };
+        // 元の本文はそのまま（書き換える欄は無い）
+        let text = first.text.clone();
+        let (original, new) = split(conn, first.id, &text, "def", at(T1)).unwrap();
+        assert_eq!(original, get(conn, first.id));
+        let ids: Vec<_> = item_table::list_by_date(conn, date("2026-11-03"))
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(ids, [first.id, new.id, second.id]);
     }
 
     #[test]

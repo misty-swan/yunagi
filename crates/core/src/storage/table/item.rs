@@ -186,6 +186,51 @@ impl ItemChanges {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+
+    /// [`update_fields`] で書いた後の行：`item` に書き換えを当て、`updated_at` を `now` にしたもの。
+    /// 書き換える欄が無ければ `item` のまま。
+    pub fn applied_to(&self, item: &Item, now: Timestamp) -> Item {
+        if self.is_empty() {
+            return item.clone();
+        }
+        let mut after = item.clone();
+        if let Some(v) = &self.text {
+            after.text.clone_from(v);
+        }
+        if let Some(v) = self.status {
+            after.status = v;
+        }
+        if let Some(v) = self.close_reason {
+            after.close_reason = v;
+        }
+        if let Some(v) = &self.sort_key {
+            after.sort_key.clone_from(v);
+        }
+        if let Some(v) = &self.resolution_note {
+            after.resolution_note.clone_from(v);
+        }
+        if let Some(v) = self.completed_at {
+            after.completed_at = v;
+        }
+        after.updated_at = now;
+        after
+    }
+}
+
+/// 並び順のキーだけを書き換える。`updated_at` は変えない（その日のキーの付け直しに使う。並び順は
+/// 変わらないので、項目の変更として扱わない。データモデル設計書 3章 item）。
+/// 行が無いか、論理削除済みなら何もせず `false`。
+pub fn renumber_sort_key(
+    conn: &Connection,
+    id: Ulid,
+    sort_key: &str,
+) -> Result<bool, StorageError> {
+    let n = execute(
+        conn,
+        "UPDATE item SET sort_key = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+        params![id, sort_key],
+    )?;
+    Ok(n == 1)
 }
 
 /// 行の、`changes` の欄だけを書き換え、`updated_at` に `now` を入れる。ほかの欄には触れないので、
@@ -417,6 +462,7 @@ mod tests {
             ..item.clone()
         };
         assert_eq!(get(conn, item.id).unwrap(), Some(after_status.clone()));
+        assert_eq!(changes.applied_to(&item, t1), after_status);
 
         // 別の欄だけを書くと、前に書いた欄は残る。NULL にもできる
         let t2 = at("2026-11-03T05:00:00Z");
@@ -428,6 +474,10 @@ mod tests {
             ..ItemChanges::default()
         };
         assert!(update_fields(conn, item.id, &changes, t2).unwrap());
+        assert_eq!(
+            Some(changes.applied_to(&after_status, t2)),
+            get(conn, item.id).unwrap()
+        );
         assert_eq!(
             get(conn, item.id).unwrap(),
             Some(Item {
@@ -450,6 +500,25 @@ mod tests {
         // 書く欄が無ければ何もしない。行が無ければ false
         assert!(!update_fields(conn, item.id, &ItemChanges::default(), t2).unwrap());
         assert!(!update_fields(conn, Ulid::generate(), &changes, t2).unwrap());
+    }
+
+    #[test]
+    fn renumber_sort_key_keeps_updated_at() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = ensure_day(&db, "2026-11-03");
+        let item = todo(d, "x", "a");
+        insert(conn, &item).unwrap();
+        assert!(renumber_sort_key(conn, item.id, "V").unwrap());
+        assert_eq!(
+            get(conn, item.id).unwrap(),
+            Some(Item {
+                sort_key: "V".into(),
+                ..item.clone()
+            })
+        );
+        soft_delete(conn, item.id, at("2026-11-03T05:00:00Z")).unwrap();
+        assert!(!renumber_sort_key(conn, item.id, "W").unwrap());
     }
 
     #[test]

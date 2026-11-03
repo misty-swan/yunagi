@@ -311,8 +311,9 @@ fn write_by_agent(
     new_body: impl FnOnce(&str) -> Result<String, TextDocError>,
 ) -> Result<Written, TextDocError> {
     let doc = operation.doc();
-    agent::require_scope(conn, agent_client_id, operation.scope())?;
     in_transaction(conn, || {
+        // 権限の確かめも、書き込みと同じトランザクションで行う（項目の操作と同じ）
+        agent::require_scope(conn, agent_client_id, operation.scope())?;
         let current = get(conn, doc, date)?;
         let body = new_body(&current.body)?;
         if body == current.body {
