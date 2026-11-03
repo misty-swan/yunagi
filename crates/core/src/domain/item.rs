@@ -604,36 +604,49 @@ pub fn add(
     })
 }
 
-/// ノートの行から項目を作る（行送り。[`super::note_send::send`] だけが使う）。その日の末尾
-/// （[`Position::Last`] と同じ。同じ種類の中でも末尾になる）に、`origin = note` で作る。`text` は
-/// 整えた本文。人の操作なので記録しない。呼び出し側のトランザクションの中で呼ぶ。
+/// ノートの行から項目を作る（行送り。[`super::note_send::send`] だけが使う）。`texts`（整えた本文）
+/// の順に、その日の末尾（[`Position::Last`] と同じ。同じ種類の中でも末尾になる）へ、`origin = note`
+/// で作る。人の操作なので記録しない。呼び出し側のトランザクションの中で呼ぶ。
+///
+/// 末尾のキーは、複数行を送っても読み込みと付け直しが1回で済むよう、[`key_at`] を1件ずつ呼ばずに
+/// まとめて作る（末尾は基準の項目を使わないので、位置の誤りは起きない）。末尾の後ろにまとめて
+/// 作れなければ、[`key_at`] と同じく、その日のキーを並び順を変えずに付け直して空ける。
 pub(crate) fn add_from_note(
     conn: &Connection,
     date: LogicalDate,
     kind: ItemKind,
-    text: String,
+    texts: Vec<String>,
     tz: &TimeZone,
     now: Timestamp,
-) -> Result<Item, StorageError> {
-    // 末尾は基準の項目を使わないので、位置の誤りは起きない（key_at を使わずに求める）
+) -> Result<Vec<Item>, StorageError> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
     let items = item_table::list_by_date(conn, date)?;
-    let sort_key = match sort_key::between(items.last().map(|i| i.sort_key.as_str()), None) {
-        Some(key) => key,
-        None => renumber(conn, &items, items.len(), 1)?.remove(0),
+    let last = items.last().map(|i| i.sort_key.as_str());
+    let keys = match sort_key::n_between(last, None, texts.len()) {
+        Some(keys) => keys,
+        None => renumber(conn, &items, items.len(), texts.len())?,
     };
     day::ensure(conn, date, tz, now)?;
-    insert_row(
-        conn,
-        NewItem {
-            date,
-            kind,
-            text,
-            sort_key,
-            origin: Origin::Note,
-            agent_client_id: None,
-        },
-        now,
-    )
+    texts
+        .into_iter()
+        .zip(keys)
+        .map(|(text, sort_key)| {
+            insert_row(
+                conn,
+                NewItem {
+                    date,
+                    kind,
+                    text,
+                    sort_key,
+                    origin: Origin::Note,
+                    agent_client_id: None,
+                },
+                now,
+            )
+        })
+        .collect()
 }
 
 /// 画面で項目の本文を保存する。前後の空白を除いて今と同じなら書かない。取りやめた TODO と
