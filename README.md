@@ -7,11 +7,23 @@ PC画面全体を「その日の仕事ノート1枚」として使う、エン�
 | 場所 | 中身 |
 | --- | --- |
 | `crates/core/` | コア（`yunagi-core`）。ドメイン層（`domain`）とストレージ（`storage`） |
-| `src-tauri/` | デスクトップアプリ（Tauri 2、`yunagi-app`）。コアを使う |
+| `src-tauri/` | デスクトップアプリ（Tauri 2、`yunagi-app`）。コアを使う。画面とコアのつなぎ（Tauri コマンド・イベント。`docs/design/01-architecture.md` 4.3） |
 | `crates/cli/` | コンソール用バイナリ `yunagi`（CLI・MCP サーバー）。コアを使う |
-| `src/` | 画面（TypeScript ＋ Svelte 5、Vite） |
+| `src/` | 画面（TypeScript ＋ Svelte 5、Vite）。コアの呼び出し口は `src/lib/core.ts` |
 
 Rust の3つのクレートは、直下の `Cargo.toml` で1つのワークスペースにまとめている。依存の版は `Cargo.lock` と `pnpm-lock.yaml` で固定する。
+
+### 画面と共有する型
+
+画面とコアが受け渡す型は Rust（`src-tauri/src/types.rs`）に書き、TypeScript の定義 `src/lib/bindings.ts` は ts-rs でそこから作る（手で書き換えない）。Rust の型やイベントの名前を変えたら、次で作り直す。
+
+```sh
+UPDATE_BINDINGS=1 cargo test -p yunagi-app --lib bindings   # bindings.ts を Rust の型から作り直す
+```
+
+作り直さないまま `pnpm check` を走らせると、`bindings.ts` が Rust の型と食い違っているとして失敗する。
+
+画面とコアの結合テスト（`src-tauri/tests/bridge.rs`）は、窓を開かずに、画面からと同じ経路（IPC）でコマンドを呼び、結果とイベントを確かめる。既定ディレクトリを一時フォルダにするため、環境変数を設定してから1つのスレッドで順に走らせる（`pnpm check:rust` に含まれる）。
 
 ## 必要なもの
 

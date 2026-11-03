@@ -7,7 +7,9 @@
 
 use rusqlite::Connection;
 
+use crate::domain::logical_date::LogicalDate;
 use crate::storage::table::agent_client::{self, Scope};
+use crate::storage::table::text_doc::TextDoc;
 use crate::storage::{StorageError, Ulid};
 
 /// エージェント・CLI の呼び出し元。
@@ -46,9 +48,18 @@ pub enum ItemField {
     ResolutionNote,
 }
 
+/// ノート・振り返りの守る行（アーキテクチャ設計書 4.1「ノート・振り返りの守る行」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtectedLines {
+    /// 行番号を数えた本文（画面が最後に保存した本文）の版の番号。
+    pub rev: i64,
+    /// 守る行の番号（1始まり。`rev` の本文で数える）。昇順で重なりは無い。
+    pub lines: Vec<usize>,
+}
+
 /// エージェントの書き込みの判定に使う、画面の状態（アーキテクチャ設計書 4.1）。
 ///
-/// アプリの起動中は、画面から知らされた状態を返すものをアプリが渡す（画面とつながってから作る）。
+/// アプリの起動中は、画面から知らされた状態を返すものをアプリ（src-tauri の `ScreenState`）が渡す。
 pub trait UiState {
     /// 画面からの保存の書き込みに失敗して、再試行している間か。`true` なら、エージェントの
     /// 書き込みはすべて `storage_unavailable` になる。
@@ -57,6 +68,13 @@ pub trait UiState {
     /// 利用者が項目 `item_id` の欄 `field` を入力中か（フォーカスがあり、最後の入力から 10 秒以内か
     /// IME の変換中、またはまだ保存していない入力の書き込みを待っている間）。
     fn is_editing(&self, item_id: Ulid, field: ItemField) -> bool;
+
+    /// 日付 `date` のノート・振り返り `doc` の守る行。エディタにフォーカスが無く、まだ保存していない
+    /// 入力も無いとき（画面が知らせていないとき）は `None`。
+    ///
+    /// いまは受け取る形だけで、`edit_note` の判定（守る行への書き換えと、版が古いときの
+    /// `conflict`）は接続口の作業で使う。
+    fn protected_lines(&self, doc: TextDoc, date: LogicalDate) -> Option<ProtectedLines>;
 }
 
 /// 画面の無いときの状態：保存の失敗も入力中も無い。
@@ -73,6 +91,10 @@ impl UiState for NoUi {
 
     fn is_editing(&self, _: Ulid, _: ItemField) -> bool {
         false
+    }
+
+    fn protected_lines(&self, _: TextDoc, _: LogicalDate) -> Option<ProtectedLines> {
+        None
     }
 }
 
@@ -174,6 +196,10 @@ pub(crate) mod test_support {
 
         fn is_editing(&self, item_id: Ulid, field: ItemField) -> bool {
             self.editing.lock().unwrap().contains(&(item_id, field))
+        }
+
+        fn protected_lines(&self, _: TextDoc, _: LogicalDate) -> Option<ProtectedLines> {
+            None
         }
     }
 }
