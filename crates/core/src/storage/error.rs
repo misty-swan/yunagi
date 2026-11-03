@@ -274,7 +274,7 @@ mod tests {
     fn close_error_display_does_not_repeat_its_source() {
         let dir = tempfile::tempdir().unwrap();
         let lock = DbLock::acquire(&DefaultDir::for_test(dir.path()), Duration::ZERO).unwrap();
-        let db = Database::open(lock, dir.path().join("yunagi.db")).unwrap();
+        let db = Database::create(lock).unwrap();
         let err = CloseError {
             error: StorageError::Io(io_err()),
             db,
