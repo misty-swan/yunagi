@@ -445,6 +445,7 @@ fn add_by_agent(
         if agent.ui.save_failing() {
             return Err(ItemError::StorageUnavailable);
         }
+        day::ensure(conn, date, tz, now)?;
         let item = insert_new(
             conn,
             NewItem {
@@ -455,7 +456,6 @@ fn add_by_agent(
                 origin: Origin::Agent,
                 agent_client_id: Some(agent.client_id),
             },
-            tz,
             now,
         )?;
         record(conn, agent, op, item.id, None, Some(item_json(&item)), now)?;
@@ -554,6 +554,9 @@ pub fn add(
 ) -> Result<Item, ItemError> {
     in_transaction(conn, || {
         let text = one_line_text(text)?;
+        // 位置の誤りでは day の行を作らないよう、先に確かめる
+        key_at(conn, date, kind, position, None)?;
+        day::ensure(conn, date, tz, now)?;
         insert_new(
             conn,
             NewItem {
@@ -564,7 +567,6 @@ pub fn add(
                 origin: Origin::Human,
                 agent_client_id: None,
             },
-            tz,
             now,
         )
     })
@@ -634,8 +636,14 @@ pub fn save_resolution_note(
             }
             .into());
         }
+        // 保存済みの側も前後の空白を除いて比べる（resolve_blocker と同じ）。空白だけなら空とみなす
+        let current = item
+            .resolution_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
         let changes = ItemChanges {
-            resolution_note: (note != item.resolution_note).then_some(note),
+            resolution_note: (note.as_deref() != current).then_some(note),
             ..ItemChanges::default()
         };
         apply(conn, None, item, changes, now)
@@ -664,7 +672,7 @@ pub fn move_item(
 ) -> Result<Outcome, ItemError> {
     in_transaction(conn, || {
         let item = load(conn, id)?;
-        let key = key_at(conn, item.date, position, Some(&item))?;
+        let key = key_at(conn, item.date, item.kind, position, Some(&item))?;
         let changes = ItemChanges {
             sort_key: (key != item.sort_key).then_some(key),
             ..ItemChanges::default()
@@ -690,7 +698,7 @@ pub fn split(
         let first = one_line_text(first)?;
         let second = one_line_text(second)?;
         let item = target_for_screen(conn, id)?;
-        // 項目があるので day の行もある。tz は使われない
+        // 元の項目があるので、day の行もある
         let new = insert_new(
             conn,
             NewItem {
@@ -701,7 +709,6 @@ pub fn split(
                 origin: Origin::Human,
                 agent_client_id: None,
             },
-            &TimeZone::UTC,
             now,
         )?;
         let changes = text_change(&item, first);
@@ -885,15 +892,9 @@ struct NewItem {
     agent_client_id: Option<Ulid>,
 }
 
-/// 項目を作る。その日の day の行が無ければ端末のタイムゾーン `tz` で作る。
-fn insert_new(
-    conn: &Connection,
-    new: NewItem,
-    tz: &TimeZone,
-    now: Timestamp,
-) -> Result<Item, ItemError> {
-    let sort_key = key_at(conn, new.date, new.position, None)?;
-    day::ensure(conn, new.date, tz, now)?;
+/// 項目を作る。その日の day の行が先に要る（呼び出し側が [`day::ensure`] で作る）。
+fn insert_new(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, ItemError> {
+    let sort_key = key_at(conn, new.date, new.kind, new.position, None)?;
     let item = Item {
         id: Ulid::generate(),
         date: new.date,
@@ -918,14 +919,18 @@ fn insert_new(
     Ok(item)
 }
 
-/// その日の並びの `position` に置くキー。`moving` は動かす項目（並びから除いて数える）で、
-/// すでにその位置にあれば、そのキーをそのまま返す。
+/// その日の並びの `position` に置く、種類 `kind` の項目のキー。`moving` は動かす項目（並びから除いて
+/// 数える）で、すでにその位置にあれば、そのキーをそのまま返す。
+///
+/// TODO と障害は1つの並びにキーを持つが、画面はそれぞれの種類だけを並べるので、`Before`・`After` の
+/// 基準は同じ種類の項目に限る（違う種類なら [`InvalidArgument::InvalidPosition`]）。
 ///
 /// 隣のキーの間にキーを作れない（形に当てはまらない、同じキーが並ぶ）ときは、その日のほかの項目の
 /// キーを付け直してから作る（並び順は変えない）。
 fn key_at(
     conn: &Connection,
     date: LogicalDate,
+    kind: ItemKind,
     position: Position,
     moving: Option<&Item>,
 ) -> Result<String, ItemError> {
@@ -936,7 +941,7 @@ fn key_at(
     let index_of = |id: Ulid| {
         items
             .iter()
-            .position(|i| i.id == id)
+            .position(|i| i.id == id && i.kind == kind)
             .ok_or(InvalidArgument::InvalidPosition)
     };
     let at = match position {
@@ -1029,21 +1034,30 @@ fn item_json(item: &Item) -> Value {
     })
 }
 
-/// `changes` が書き換える欄だけの、`item` での値（書き換えの `before` / `after`）。
+/// `changes` が書き換える欄だけの、`item` での値（書き換えの `before` / `after`）。値の形は
+/// [`item_json`] と同じ。
 fn fields_json(item: &Item, changes: &ItemChanges) -> Value {
-    let all = item_json(item);
     let mut fields = Map::new();
-    for (name, written) in [
-        ("text", changes.text.is_some()),
-        ("status", changes.status.is_some()),
-        ("close_reason", changes.close_reason.is_some()),
-        ("sort_key", changes.sort_key.is_some()),
-        ("resolution_note", changes.resolution_note.is_some()),
-        ("completed_at", changes.completed_at.is_some()),
-    ] {
-        if written {
-            fields.insert(name.to_owned(), all[name].clone());
-        }
+    if changes.text.is_some() {
+        fields.insert("text".into(), json!(item.text));
+    }
+    if changes.status.is_some() {
+        fields.insert("status".into(), json!(item.status.as_str()));
+    }
+    if changes.close_reason.is_some() {
+        fields.insert(
+            "close_reason".into(),
+            json!(item.close_reason.map(CloseReason::as_str)),
+        );
+    }
+    if changes.sort_key.is_some() {
+        fields.insert("sort_key".into(), json!(item.sort_key));
+    }
+    if changes.resolution_note.is_some() {
+        fields.insert("resolution_note".into(), json!(item.resolution_note));
+    }
+    if changes.completed_at.is_some() {
+        fields.insert("completed_at".into(), time_json(item.completed_at));
     }
     Value::Object(fields)
 }

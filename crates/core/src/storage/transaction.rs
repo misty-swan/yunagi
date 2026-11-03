@@ -11,6 +11,9 @@ use rusqlite::Connection;
 ///
 /// - `f` の失敗は、取り消しにも失敗したときでも `f` の失敗のまま返す（行き違いの最新の本文などを
 ///   失わないため）。
+/// - 外側のトランザクションは `BEGIN IMMEDIATE` で始め、はじめに書き込みのロックを取る。読んでから
+///   書く操作が、途中でロックを上げようとして、ほかの接続の書き込みとぶつかって失敗しない
+///   （WAL では、読んだ後にほかの接続が書くと、待たずに `SQLITE_BUSY` になる）ようにするため。
 /// - 確定（`COMMIT`）の失敗と、`f` の途中の panic でも取り消す。トランザクションが開いたまま
 ///   残ると、以後の書き込みがすべてその中に入り、確定されないため。
 pub(crate) fn in_transaction<T, E: From<rusqlite::Error>>(
@@ -39,7 +42,7 @@ impl<'c> TransactionGuard<'c> {
     fn begin(conn: &'c Connection) -> rusqlite::Result<Self> {
         let outermost = conn.is_autocommit();
         if outermost {
-            conn.execute_batch("BEGIN")?;
+            conn.execute_batch("BEGIN IMMEDIATE")?;
         } else {
             conn.execute_batch(&format!("SAVEPOINT {}", Self::SAVEPOINT))?;
         }

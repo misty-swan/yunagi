@@ -16,7 +16,7 @@ pub struct Agent<'a> {
     /// 操作したエージェント（CLI は `agent_client::CLI_ID`）。
     pub client_id: Ulid,
     /// 画面の状態。アプリの停止中（直接モード）は [`NO_UI`]。
-    pub ui: &'a dyn UiState,
+    pub ui: &'a (dyn UiState + Sync),
 }
 
 impl std::fmt::Debug for Agent<'_> {
@@ -119,8 +119,8 @@ pub fn require_scope(conn: &Connection, client_id: Ulid, scope: Scope) -> Result
 pub(crate) mod test_support {
     //! エージェントの書き込みのテストで共通に使うもの。
 
-    use std::cell::RefCell;
     use std::collections::HashSet;
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -135,13 +135,13 @@ pub(crate) mod test_support {
     #[derive(Default)]
     pub struct FakeUi {
         pub save_failing: bool,
-        pub editing: RefCell<HashSet<(Ulid, ItemField)>>,
+        pub editing: Mutex<HashSet<(Ulid, ItemField)>>,
     }
 
     impl FakeUi {
         pub fn editing(item_id: Ulid, field: ItemField) -> Self {
             let ui = Self::default();
-            ui.editing.borrow_mut().insert((item_id, field));
+            ui.editing.lock().unwrap().insert((item_id, field));
             ui
         }
     }
@@ -152,7 +152,7 @@ pub(crate) mod test_support {
         }
 
         fn is_editing(&self, item_id: Ulid, field: ItemField) -> bool {
-            self.editing.borrow().contains(&(item_id, field))
+            self.editing.lock().unwrap().contains(&(item_id, field))
         }
     }
 }
