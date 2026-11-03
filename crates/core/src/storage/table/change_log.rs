@@ -3,6 +3,8 @@
 //! 何を記録するか（実際に何かを変えた操作だけ）や、取り消しの手順は、変更履歴の課題で
 //! ドメイン層に作る。ここでは行を入れる・読む・印を付けるだけ。
 
+use std::collections::HashSet;
+
 use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -226,6 +228,22 @@ pub fn count_unseen_by_agents(conn: &Connection) -> Result<u64, StorageError> {
     )?;
     // COUNT(*) は 0 以上
     Ok(n.unsigned_abs())
+}
+
+/// その日 `date` の項目のうち、エージェントによる未確認の変更（`actor = agent` で `seen_at` が NULL の
+/// 記録）がある項目の id（データモデル設計書 3章 change_log。項目の行頭の菱形）。削除した項目も入りうる。
+pub fn unseen_items_by_agents(
+    conn: &Connection,
+    date: LogicalDate,
+) -> Result<HashSet<Ulid>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT change_log.target_id FROM change_log \
+         JOIN item ON item.id = change_log.target_id \
+         WHERE change_log.target_type = ?1 AND change_log.actor = ?2 \
+         AND change_log.seen_at IS NULL AND item.date = ?3",
+    )?;
+    let rows = stmt.query_map(params![TargetType::Item, Actor::Agent, date], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 #[cfg(test)]

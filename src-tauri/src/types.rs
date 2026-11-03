@@ -369,6 +369,11 @@ pub struct CarriedTo {
 pub struct BoardItem {
     pub item: Item,
     pub carried_to: Option<CarriedTo>,
+    /// エージェントが作った項目なら、作ったエージェントの識別子（`claude-code` など。agent_client の
+    /// `name`）。画面は本文の後ろに名前を添える（画面設計書 3章「各領域の表示」）。
+    pub agent_name: Option<String>,
+    /// エージェントによる未確認の変更がある（行頭の菱形）。
+    pub unseen: bool,
 }
 
 /// ノートの時刻付き見出し（`## 10:00 定例`）。
@@ -423,11 +428,18 @@ pub struct Board {
     pub note: NoteOutline,
 }
 
-impl From<board::Board> for Board {
-    fn from(b: board::Board) -> Self {
-        let items = |list: Vec<board::BoardItem>| {
+impl From<board::ScreenBoard> for Board {
+    fn from(sb: board::ScreenBoard) -> Self {
+        let board::ScreenBoard {
+            board: b,
+            mut agent_names,
+            unseen,
+        } = sb;
+        let mut items = |list: Vec<board::BoardItem>| {
             list.into_iter()
                 .map(|bi| BoardItem {
+                    agent_name: agent_names.remove(&bi.item.id),
+                    unseen: unseen.contains(&bi.item.id),
                     item: bi.item.into(),
                     carried_to: bi.carried_to.map(|c| CarriedTo {
                         id: Id(c.id),

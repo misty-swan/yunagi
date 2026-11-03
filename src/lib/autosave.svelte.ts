@@ -1,5 +1,6 @@
 // 自動保存（要件 F-08、docs/design/01-architecture.md 4.1「自動保存」、画面設計書 3章「保存状態」）。
-// 見た目は持たない（画面の作業で、エディタと項目の行からこれを呼ぶ）。
+// 見た目は持たない（整理モードの一覧 src/lib/board.svelte.ts と、振り返りのエディタ
+// src/board/ReflectionEditor.svelte がこれを呼ぶ）。
 //
 // - 入力のたびに知らせると（`edited`・`edit`）、まだ保存していない最初の入力から SAVE_DELAY_MS 後に
 //   保存する。入力が続いても待ち直さない（入力中に強制終了しても、失うのは直前の短い間の入力だけに
@@ -8,6 +9,7 @@
 //   応答を待ってから次を送る。項目は、待つ間に変えた欄を次の保存にまとめる。
 // - 保存先の問題で失敗したら（retryable）、内容を持ったまま、間を空けて自動で再試行する。
 //   その間は「保存できていません」（SaveStatus.failing）。入力は続けられる。
+// - 行の分割は、2行の本文を持ったまま再試行し、送る時点の本文で分ける（ItemSaves.split）。
 // - ノート・振り返りの保存の行き違い（rev が古い）では、最新の内容をエディタに取り込んでから
 //   （text_merge.ts）、保存し直す。項目は版の番号を持たず、変えた欄だけを送る。
 
@@ -252,17 +254,43 @@ abstract class Saver<P> {
     return true;
   }
 
+  /**
+   * 使うのをやめ、まだ送っていない内容を捨てる（送らない。作る前にやめた項目など）。送っている途中
+   * なら何もせず `false`。
+   */
+  abandon(): boolean {
+    if (this.#inFlight !== null) return false;
+    this.drop();
+    this.#pendingSince = null;
+    this.#failure = null;
+    this.#failures = 0;
+    this.#finish();
+    return true;
+  }
+
+  /** 送るのを待っている内容を捨てる（`abandon`）。 */
+  protected abstract drop(): void;
+
+  /** 片付け終えたら解決する（保存し終えるまで再試行を続けていても、終えた時点で）。 */
+  whenClosed(): Promise<void> {
+    return this.#closedPromise;
+  }
+
+  #resolveClosed: () => void = () => {};
+  readonly #closedPromise = new Promise<void>((r) => (this.#resolveClosed = r));
+
   #finish() {
     if (this.#closed) return;
     this.#closed = true;
     this.#clearTimer();
     this.#status.remove(this);
+    this.#resolveClosed();
   }
 }
 
 // ---- ノート・振り返り ----
 
-/** エディタの中身（画面の作業のエディタが渡す）。 */
+/** エディタの中身（エディタの部品が渡す）。 */
 export interface DocEditor {
   /** いまの本文。 */
   text(): string;
@@ -387,6 +415,10 @@ export class DocSaver extends Saver<Snapshot> {
     // 本文はエディタにあるので、戻すものは無い
   }
 
+  protected drop() {
+    // 本文はエディタにあるので、捨てるものは無い（ノート・振り返りは捨てない）
+  }
+
   /**
    * 本文の保存の失敗は、どれも内容を持ったまま再試行する（送り直して成功しない失敗は、本文の保存には
    * 無いはずで、あれば画面の不具合。捨てると、エディタに残った本文が保存されないまま「保存済み」に
@@ -427,8 +459,25 @@ const isEmptyPatch = (p: ItemPatch) =>
 export interface NewItem {
   date: LogicalDate;
   kind: ItemKind;
-  position: Position;
+  /**
+   * 入れる位置。関数なら送る時点で決める（前後の行がまだ作られていないうちに入力した行を、作る時点の
+   * 並びの位置に入れるため）。
+   */
+  position: Position | (() => Position);
 }
+
+/**
+ * 行の分割で作る項目（docs/design/01-architecture.md 4.1「自動保存」の行の分割）。元の項目 `from`
+ * （`ItemSaves` の名前）の本文を `first` に、作る項目の本文を、この項目の本文にする。
+ */
+interface SplitItem {
+  from: string;
+  /** 元の項目の本文（送る時点の値。分割を送り終えるまでの元の行の入力は、ここにまとめる）。 */
+  first: string;
+}
+
+/** 利用者が入力する欄の名前（`ItemSaves.unsaved`）。 */
+export type ItemFieldName = "text" | "resolutionNote" | "status";
 
 /** 項目の保存の結果の知らせ先。 */
 export interface ItemSaveEvents {
@@ -442,19 +491,60 @@ class ItemSaver extends Saver<ItemPatch> {
   readonly key: string;
   id: Id | null;
   #create: NewItem | null;
+  #split: SplitItem | null;
+  /** 分割を送っている間に入力した、元の行の本文（送り終えたら元の項目の保存に回す）。 */
+  #lateFirst: string | undefined;
   #pending: ItemPatch = {};
   /** 送っている欄（入力中とみなす欄を知らせるため）。 */
   #sendingPatch: ItemPatch | null = null;
   readonly #events: ItemSaveEvents;
+  /** 名前から、ほかの項目の待ち行列を引く（分割の元の項目。無ければ作る）。 */
+  readonly #lookup: (key: string) => ItemSaver | undefined;
   /** 作り終えた（ID が決まった）とき。 */
   onCreated?: (s: ItemSaver) => void;
 
-  constructor(status: SaveStatus, key: string, id: Id | null, create: NewItem | null, events: ItemSaveEvents) {
+  constructor(
+    status: SaveStatus,
+    key: string,
+    id: Id | null,
+    create: NewItem | null,
+    events: ItemSaveEvents,
+    lookup: (key: string) => ItemSaver | undefined = () => undefined,
+    split: SplitItem | null = null,
+  ) {
     super(status);
     this.key = key;
     this.id = id;
     this.#create = create;
+    this.#split = split;
     this.#events = events;
+    this.#lookup = lookup;
+  }
+
+  /** 分割を送り終えていない、分割で作る項目か。 */
+  get splitFrom(): string | null {
+    return this.id === null ? (this.#split?.from ?? null) : null;
+  }
+
+  /** 送っている途中か。 */
+  get inFlight(): boolean {
+    return this.sending;
+  }
+
+  /** 分割の元の行の本文を入力した（分割を送るときに一緒に送る）。 */
+  setFirst(text: string) {
+    if (this.#split === null) return;
+    if (this.sending) this.#lateFirst = text;
+    else this.#split.first = text;
+    this.markPending();
+  }
+
+  /** 分割の元の行の、まだ送っていない本文（分割を送らずにやめるとき、元の項目の保存に回す）。 */
+  takeFirst(): string | null {
+    const first = this.#lateFirst ?? this.#split?.first ?? null;
+    this.#split = null;
+    this.#lateFirst = undefined;
+    return first;
   }
 
   edit(patch: ItemPatch) {
@@ -474,7 +564,7 @@ class ItemSaver extends Saver<ItemPatch> {
 
   protected take(): ItemPatch | null {
     if (isEmptyPatch(this.#pending)) return null;
-    if (this.id === null && this.#create === null) {
+    if (this.id === null && this.#create === null && this.#split === null) {
       // 作るのに失敗して諦めた（reject）。作り直すと2つになりうるので、送らずに捨てて知らせる
       const p = this.#pending;
       this.#pending = {};
@@ -491,8 +581,7 @@ class ItemSaver extends Saver<ItemPatch> {
 
   protected async send(p: ItemPatch): Promise<Sent> {
     if (this.id === null) {
-      const create = this.#create!;
-      const item = await core.addItem(create.date, create.kind, p.text!, create.position);
+      const item = this.#split !== null ? await this.#sendSplit(this.#split, p.text!) : await this.#sendCreate(p.text!);
       this.id = item.id;
       this.#create = null;
       this.onCreated?.(this);
@@ -507,6 +596,36 @@ class ItemSaver extends Saver<ItemPatch> {
     return "done";
   }
 
+  async #sendCreate(text: string): Promise<Item> {
+    const create = this.#create!;
+    const position = typeof create.position === "function" ? create.position() : create.position;
+    return core.addItem(create.date, create.kind, text, position);
+  }
+
+  /**
+   * 分割を送る。元の項目の保存を先に送り終え（失敗していれば、その失敗で再試行を待つ）、送る時点の
+   * 元の行の本文 `first` と、この行の本文 `second` で分ける（`first` は空白だけにならない。画面は
+   * 空白だけの本文を送らず、空白だけの前半では分けないため）。
+   */
+  async #sendSplit(split: SplitItem, second: string): Promise<Item> {
+    const orig = this.#lookup(split.from);
+    if (orig !== undefined && !(await orig.flush())) {
+      throw new CoreError(orig.failure ?? { kind: "storage", detail: "the original item still has unsaved input" });
+    }
+    const origId = orig === undefined ? split.from : orig.id;
+    if (origId === null) throw new CoreError({ kind: "not_found" });
+    const r = await core.splitItem(origId, split.first, second);
+    this.#split = null;
+    this.#events.saved?.(split.from, r.original);
+    // 送っている間に入力した元の行の本文は、元の項目の保存として送る
+    if (this.#lateFirst !== undefined) {
+      const late = this.#lateFirst;
+      this.#lateFirst = undefined;
+      (orig ?? this.#lookup(origId))?.edit({ text: late });
+    }
+    return r.created;
+  }
+
   /**
    * 作る（`addItem`）ときは、保存先の問題（`storage`。トランザクションは取り消してある）と、まだ
    * 開いていない（`not_ready`）ときだけ再試行する。`internal` は書き込みが済んだかが分からず、
@@ -519,13 +638,44 @@ class ItemSaver extends Saver<ItemPatch> {
 
   protected putBack(p: ItemPatch) {
     this.#pending = mergePatch(p, this.#pending);
+    // 分割を送っている間に入力した元の行の本文は、次に送る分割にまとめる
+    if (this.#split !== null && this.#lateFirst !== undefined) {
+      this.#split.first = this.#lateFirst;
+      this.#lateFirst = undefined;
+    }
   }
 
   protected reject(p: ItemPatch, e: CallError) {
     // 作るのに失敗したら、もう作らない（作れたかが分からず、作り直すと2つになりうるため。画面は
     // ボードを読み込み直し、作れていればその ID で続ける）
-    if (this.id === null) this.#create = null;
+    if (this.id === null) {
+      this.#create = null;
+      this.#split = null;
+      this.#lateFirst = undefined;
+    }
     this.#events.rejected?.(this.key, e, p);
+  }
+
+  protected drop() {
+    this.#pending = {};
+    this.#create = null;
+    this.#split = null;
+    this.#lateFirst = undefined;
+  }
+
+  /** 送るのを待っている本文を捨てる（空白だけにして離れた行を削除する前。`ItemSaves.dropText`）。 */
+  dropText() {
+    const { text: _text, ...rest } = this.#pending;
+    this.#pending = rest;
+  }
+
+  /** まだ保存し終えていない欄（送るのを待っている・送っている）。 */
+  unsaved(): Set<ItemFieldName> {
+    const fields = new Set<ItemFieldName>();
+    for (const f of ["text", "resolutionNote", "status"] as const) {
+      if (this.#pending[f] !== undefined || this.#sendingPatch?.[f] !== undefined) fields.add(f);
+    }
+    return fields;
   }
 
   protected settled() {
@@ -553,23 +703,73 @@ export class ItemSaves {
     this.#events = events;
   }
 
+  readonly #lookup = (key: string) => this.#saver(key);
+
   #saver(key: string): ItemSaver {
     let s = this.#savers.get(key);
     if (s === undefined) {
-      s = new ItemSaver(this.#status, key, key, null, this.#events);
+      s = new ItemSaver(this.#status, key, key, null, this.#events, this.#lookup);
       this.#savers.set(key, s);
     }
     return s;
   }
 
+  #add(s: ItemSaver) {
+    if (this.#savers.has(s.key)) throw new Error(`item ${s.key} already exists`);
+    // ID が決まったら、ID でも同じ待ち行列を使う（画面が ID で呼んでも、一度に1つの決まりを守る）
+    s.onCreated = (created) => this.#savers.set(created.id!, created);
+    this.#savers.set(s.key, s);
+  }
+
   /** まだ作っていない項目を、本文 `text` で作る（作ったら `saved` に ID が届く）。 */
   create(key: string, item: NewItem, text: string) {
     if (this.#savers.has(key)) throw new Error(`item ${key} already exists`);
-    const s = new ItemSaver(this.#status, key, null, item, this.#events);
-    // ID が決まったら、ID でも同じ待ち行列を使う（画面が ID で呼んでも、一度に1つの決まりを守る）
-    s.onCreated = (created) => this.#savers.set(created.id!, created);
-    this.#savers.set(key, s);
+    const s = new ItemSaver(this.#status, key, null, item, this.#events, this.#lookup);
+    this.#add(s);
     s.edit({ text });
+  }
+
+  /**
+   * 項目 `from` を、本文 `first` と、新しい項目 `key` の本文 `second` に分ける（行の途中の Enter。
+   * docs/design/01-architecture.md 4.1「自動保存」）。`from` の保存を送り終えてから、すぐに送る。
+   * 保存先の問題で失敗したら、2行の本文を持ったまま再試行し、送る時点の本文で分ける（その間の元の行の
+   * 入力も分割にまとめる）。作ったら `saved` に、元の項目と新しい項目が届く。
+   */
+  split(from: string, key: string, first: string, second: string) {
+    if (this.#savers.has(key)) throw new Error(`item ${key} already exists`);
+    const s = new ItemSaver(this.#status, key, null, null, this.#events, this.#lookup, { from, first });
+    this.#add(s);
+    const origin = this.#savers.get(from)?.key ?? from;
+    let set = this.#splits.get(origin);
+    if (set === undefined) this.#splits.set(origin, (set = new Set()));
+    set.add(s);
+    s.edit({ text: second });
+    void s.flush();
+  }
+
+  /** 分割を送り終えていない、`key` から分ける項目の待ち行列。 */
+  #splitsFrom(key: string): ItemSaver[] {
+    // 元の項目を、分けたときの名前（仮の名前か ID）で引く。作った後に ID で呼ばれても同じ項目を指す
+    const from = this.#savers.get(key)?.key ?? key;
+    const set = this.#splits.get(from);
+    if (set === undefined) return [];
+    for (const sp of set) if (sp.splitFrom === null) set.delete(sp);
+    if (set.size === 0) this.#splits.delete(from);
+    return [...set];
+  }
+
+  /** 分けたときの元の項目の名前ごとの、分割で作る項目の待ち行列（送り終えたものは引くときに除く）。 */
+  readonly #splits = new Map<string, Set<ItemSaver>>();
+
+  /** まだ作っていない項目を、いま作っている（作るのを送っている途中）か。 */
+  creating(key: string): boolean {
+    const s = this.#savers.get(key);
+    return s !== undefined && s.id === null && s.inFlight;
+  }
+
+  /** 送るのを待っている本文を捨てる（本文を空白だけにして離れた項目を、削除する前に）。 */
+  dropText(key: string) {
+    this.#savers.get(key)?.dropText();
   }
 
   /** 項目の ID（まだ作っていなければ `null`）。 */
@@ -578,9 +778,39 @@ export class ItemSaves {
     return s === undefined ? key : s.id;
   }
 
-  /** 本文を入力した。 */
+  /** 本文を入力した。分割を送り終えていない元の行なら、分割と一緒に送る。 */
   editText(key: string, text: string) {
-    this.#saver(key).edit({ text });
+    const split = this.#splitsFrom(key).at(-1);
+    if (split !== undefined) split.setFirst(text);
+    else this.#saver(key).edit({ text });
+  }
+
+  /**
+   * まだ作っていない項目を、作らずにやめる（何も書かずに離れた行。操作仕様書 2章）。分割で作る項目
+   * なら、まだ送っていない元の行の本文は、元の項目の保存として送る。作り始めている（送っている途中か、
+   * 作り終えた）なら何もせず `false`（画面は作り終えるのを待って削除する）。
+   */
+  discard(key: string): boolean {
+    const s = this.#savers.get(key);
+    if (s === undefined) return true;
+    if (s.id !== null || s.inFlight) return false;
+    const from = s.splitFrom;
+    const first = s.takeFirst();
+    // 送らずに捨てる（close は送ってから片付けるので使わない）
+    s.abandon();
+    this.#savers.delete(key);
+    if (from !== null && first !== null) this.editText(from, first);
+    return true;
+  }
+
+  /**
+   * まだ保存し終えていない欄（読み込み直したときに、画面の値を残す欄）。分割を送り終えていない元の
+   * 行は、本文を含む。
+   */
+  unsaved(key: string): Set<ItemFieldName> {
+    const fields = this.#savers.get(key)?.unsaved() ?? new Set<ItemFieldName>();
+    if (this.#splitsFrom(key).length > 0) fields.add("text");
+    return fields;
   }
 
   /** 解消メモを入力した（空なら消す）。 */
@@ -607,6 +837,12 @@ export class ItemSaves {
    * （まだ保存していない入力の前の本文で分割・削除しないため）。作れていない項目なら `not_found`。
    */
   async run<T>(key: string, op: (id: Id) => Promise<T>): Promise<T> {
+    // その項目から分ける分割も、先に送り終える（分割の前の本文で削除・並べ替えしないため）
+    for (const split of this.#splitsFrom(key)) {
+      if (!(await split.flush())) {
+        throw new CoreError(split.failure ?? { kind: "internal", detail: "the item still has unsaved input" });
+      }
+    }
     const s = this.#savers.get(key);
     const done = (await s?.flush()) ?? true;
     if (s?.failure) throw new CoreError(s.failure);
@@ -621,9 +857,18 @@ export class ItemSaves {
    * docs/design/01-architecture.md 4.1「書き込みが終わるまではフォーカスが無くても入力中」）。
    */
   unsavedFields(): EditingItem[] {
-    return [...new Set(this.#savers.values())].flatMap((s) =>
+    const savers = [...new Set(this.#savers.values())];
+    const fields = savers.flatMap((s) =>
       s.id === null ? [] : s.unsavedFields().map((field) => ({ itemId: s.id!, field })),
     );
+    // 分割を送り終えていない元の項目の本文
+    for (const s of savers) {
+      const from = s.splitFrom === null ? null : this.idOf(s.splitFrom);
+      if (from !== null && !fields.some((f) => f.itemId === from && f.field === "text")) {
+        fields.push({ itemId: from, field: "text" });
+      }
+    }
+    return fields;
   }
 
   /**

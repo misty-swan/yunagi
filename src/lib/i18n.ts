@@ -5,6 +5,7 @@
 //   （`labels`。日英で共通）。文（状態の説明、操作ボタン、エラーなど）は各言語で書く。
 // - 短く、命令形を避け、状態を淡々と伝える。感嘆符・絵文字・励ましの言葉は使わない。
 
+import type { CloseReason } from "./bindings";
 import { prefs, type Lang } from "./prefs.svelte";
 
 /** 日英で共通の英字ラベル。 */
@@ -37,7 +38,27 @@ const labels = {
     toBlockers: "To Blockers",
     heading: "Time heading",
   },
+  /** 整理モードの領域の見出し（画面設計書 3章「各領域の表示」）。 */
+  region: { todo: "TODO", blockers: "BLOCKERS", reflection: "REFLECTION" },
+  /** 領域の見出しの右の件数（`6 left`・`3 open`）。 */
+  left: (n: number) => `${n} left`,
+  open: (n: number) => `${n} open`,
 };
+
+/**
+ * エージェントの識別子（agent_client の `name`）の表示名（画面設計書 3章「各領域の表示」の
+ * 「◆ Claude Code」）。知っている識別子は製品の名前に、ほかは識別子のまま出す。
+ */
+const AGENT_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  cli: "CLI",
+  unknown: "Agent",
+};
+
+export function agentLabel(name: string): string {
+  return AGENT_NAMES[name] ?? name;
+}
 
 /** 保存に失敗した原因の種類（`SaveStatus.error` の `kind` から決める）。 */
 export type SaveCause = "storage" | "not_ready" | "internal";
@@ -64,6 +85,33 @@ export interface Messages {
   saveKeep: string;
   retry: string;
   keys: string;
+  /** TODO が空のとき（画面設計書 3章「空の状態」）。`today` は今日を見ているか。 */
+  emptyTodo: (today: boolean) => string;
+  /** 取りやめた TODO の行末の理由（画面設計書 3章）。 */
+  closeReason: Record<CloseReason, string>;
+  /** 持ち越し回数の印の読み上げ。 */
+  carryTimes: (n: number) => string;
+  /** 持ち越し先の印（「→ 11.03」）の読み上げ。選ぶとその日を開く。 */
+  openCarriedTo: (date: string) => string;
+  /** 完了・解消のチェック欄の読み上げ。 */
+  checkTodo: string;
+  checkBlocker: string;
+  /** 解消メモの欄の空のときの案内。 */
+  memoPlaceholder: string;
+  agentItem: string;
+  agentUnseen: string;
+  /** 持ち越し済みの項目を変えようとしたとき（操作仕様書 2章）。`date` は `11.03 Tue`。 */
+  carriedNotice: (date: string) => string;
+  /** 取りやめた TODO を変えようとしたとき（操作仕様書 2章）。 */
+  droppedNotice: string;
+  /** 削除を取り消せなかったとき（データモデル設計書 3章 item）。 */
+  restoreSourceChanged: string;
+  restoreSourceCarried: (date: string) => string;
+  /** 送り直しても成功しない失敗で、保存を捨てて読み込み直したとき。 */
+  saveRejected: string;
+  /** 振り返りのテンプレート（Mod+Shift+R）の行。 */
+  reflectionTemplate: string[];
+  reflectionLabel: string;
 }
 
 const ja: Messages = {
@@ -91,6 +139,22 @@ const ja: Messages = {
   saveKeep: "入力した内容はこの画面に保持し、自動で再試行しています。",
   retry: "再試行",
   keys: "主なキー",
+  emptyTodo: (today) => (today ? "今日やることを書く（Enter）" : "やることを書く（Enter）"),
+  closeReason: { dropped: "やめた", split: "分割した", returned_external: "外部へ戻した" },
+  carryTimes: (n) => `持ち越し ${n} 回`,
+  openCarriedTo: (date) => `${date} へ持ち越し済み。その日を開く`,
+  checkTodo: "完了",
+  checkBlocker: "解消",
+  memoPlaceholder: "解消メモ",
+  agentItem: "エージェントが作った項目",
+  agentUnseen: "エージェントによる未確認の変更",
+  carriedNotice: (date) => `${date} へ持ち越し済みです`,
+  droppedNotice: "持ち越しの見直しで閉じた TODO は変更できません",
+  restoreSourceChanged: "持ち越し元の項目が変わったため、戻せません",
+  restoreSourceCarried: (date) => `持ち越し元の項目が ${date} へ持ち越し済みのため、戻せません`,
+  saveRejected: "変更を保存できなかったため、表示を読み込み直しました",
+  reflectionTemplate: ["## 良かったこと", "- ", "", "## 詰まったこと", "- ", "", "## 明日の一手", "- "],
+  reflectionLabel: "振り返り",
 };
 
 const en: Messages = {
@@ -118,6 +182,22 @@ const en: Messages = {
   saveKeep: "Your input is kept on this screen and saving is retried automatically.",
   retry: "Retry",
   keys: "Main keys",
+  emptyTodo: (today) => (today ? "Write what to do today (Enter)" : "Write what to do (Enter)"),
+  closeReason: { dropped: "Dropped", split: "Split", returned_external: "Returned" },
+  carryTimes: (n) => `Carried over ${n} times`,
+  openCarriedTo: (date) => `Carried over to ${date}. Open that day`,
+  checkTodo: "Done",
+  checkBlocker: "Resolved",
+  memoPlaceholder: "Resolution note",
+  agentItem: "Added by an agent",
+  agentUnseen: "Unseen change by an agent",
+  carriedNotice: (date) => `Carried over to ${date}`,
+  droppedNotice: "This TODO was closed in the carry-over review and can't be changed",
+  restoreSourceChanged: "Can't restore: the item it was carried over from has changed",
+  restoreSourceCarried: (date) => `Can't restore: the item it was carried over from is carried over to ${date}`,
+  saveRejected: "Couldn't save the change, so the board was reloaded",
+  reflectionTemplate: ["## Went well", "- ", "", "## Got stuck", "- ", "", "## Next step for tomorrow", "- "],
+  reflectionLabel: "Reflection",
 };
 
 export const MESSAGES: Record<Lang, Messages> = { ja, en };

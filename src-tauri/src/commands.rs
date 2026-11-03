@@ -58,7 +58,7 @@ pub async fn today(core: Core<'_>) -> Result<Date, CommandError> {
 #[tauri::command]
 pub async fn get_board(core: Core<'_>, date: Date) -> Result<Board, CommandError> {
     blocking(&core, move |core| {
-        core.read(|conn| board::get_board(conn, date.0).map(Board::from))
+        core.read(|conn| board::get_screen_board(conn, date.0).map(Board::from))
     })
     .await
 }

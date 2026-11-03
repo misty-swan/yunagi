@@ -9,7 +9,7 @@
 //!
 //! どれも読むだけで、day の行も作らない。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::{Add, AddAssign};
 
 use rusqlite::Connection;
@@ -18,10 +18,10 @@ use super::day;
 use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
-use crate::storage::table::change_log;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
-use crate::storage::{StorageError, in_read_transaction};
+use crate::storage::table::{agent_client, change_log};
+use crate::storage::{StorageError, Ulid, in_read_transaction};
 
 // ---- 件数 ----
 
@@ -230,6 +230,42 @@ fn read_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageErro
         blockers,
         reflection,
         note,
+    })
+}
+
+/// 画面のボード：ボードと、項目の行に添える印（画面設計書 3章「各領域の表示」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenBoard {
+    pub board: Board,
+    /// エージェントが作った項目の、作ったエージェントの識別子（agent_client の `name`）。項目の id ごと。
+    pub agent_names: HashMap<Ulid, String>,
+    /// エージェントによる未確認の変更がある項目の id（行頭の菱形。データモデル設計書 3章 change_log）。
+    pub unseen: HashSet<Ulid>,
+}
+
+/// 画面に出すその日のボード（[`get_board`] と、項目の行の印）。どれも同じ時点の内容を読む。
+pub fn get_screen_board(conn: &Connection, date: LogicalDate) -> Result<ScreenBoard, StorageError> {
+    in_read_transaction(conn, || {
+        let board = read_board(conn, date)?;
+        let clients: HashMap<Ulid, String> = agent_client::list(conn)?
+            .into_iter()
+            .map(|c| (c.id, c.name))
+            .collect();
+        let agent_names = board
+            .todos
+            .iter()
+            .chain(&board.blockers)
+            .filter_map(|bi| {
+                let name = clients.get(&bi.item.agent_client_id?)?;
+                Some((bi.item.id, name.clone()))
+            })
+            .collect();
+        let unseen = change_log::unseen_items_by_agents(conn, date)?;
+        Ok(ScreenBoard {
+            board,
+            agent_names,
+            unseen,
+        })
     })
 }
 
@@ -770,6 +806,39 @@ mod tests {
         assert_eq!(days.len(), RECENT_DAYS);
         assert_eq!(days[1], date("2026-10-20"));
         assert_eq!(days[6], date("2026-10-15"));
+    }
+
+    #[test]
+    fn screen_board_marks_agent_items_and_unseen_changes() {
+        use crate::domain::agent::Agent;
+        use crate::domain::agent::test_support::grant;
+        use crate::storage::table::agent_client::{CLI_ID, Scope};
+
+        let (db, _dir) = open();
+        let conn = db.connection();
+        grant(conn, CLI_ID, &[Scope::Todo, Scope::Blocker]);
+        let mine = todo(conn, "2026-11-03", "自分の");
+        let cli = Agent::without_ui(CLI_ID);
+        let by_agent = item::add_blocker(
+            conn,
+            &cli,
+            date("2026-11-03"),
+            "エージェントの",
+            &tokyo(),
+            now(),
+        )
+        .unwrap();
+        // ほかの日の項目への未確認の変更は入れない
+        item::add_todo(conn, &cli, date("2026-11-04"), "次の日", &tokyo(), now()).unwrap();
+
+        let b = get_screen_board(conn, date("2026-11-03")).unwrap();
+        assert_eq!(b.board, get_board(conn, date("2026-11-03")).unwrap());
+        assert_eq!(
+            b.agent_names,
+            HashMap::from([(by_agent.id, "cli".to_string())])
+        );
+        assert_eq!(b.unseen, HashSet::from([by_agent.id]));
+        assert!(!b.unseen.contains(&mine.id));
     }
 
     #[test]

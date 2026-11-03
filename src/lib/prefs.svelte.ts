@@ -1,4 +1,4 @@
-// 表示の設定：テーマと言語（要件 F-12、画面設計書 7章、デザインガイド 3章・7章）。
+// 表示の設定：テーマと言語とレイアウト（要件 F-12、画面設計書 7章、デザインガイド 3章・7章）。
 //
 // 設定画面（S-05）と、設定の保存（コアの setting）はまだ無い。それまでは、起動のたびに既定の値
 // （テーマは OS に合わせる、言語は OS の言語）で始める。設定画面はこの値を変え、保存した値で始める。
@@ -8,6 +8,9 @@ export type Theme = "system" | "light" | "dark";
 
 /** 画面の言語。 */
 export type Lang = "ja" | "en";
+
+/** 整理モードのレイアウト（画面設計書 3章「レイアウト」）：A. 2段（既定）、B. 3列、C. 縦積み。 */
+export type Layout = "A" | "B" | "C";
 
 /**
  * OS（WebView）の言語から決める既定の言語：優先する言語の一覧で、日本語と英語のうち先に出てくる方。
@@ -24,6 +27,7 @@ export function defaultLang(languages: readonly string[] = navigator.languages ?
 class Prefs {
   theme = $state<Theme>("system");
   lang = $state<Lang>(defaultLang());
+  layout = $state<Layout>("A");
 }
 
 /** いまの表示の設定（画面全体で1つ）。 */

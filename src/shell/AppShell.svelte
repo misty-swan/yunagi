@@ -23,6 +23,7 @@
     save,
     shell,
     mac,
+    notice = null,
     onCommand,
     children,
   }: {
@@ -30,6 +31,8 @@
     save: SaveStatus;
     shell: Shell;
     mac: boolean;
+    /** 上部のバーに短時間だけ出す知らせ。 */
+    notice?: string | null;
     onCommand: (c: ShellCommand) => void;
     children?: Snippet;
   } = $props();
@@ -119,6 +122,7 @@
       mode={shell.mode}
       showLogo={!shell.sidebarOpen}
       unseen={overview?.unseenChanges ?? 0}
+      {notice}
       {save}
       {mac}
       onPrev={actions.prevDay}

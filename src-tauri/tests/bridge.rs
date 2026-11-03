@@ -532,6 +532,12 @@ fn overview_counts(_: &Path) {
         after["unseenChanges"].as_u64().unwrap(),
         before["unseenChanges"].as_u64().unwrap() + 1
     );
+    // ボードの行には、作ったエージェントの識別子と未確認の印が付く（画面の行は付かない）
+    let board = h.ok("get_board", json!({ "date": date }));
+    assert_eq!(board["todos"][0]["agentName"], Value::Null);
+    assert_eq!(board["todos"][0]["unseen"], false);
+    assert_eq!(board["todos"][1]["agentName"], "overview");
+    assert_eq!(board["todos"][1]["unseen"], true);
     // 先の日は Recent に入らない
     assert!(
         after["recent"]

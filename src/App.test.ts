@@ -55,6 +55,10 @@ function mockCore() {
           return clock.today;
         case "get_board":
           return emptyBoard((args as { date: string }).date);
+        case "get_text_doc":
+          return { body: "", rev: 0 };
+        case "report_ui_state":
+          return null;
         case "get_overview": {
           const date = (args as { date: string }).date;
           const o: Overview = {

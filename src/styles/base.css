@@ -25,6 +25,8 @@
   --side-w: calc(240 * var(--u));
   --top-h: calc(60 * var(--u));
   --radius: calc(10 * var(--u));
+  /* 一覧の1行の高さ（06 5章：本文 15px のとき 36px） */
+  --row-h: calc(36 * var(--u));
   /* 影は重ねて表示するパネルとポップオーバーだけに付ける（06 5章） */
   --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.18);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
