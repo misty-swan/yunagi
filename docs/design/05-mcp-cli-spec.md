@@ -68,9 +68,15 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - 対象：ID が障害を指す場合と、取りやめた TODO（`dropped`。持ち越しの見直しで「やめる」「分割する」「外部ツールへ戻す」を選んだもの。データモデル設計書 3章）を指す場合は、どちらの操作も何も変えずに `invalid_argument` を返す。取りやめた TODO を完了や未完了に変えると、利用者が閉じた項目を黙って戻すことになるため。同じく、`resolve_blocker` に TODO の ID を渡した場合も `invalid_argument` を返す。`message` では、やり直しても成功しないことと理由を伝える（例：`This TODO was dropped by the user. It was not changed. Do not retry.`、`This ID is a blocker, not a TODO. Use resolve_blocker.`）。エージェントは同じ操作をやり直さず、取りやめた TODO なら利用者に伝える。
   - 判定の順：`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` を先に確かめ、続けて `carried_over`（下記の持ち越し済みの項目）を確かめ、どれにも当たらなければ成功とする（状態の欄は入力中でも受け付けるので `user_editing` は返さない。アーキテクチャ設計書 4.1）。そのため、何も変えない操作でも、保存の再試行中は `storage_unavailable` になる。
   - 応答と記録：成功の応答には `resolve_blocker` と同じ `updated`（`true` / `false`）を含める。CLI では、`--json` のときに同じ `updated` を含む JSON を出し、テキスト出力では `Completed.`（完了にした）・`Already done. Nothing changed.`（`complete_todo` で何も変えていない）、`Reopened.`（未完了に戻した）・`Already open. Nothing changed.`（`reopen_todo` で何も変えていない）を表示する。終了コードはどれも 0。何も変えなかった場合（`updated: false`）は change_log に記録しない（7章）。記録するときは、`todo.complete` / `todo.reopen` として状態と完了時刻を `before` / `after` に入れる。
+- 取りやめた TODO（`dropped`）への `edit_todo` も、`complete_todo`・`reopen_todo` と同じく、本文を何も変えずに `invalid_argument` を返す（2026-11-03 決定）。取りやめた TODO は、利用者が持ち越しの見直しで閉じた項目で、その日の終わりの記録として本文も残す（データモデル設計書 3章。持ち越し済みの項目の本文を変えないのと同じ）。分割した TODO（`close_reason=split`）なら、子の TODO がその本文をもとに作られており、元の本文を変えると子との対応が分からなくなる。また、取りやめた TODO は今日のボードに無いため、そこへ届いた `edit_todo` は、エージェントが古いボードを読んで対象を取り違えたものである見込みが高い。
+  - 送られた本文が今の本文と同じでも、`updated: false` の成功にはせず `invalid_argument` を返す（送った本文に関係なく、取りやめた TODO の本文は変えられないことを、どの送り方でも同じ結果で伝えるため）。`message` は `complete_todo`・`reopen_todo` と同じく、やり直しても成功しないことと理由を伝える（例：`This TODO was dropped by the user. It was not changed. Do not retry.`）。エージェントは同じ操作をやり直さず、本文を変えたかった理由とともに利用者に伝える。
+  - 取りやめた TODO への `edit_todo`・`complete_todo`・`reopen_todo` のエラーには、取りやめの理由 `close_reason`（`dropped` / `split` / `returned_external`。データモデル設計書 3章）を含め、`message` もそれに合わせる（例：`split` なら `This TODO was split into other TODOs by the user. It was not changed. Do not retry.`）。分割した・外部へ戻した TODO を、エージェントが「やめた」と利用者に伝えないようにするため。分割した TODO でも、子の TODO の id はエラーに含めない（子は複数ありうるため、どの子を直すべきかはエージェントには決められない。エージェントは利用者に伝える）。
+  - 判定の順：`permission_denied`・`not_found` の次に確かめる（`invalid_argument` の一つ。上の `complete_todo`・`reopen_todo` と同じ位置）。本文が空などの、ほかの `invalid_argument` より先に確かめる（本文を直してやり直しても成功しないことを、最初の応答で伝えるため）。そのため、保存の再試行中でも `storage_unavailable` ではなく `invalid_argument` になり、`carried_over`・`user_editing` より先に返る（取りやめた TODO は画面でも本文を入力できないので、`user_editing` には当たらない。操作仕様書 2章）。
+  - 画面でも、取りやめた TODO の状態と本文は変えられない（操作仕様書 2章）。削除と並べ替えは通常どおりできる。
+  - 障害には取りやめの状態が無い（データモデル設計書 3章）ので、この決まりは TODO だけに当てはまる。
 - 持ち越し済みの項目（持ち越し元。データモデル設計書 3章「持ち越し」）への書き込みは、持ち越し先へ向け直さず、何も変えずに拒む（2026-11-03 決定）。持ち越すと前の日の項目は `open` のまま残るため、そのまま受け付けると、前の日の項目だけが完了などになり、今日の持ち越しの項目は元のまま残って、利用者とエージェントの見ている状態が食い違うため。黙って向け直すと、エージェントが指定した項目とは別の項目が変わり、`edit_todo` の本文や解消メモの判定も別の項目で行われるため、向け直しはしない。
   - 対象の操作：`edit_todo`・`complete_todo`・`reopen_todo`・`resolve_blocker`。ID が持ち越し済みの項目を指す場合は、その項目の状態（完了・未完了など）にかかわらず、`conflict`（`reason: carried_over`。4.3）を返す。同じ操作を何度送っても同じ結果になり、前の日の項目は変わらない。
-  - 持ち越し先の知らせ方：エラーに、持ち越し先の項目の id `carried_to_id`（データモデル設計書 3章の定義）と、その項目の日付 `carried_to_date` を含める。持ち越しが続いている場合（前の日から次の日へ、さらに今日へ）は、送り直した先でも `carried_over` が返るので、同じようにたどる。持ち越し先が取りやめた TODO（`dropped`。持ち越した次の日の見直しで「やめる」などを選んだもの）であることもあり、その ID に送った `complete_todo`・`reopen_todo` は上の `invalid_argument` の決まりに従う。
+  - 持ち越し先の知らせ方：エラーに、持ち越し先の項目の id `carried_to_id`（データモデル設計書 3章の定義）と、その項目の日付 `carried_to_date` を含める。持ち越しが続いている場合（前の日から次の日へ、さらに今日へ）は、送り直した先でも `carried_over` が返るので、同じようにたどる。持ち越し先が取りやめた TODO（`dropped`。持ち越した次の日の見直しで「やめる」などを選んだもの）であることもあり、その ID に送った `edit_todo`・`complete_todo`・`reopen_todo` は上の `invalid_argument` の決まりに従う。
   - 判定の順：対象の4つの操作のどれでも、`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` の次に `carried_over` を確かめ、続けて `user_editing`、`note_exists` の順に確かめる（`resolve_blocker`・`complete_todo`・`reopen_todo` は上のそれぞれの判定の順、`edit_todo` は入力中の判定より前）。
   - 読み取り：`get_board`・`open_board` の各項目と、`search` の結果の項目には、持ち越し先の項目の id `carried_to_id` と日付 `carried_to_date` を含める（持ち越し済みでなければどちらも `null`。4.2）。エージェントは、前の日のボードを読んだときに、持ち越し済みの項目を操作の対象から外せる。
   - 持ち越し先の項目が削除され、たどっても削除されていない項目に行き着かない場合（データモデル設計書 3章）、元の項目は持ち越し済みでなくなり、通常どおり受け付ける（その項目が残っている唯一の写しになるため）。
@@ -132,7 +138,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {"error": {"code": "conflict", "reason": "user_editing", "message": "The user is editing this item. Try again later."}}
 ```
 
-エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。アーキテクチャ設計書 4.1）。
+エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。`permission_denied`・`not_found`・`invalid_argument` は先に返す。3章の判定の順、アーキテクチャ設計書 4.1）。
 
 `conflict` には、エージェントが次の動きを決められるよう、理由を `reason` 欄で付ける。CLI の終了コードはどの理由でも 5 で、`--json` のときは同じ JSON を出し、テキスト出力では `message` を表示する。
 
@@ -194,5 +200,5 @@ API のレート制限を調査
 ## 9. 未決事項
 
 - エラーの `message` を利用者の言語設定（`locale`）に合わせて日英で出すか、英語固定にするか
-- `agent revert` の対象が、記録の後に持ち越し済みになった項目である場合（持ち越す前にエージェントが本文を変えていた場合など）に、取り消しを拒むか、元の項目だけを戻すか（3章では持ち越し済みの項目への書き込みを拒むが、取り消しは人が確認して行う操作のため、別に決める）
+- `agent revert` の対象が、記録の後に持ち越し済みになった項目である場合（持ち越す前にエージェントが本文を変えていた場合など）に、取り消しを拒むか、元の項目だけを戻すか（3章では持ち越し済みの項目への書き込みを拒むが、取り消しは人が確認して行う操作のため、別に決める）。記録の後に取りやめた TODO（`dropped`）になった項目の `todo.edit`・`todo.complete`・`todo.reopen` を取り消す場合も、同じく別に決める（3章では取りやめた TODO の本文・状態への書き込みを拒む）
 - `cli` クライアントで作成した項目を、人が CLI で直接作ったものとして `origin = human` にする手段（対話端末での実行時など）を設けるか
