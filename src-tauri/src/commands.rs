@@ -230,9 +230,8 @@ pub async fn export_markdown(
     blocking(&core, move |core| {
         // データベースを使うのは読む間だけにし、文字列にしてファイルを書く間はほかのコマンドを待たせない
         let boards = core.read(|conn| export::read_between(conn, from.0, to.0))?;
-        let days = boards.render();
-        let paths =
-            export::write_files(Path::new(&dir), &days).map_err(|e| CommandError::storage(&e))?;
+        let paths = export::write_files(Path::new(&dir), boards.into_days())
+            .map_err(|e| CommandError::storage(&e))?;
         Ok(paths.iter().map(|p| p.display().to_string()).collect())
     })
     .await

@@ -7,7 +7,7 @@
 //!
 //! 書き出すだけで、読み戻し（取り込み）はしない。データベースには書かない。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -121,6 +121,15 @@ impl Boards {
                 markdown: day.render(date),
             })
             .collect()
+    }
+
+    /// 日ごとの Markdown を、日付の順に1日ずつ作る（[`Boards::render`] と同じもの）。作った日の読んだ
+    /// 内容はすぐ手放すので、[`write_files`] に渡すと、期間全体の文字列を一度に持たずに済む。
+    pub fn into_days(self) -> impl Iterator<Item = DayMarkdown> {
+        self.days.into_iter().map(|(date, day)| DayMarkdown {
+            date,
+            markdown: day.render(date),
+        })
     }
 }
 
@@ -260,7 +269,9 @@ impl error::Error for ExportError {
     }
 }
 
-/// 一時ファイルの名前の末尾。
+/// 一時ファイルの名前（`.yunagi-export-<ULID>.tmp`）の前と後ろ。日付を入れないのは、シンボリック
+/// リンクのリンク先（名前が日付でない）の横に作るものも、同じ形で見つけて片付けるため。
+const TEMP_PREFIX: &str = ".yunagi-export-";
 const TEMP_SUFFIX: &str = ".tmp";
 
 /// 中断で残った一時ファイルとみなすまでの時間（[`write_files`]）。書いている途中のほかの書き出しの
@@ -278,35 +289,56 @@ const RENAME_RETRIES: (u32, Duration) = (0, Duration::ZERO);
 struct Pending {
     /// 呼び出し側に返すパス（`dir` の中の `YYYY-MM-DD.md`）。
     path: PathBuf,
-    /// 実際に置き換えるファイル（`path` がシンボリックリンクなら、リンク先）。
+    /// 実際に置き換えるファイル（実体のパス。`path` がシンボリックリンクなら、リンク先）。
     target: PathBuf,
     tmp: PathBuf,
 }
 
 /// `days` を、フォルダ `dir` に日ごとのファイル（[`file_name`]）として書き、書いたファイルのパス
-/// （`dir` の中のもの）を日付の順に返す。フォルダは作らない（呼び出し側が選んだ、あるフォルダに書く）。
+/// （`dir` の中のもの）を `days` の順に返す。フォルダは作らない（呼び出し側が選んだ、あるフォルダに書く）。
+/// `days` は1日ずつ取り出して一時ファイルに書き、書いた後は持たない（[`Boards::into_days`] と合わせると、
+/// 文字列にした期間全体を一度に持たずに済む）。
 ///
-/// - 同じ名前のファイルは置き換える。置き換えたファイルの権限は保ち、シンボリックリンクはリンク先を
-///   置き換える（リンクのまま残す）。ほかのファイルには触れない。
-/// - まずすべての日を、置き換える先と同じフォルダの一時ファイル（`.YYYY-MM-DD.md.<ULID>.tmp`）に書いて
-///   ディスクに反映し、それから日付の順に名前を変える（同期のツールやエディタが、書きかけのファイルを
-///   読まないように）。一時ファイルを書けなければ、書いた一時ファイルを消し、何も置き換えずに失敗とする。
-///   名前の変更に失敗したら、残りの一時ファイルを消して止める（それより前の日は置き換え済みで、
-///   その数をエラーに入れる）。
-/// - 始める前に、`dir` に残っている、中断で残った一時ファイル（1時間以上前に作ったもの）を
-///   消す（消せなくても続ける）。
-pub fn write_files(dir: &Path, days: &[DayMarkdown]) -> Result<Vec<PathBuf>, ExportError> {
+/// - 同じ名前のファイルは置き換える。置き換えたファイルの権限（Unix の権限の数字）は保ち、シンボリック
+///   リンクはリンク先を置き換える（リンクのまま残す）。ほかのファイルには触れない。
+/// - まずすべての日を、置き換える先と同じフォルダの一時ファイル（`.yunagi-export-<ULID>.tmp`）に書いて
+///   ディスクに反映し、それから順に名前を変える（同期のツールやエディタが、書きかけのファイルを
+///   読まないように）。一時ファイルを書けないとき、置き換える先がファイルでないとき、2つの日が同じ
+///   ファイルを指すとき（同じリンク先へのリンク）、Windows で置き換える先が読み取り専用のときは、書いた
+///   一時ファイルを消し、何も置き換えずに失敗とする。名前の変更に失敗したら、残りの一時ファイルを消して
+///   止める（それより前の日は置き換え済みで、その数をエラーに入れる）。
+/// - 一時ファイルを置く各フォルダで、書き始める前に、中断で残った一時ファイル（1時間以上前に作ったもの）
+///   を消す（消せなくても続ける）。
+pub fn write_files(
+    dir: &Path,
+    days: impl IntoIterator<Item = DayMarkdown>,
+) -> Result<Vec<PathBuf>, ExportError> {
     if !dir.is_absolute() {
         return Err(ExportError::RelativeDir {
             dir: dir.to_path_buf(),
         });
     }
-    remove_stale_temp_files(dir, SystemTime::now());
-
-    let mut pending: Vec<Pending> = Vec::with_capacity(days.len());
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut cleaned: HashSet<PathBuf> = HashSet::new();
     for day in days {
         let path = dir.join(file_name(day.date));
-        match write_temp(&path, day.markdown.as_bytes()) {
+        let result = write_temp(&path, day.markdown.as_bytes(), |folder| {
+            if cleaned.insert(folder.to_path_buf()) {
+                remove_stale_temp_files(folder, SystemTime::now());
+            }
+        })
+        .and_then(|p| {
+            if pending.iter().any(|q| q.target == p.target) {
+                let _ = fs::remove_file(&p.tmp);
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "two export files point to the same file",
+                ))
+            } else {
+                Ok(p)
+            }
+        });
+        match result {
             Ok(p) => pending.push(p),
             Err(source) => {
                 remove_temps(&pending);
@@ -320,8 +352,11 @@ pub fn write_files(dir: &Path, days: &[DayMarkdown]) -> Result<Vec<PathBuf>, Exp
     }
 
     for (replaced, p) in pending.iter().enumerate() {
-        if let Err(source) = retry(RENAME_RETRIES, || fs::rename(&p.tmp, &p.target)) {
+        if let Err(source) = retry(RENAME_RETRIES, is_transient, || {
+            fs::rename(&p.tmp, &p.target)
+        }) {
             remove_temps(&pending[replaced..]);
+            sync_dirs(&pending[..replaced]);
             return Err(ExportError::Write {
                 path: p.path.clone(),
                 replaced,
@@ -333,45 +368,58 @@ pub fn write_files(dir: &Path, days: &[DayMarkdown]) -> Result<Vec<PathBuf>, Exp
     Ok(pending.into_iter().map(|p| p.path).collect())
 }
 
-/// `path` を置き換える一時ファイルを、置き換える先と同じフォルダに書いて反映する。置き換える先に
-/// ファイルがあれば、その権限を一時ファイルに付ける。失敗したら、作りかけの一時ファイルを消す。
-fn write_temp(path: &Path, bytes: &[u8]) -> io::Result<Pending> {
+/// `path` を置き換える一時ファイルを、置き換える先と同じフォルダに書いて反映する。そのフォルダは、
+/// 一時ファイルを作る前に `before_create` に渡す。置き換える先にファイルがあれば、その権限を
+/// 一時ファイルに付ける（Unix では作るときから付け、ほかの利用者が読める間を作らない）。失敗したら、
+/// 作りかけの一時ファイルを消す。
+fn write_temp(path: &Path, bytes: &[u8], before_create: impl FnOnce(&Path)) -> io::Result<Pending> {
+    // 実体のパスで比べられるよう、フォルダとリンクを辿る。リンク先が無いリンクは、リンク先を
+    // 求められないので失敗にする（リンクを黙ってファイルに置き換えないように）
     let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
-    // リンク先が無いリンクは、リンク先を求められないので失敗にする（リンクを黙ってファイルに
-    // 置き換えないように）
-    let target = if is_link {
-        fs::canonicalize(path)?
-    } else {
-        path.to_path_buf()
+    let target = match (is_link, path.parent(), path.file_name()) {
+        (true, ..) => fs::canonicalize(path)?,
+        (false, Some(parent), Some(name)) => fs::canonicalize(parent)?.join(name),
+        _ => return Err(io::Error::other("the export file has no parent folder")),
     };
-    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+    let Some(folder) = target.parent() else {
         return Err(io::Error::other("the export file has no parent folder"));
     };
-    // ほかの書き出しと重ならないよう ULID を付け、隠しファイルにする
-    let tmp = parent.join(format!(
-        ".{}.{}{TEMP_SUFFIX}",
-        name.to_string_lossy(),
-        Ulid::generate()
-    ));
     let existing = fs::metadata(&target).ok();
-    if existing.as_ref().is_some_and(|m| !m.is_file()) {
-        // フォルダなどは置き換えられないので、何も置き換えないうちに失敗にする
-        return Err(io::Error::new(
-            io::ErrorKind::IsADirectory,
-            "the export file name is used by something that is not a file",
-        ));
+    if let Some(m) = &existing {
+        if !m.is_file() {
+            // フォルダなどは置き換えられない
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                "the export file name is used by something that is not a file",
+            ));
+        }
+        // Windows は読み取り専用のファイルを名前の変更で置き換えられない（一時ファイルに写すと、その
+        // 一時ファイルも消せなくなる）
+        if cfg!(windows) && m.permissions().readonly() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the export file is read-only",
+            ));
+        }
     }
-    let permissions = existing.map(|m| m.permissions());
+    before_create(folder);
+    let tmp = folder.join(format!("{TEMP_PREFIX}{}{TEMP_SUFFIX}", Ulid::generate()));
     let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(m) = &existing {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            options.mode(m.permissions().mode() & 0o777);
+        }
+        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        if let Some(permissions) = permissions {
-            fs::set_permissions(&tmp, permissions)?;
+        // 作るときの権限は umask で狭まるので、同じ数字に付け直す
+        #[cfg(unix)]
+        if let Some(m) = &existing {
+            fs::set_permissions(&tmp, m.permissions())?;
         }
         Ok(())
     })();
@@ -412,15 +460,23 @@ fn sync_dirs(pending: &[Pending]) {
     let _ = pending;
 }
 
-/// `f` を、失敗したら `retries` 回までやり直す（`n` 回目のやり直しの前に `delay × n` 待つ）。
+/// 名前の変更の失敗のうち、待てば通りうるもの（Windows で、ほかのプログラムが置き換える先を開いている：
+/// アクセスの拒否・共有の違反・ロックの違反）。
+fn is_transient(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::PermissionDenied || matches!(e.raw_os_error(), Some(32 | 33))
+}
+
+/// `f` を、`transient` に当たる失敗なら `retries` 回までやり直す（`n` 回目のやり直しの前に
+/// `delay × n` 待つ）。
 fn retry<T>(
     (retries, delay): (u32, Duration),
+    transient: impl Fn(&io::Error) -> bool,
     mut f: impl FnMut() -> io::Result<T>,
 ) -> io::Result<T> {
     let mut attempt = 0;
     loop {
         match f() {
-            Err(_) if attempt < retries => {
+            Err(e) if attempt < retries && transient(&e) => {
                 attempt += 1;
                 thread::sleep(delay * attempt);
             }
@@ -429,10 +485,10 @@ fn retry<T>(
     }
 }
 
-/// `dir` の、中断で残った一時ファイル（`.YYYY-MM-DD.md.<ULID>.tmp` の形で、ULID の時刻が `now` より
-/// [`STALE_TEMP_AGE`] 以上前のもの）を消す。読めない・消せないものは、そのままにする。
-fn remove_stale_temp_files(dir: &Path, now: SystemTime) {
-    let Ok(entries) = fs::read_dir(dir) else {
+/// フォルダ `folder` の、中断で残った一時ファイル（`.yunagi-export-<ULID>.tmp` の形で、ULID の時刻が
+/// `now` より [`STALE_TEMP_AGE`] 以上前のもの）を消す。読めない・消せないものは、そのままにする。
+fn remove_stale_temp_files(folder: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(folder) else {
         return;
     };
     let now_ms = now
@@ -452,13 +508,9 @@ fn remove_stale_temp_files(dir: &Path, now: SystemTime) {
     }
 }
 
-/// 書き出しの一時ファイルの名前（`.YYYY-MM-DD.md.<ULID>.tmp`）なら、作った時刻（UNIX 時刻のミリ秒）。
+/// 書き出しの一時ファイルの名前（`.yunagi-export-<ULID>.tmp`）なら、作った時刻（UNIX 時刻のミリ秒）。
 fn temp_file_time(name: &str) -> Option<u64> {
-    let (file, ulid) = name
-        .strip_prefix('.')?
-        .strip_suffix(TEMP_SUFFIX)?
-        .rsplit_once('.')?;
-    file.strip_suffix(".md")?.parse::<LogicalDate>().ok()?;
+    let ulid = name.strip_prefix(TEMP_PREFIX)?.strip_suffix(TEMP_SUFFIX)?;
     Some(ulid.parse::<Ulid>().ok()?.timestamp_ms())
 }
 
@@ -785,7 +837,7 @@ mod tests {
         fs::write(dir.path().join("memo.txt"), "利用者のファイル").unwrap();
         let paths = write_files(
             dir.path(),
-            &[
+            [
                 day("2026-11-02", "# 2026-11-02\n"),
                 day("2026-11-03", "# 三日\n"),
             ],
@@ -809,7 +861,10 @@ mod tests {
             fs::read_to_string(dir.path().join("memo.txt")).unwrap(),
             "利用者のファイル"
         );
-        assert_eq!(write_files(dir.path(), &[]).unwrap(), Vec::<PathBuf>::new());
+        assert_eq!(
+            write_files(dir.path(), Vec::new()).unwrap(),
+            Vec::<PathBuf>::new()
+        );
     }
 
     #[test]
@@ -820,7 +875,7 @@ mod tests {
         fs::create_dir(dir.path().join("2026-11-03.md")).unwrap();
         let err = write_files(
             dir.path(),
-            &[
+            [
                 day("2026-11-02", "二日\n"),
                 day("2026-11-03", "三日\n"),
                 day("2026-11-04", "四日\n"),
@@ -843,7 +898,7 @@ mod tests {
         // 無いフォルダには書かない（作らない）
         let missing = dir.path().join("無い");
         assert!(matches!(
-            write_files(&missing, &[day("2026-11-02", "二日\n")]),
+            write_files(&missing, [day("2026-11-02", "二日\n")]),
             Err(ExportError::Write { replaced: 0, .. })
         ));
         assert!(!missing.exists());
@@ -870,29 +925,54 @@ mod tests {
     fn retry_runs_again_only_after_failures() {
         let no_wait = Duration::ZERO;
         let mut calls = 0;
-        let ok = retry((3, no_wait), || {
-            calls += 1;
-            if calls < 3 {
-                Err(io::Error::other("busy"))
-            } else {
-                Ok(calls)
-            }
-        });
+        let ok = retry(
+            (3, no_wait),
+            |_| true,
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(io::Error::other("busy"))
+                } else {
+                    Ok(calls)
+                }
+            },
+        );
         assert_eq!(ok.unwrap(), 3);
         let mut calls = 0;
-        let failed: io::Result<()> = retry((2, no_wait), || {
-            calls += 1;
-            Err(io::Error::other("busy"))
-        });
+        let failed: io::Result<()> = retry(
+            (2, no_wait),
+            |_| true,
+            || {
+                calls += 1;
+                Err(io::Error::other("busy"))
+            },
+        );
         assert!(failed.is_err());
         assert_eq!(calls, 3);
         let mut calls = 0;
-        let failed: io::Result<()> = retry((0, no_wait), || {
+        let failed: io::Result<()> = retry(
+            (0, no_wait),
+            |_| true,
+            || {
+                calls += 1;
+                Err(io::Error::other("busy"))
+            },
+        );
+        assert!(failed.is_err());
+        assert_eq!(calls, 1);
+        // 待っても通らない失敗はやり直さない
+        let mut calls = 0;
+        let failed: io::Result<()> = retry((3, no_wait), is_transient, || {
             calls += 1;
-            Err(io::Error::other("busy"))
+            Err(io::Error::from(io::ErrorKind::NotFound))
         });
         assert!(failed.is_err());
         assert_eq!(calls, 1);
+        assert!(is_transient(&io::Error::from(
+            io::ErrorKind::PermissionDenied
+        )));
+        assert!(is_transient(&io::Error::from_raw_os_error(32)));
+        assert!(!is_transient(&io::Error::from(io::ErrorKind::IsADirectory)));
     }
 
     #[test]
@@ -903,13 +983,13 @@ mod tests {
             let ms = 1_800_000_000_000 - secs_ago * 1000;
             Ulid::from_u128(u128::from(ms) << 80)
         };
-        let old = format!(".2026-11-02.md.{}.tmp", ulid_at(2 * 60 * 60));
-        let fresh = format!(".2026-11-03.md.{}.tmp", ulid_at(60));
+        let old = format!(".yunagi-export-{}.tmp", ulid_at(2 * 60 * 60));
+        let fresh = format!(".yunagi-export-{}.tmp", ulid_at(60));
         let others = [
             "2026-11-02.md".to_owned(),
             // 形の違うもの（利用者のファイル）
-            format!(".memo.md.{}.tmp", ulid_at(2 * 60 * 60)),
-            ".2026-11-02.md.tmp".to_owned(),
+            format!(".memo-{}.tmp", ulid_at(2 * 60 * 60)),
+            ".yunagi-export-x.tmp".to_owned(),
         ];
         for name in [&old, &fresh].into_iter().chain(&others) {
             fs::write(dir.path().join(name), "").unwrap();
@@ -921,6 +1001,7 @@ mod tests {
         assert_eq!(leftovers(dir.path()), expected);
         assert_eq!(temp_file_time(&old), Some(1_800_000_000_000 - 7_200_000));
         assert_eq!(temp_file_time("2026-11-02.md"), None);
+        assert_eq!(temp_file_time(".yunagi-export-x.tmp"), None);
     }
 
     #[cfg(unix)]
@@ -938,7 +1019,7 @@ mod tests {
 
         write_files(
             dir.path(),
-            &[day("2026-11-02", "二日\n"), day("2026-11-03", "三日\n")],
+            [day("2026-11-02", "二日\n"), day("2026-11-03", "三日\n")],
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&plain).unwrap(), "二日\n");
@@ -957,10 +1038,47 @@ mod tests {
         assert_eq!(fs::read_to_string(&linked).unwrap(), "三日\n");
         assert_eq!(leftovers(vault.path()), ["三日.md"]);
 
+        // リンク先のフォルダに中断で残った一時ファイルも片付ける
+        let stale = vault
+            .path()
+            .join(format!(".yunagi-export-{}.tmp", Ulid::from_u128(1 << 80)));
+        fs::write(&stale, "").unwrap();
+        write_files(dir.path(), [day("2026-11-03", "三日\n")]).unwrap();
+        assert!(!stale.exists());
+
+        // 2つの日が同じファイルを指すときは、何も置き換えない
+        symlink(&linked, dir.path().join("2026-11-04.md")).unwrap();
+        let err = write_files(
+            dir.path(),
+            [
+                day("2026-11-03", "新しい三日\n"),
+                day("2026-11-04", "四日\n"),
+            ],
+        )
+        .unwrap_err();
+        let ExportError::Write { path, replaced, .. } = &err else {
+            panic!("{err:?}");
+        };
+        assert_eq!((path, *replaced), (&dir.path().join("2026-11-04.md"), 0));
+        assert_eq!(fs::read_to_string(&linked).unwrap(), "三日\n");
+        assert_eq!(leftovers(vault.path()), ["三日.md"]);
+        // リンクではない名前と、それを指すリンクも同じ
+        symlink(&plain, dir.path().join("2026-11-05.md")).unwrap();
+        assert!(matches!(
+            write_files(
+                dir.path(),
+                [day("2026-11-02", "二\n"), day("2026-11-05", "五\n")]
+            ),
+            Err(ExportError::Write { replaced: 0, .. })
+        ));
+        assert_eq!(fs::read_to_string(&plain).unwrap(), "二日\n");
+        fs::remove_file(dir.path().join("2026-11-04.md")).unwrap();
+        fs::remove_file(dir.path().join("2026-11-05.md")).unwrap();
+
         // リンク先の無いリンクは、ファイルに置き換えずに失敗にする
         fs::remove_file(&linked).unwrap();
         assert!(matches!(
-            write_files(dir.path(), &[day("2026-11-03", "三日\n")]),
+            write_files(dir.path(), [day("2026-11-03", "三日\n")]),
             Err(ExportError::Write { replaced: 0, .. })
         ));
         assert!(
@@ -973,7 +1091,7 @@ mod tests {
 
     #[test]
     fn relative_folders_are_refused() {
-        let err = write_files(Path::new("exports"), &[day("2026-11-02", "二日\n")]).unwrap_err();
+        let err = write_files(Path::new("exports"), [day("2026-11-02", "二日\n")]).unwrap_err();
         assert!(matches!(err, ExportError::RelativeDir { .. }));
         assert!(!Path::new("exports").exists());
     }
