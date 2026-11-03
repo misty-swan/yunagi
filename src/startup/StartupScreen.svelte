@@ -9,6 +9,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import type { BackupEntry, Startup, StartupFailure } from "../lib/bindings";
   import { shortDate } from "../lib/dates";
+  import { pickFolder } from "../lib/folder";
   import { t } from "../lib/i18n";
   import type { StartupActions } from "../lib/startup.svelte";
   import { ISSUES_URL, SUPPORT_MAIL, currentOs, installCommand } from "../lib/support";
@@ -127,6 +128,12 @@
       case "pre_restore":
         return m.backupPreRestore;
     }
+  }
+
+  /** OS のフォルダ選択で選んだフォルダのパスを入力欄に入れる（記録は「このフォルダを使う」で行う）。 */
+  async function pick() {
+    const picked = await pickFolder(m.pickFolderTitle, dir.trim() === "" ? undefined : dir.trim());
+    if (picked !== null) dir = picked;
   }
 
   function onChoose(e: SubmitEvent) {
@@ -248,6 +255,7 @@
             <span class="path-label">{m.chooseLabel}</span>
             <input type="text" bind:value={dir} spellcheck="false" autocomplete="off" disabled={busy} />
           </label>
+          <button type="button" class="btn ghost" disabled={busy} onclick={() => void pick()}>{m.pickFolder}</button>
           <button type="submit" class="btn" disabled={busy || dir.trim() === ""}>
             {actions.busy === "choose" ? m.working : m.choose}
           </button>

@@ -65,6 +65,7 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::export_markdown,
         commands::get_settings,
         commands::save_settings,
+        commands::get_data_dir,
         commands::check_data_dir,
         commands::change_data_dir,
         commands::use_data_dir,
@@ -96,6 +97,8 @@ fn emit<R: Runtime>(app: &AppHandle<R>, notice: Notice) {
 /// アプリを起動する。画面のスレッドを止めないよう、データベースは別のスレッドで開く。
 pub fn run() {
     let app = tauri::Builder::default()
+        // フォルダを選ぶ OS のダイアログ（画面から使う。capabilities/default.json）
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
         .setup(|app| {
             manage_core(app.handle()).start();

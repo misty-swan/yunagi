@@ -439,6 +439,17 @@ impl AppCore {
         result
     }
 
+    /// いまの保存先（データベースの `yunagi.db` と `backups/` を置くフォルダ）。開いていなければ
+    /// [`CommandError::NotReady`]。
+    pub fn data_dir(&self) -> Result<String, CommandError> {
+        self.with_db(|db| {
+            db.path()
+                .parent()
+                .map(|p| p.display().to_string())
+                .ok_or(CommandError::NotReady)
+        })
+    }
+
     /// 保存先を `dir` に変える（データベースと `backups/` を移し、`config.json` に記録する。アーキテクチャ
     /// 設計書 6章）。使えない保存先は何も変えずに [`CommandError::Rejected`]。結果は、移した後に消せなかった
     /// 元のファイル。

@@ -418,6 +418,12 @@ pub async fn save_settings(
     .await
 }
 
+/// いまの保存先のフォルダ（設定画面のデータ区分に示す）。
+#[tauri::command]
+pub async fn get_data_dir(core: Core<'_>) -> Result<String, CommandError> {
+    blocking(&core, |core| core.data_dir()).await
+}
+
 /// 保存先の候補 `dir` がクラウド同期フォルダ（の中）と判定できるか（画面設計書 7章。警告を出すため）。
 /// 判定できなければ `null`。
 #[tauri::command]

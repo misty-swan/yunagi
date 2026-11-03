@@ -7,6 +7,7 @@
 
 import type { CloseReason, RejectReason, StartupFailure } from "./bindings";
 import type { CarryMessage } from "./carryover.svelte";
+import { SETTINGS_MESSAGES, type SettingsMessages } from "./i18n_settings";
 import { prefs, type Lang } from "./prefs.svelte";
 
 /** 日英で共通の英字ラベル。 */
@@ -47,6 +48,16 @@ const labels = {
   fromNote: "← NOTE",
   /** 持ち越しの画面の見出しの英字ラベル（画面設計書 5章）。 */
   carryOver: "CARRY OVER",
+  /** 設定の区分（画面設計書 7章）。 */
+  settings: {
+    general: "General",
+    display: "Display",
+    operation: "Operation",
+    data: "Data",
+    agents: "Agents",
+    backups: "BACKUPS",
+    export: "EXPORT",
+  },
   /** 検索パレットのグループの見出しと、結果の種類（画面設計書 6章）。 */
   palette: {
     goToDate: "GO TO DATE",
@@ -97,6 +108,9 @@ export interface StartupMessages {
   chooseTitle: string;
   chooseBody: string;
   chooseLabel: string;
+  /** OS のフォルダ選択を開くボタン。 */
+  pickFolder: string;
+  pickFolderTitle: string;
   choose: string;
   restoreTitle: string;
   restoreBody: string;
@@ -222,6 +236,9 @@ export interface Messages {
   startup: StartupMessages;
   carryover: CarryoverMessages;
   palette: PaletteMessages;
+  settings: SettingsMessages;
+  /** 保存できていない原因の表示の「保存先を変える」（設定のデータ区分を開く。画面設計書 3章）。 */
+  changeDataDir: string;
 }
 
 /** 検索パレットの文言（画面設計書 6章）。 */
@@ -298,6 +315,8 @@ const jaStartup: StartupMessages = {
   chooseTitle: "保存先を選び直す",
   chooseBody: "データベース（yunagi.db）のある別のフォルダを保存先にします。中身を確かめてから記録し、データは移しません。",
   chooseLabel: "フォルダのパス",
+  pickFolder: "フォルダを選ぶ",
+  pickFolderTitle: "データベースのあるフォルダを選ぶ",
   choose: "このフォルダを使う",
   restoreTitle: "バックアップから戻す",
   restoreBody: "保存先の backups にあるバックアップから、データベースを作り直します。",
@@ -362,6 +381,10 @@ const jaStartup: StartupMessages = {
     corrupted: "壊れているため使えません。",
     not_yunagi: "Yunagi のデータベースではありません。",
     newer_schema: "新しい版の Yunagi で作られているため、この版では使えません。",
+    // 起動時の操作では起きない（設定画面の保存先の変更の理由。i18n_settings.ts）
+    same_directory: "いまの保存先と同じフォルダです。",
+    inside_backups: "いまの保存先の backups の中には移せません。",
+    target_has_data: "そのフォルダには、すでにデータベースかバックアップがあります。",
   },
   restoreFailed: "戻す途中で失敗したため、元の状態のままにしました。",
   notAttempted: "始める前に止まりました（ほかの処理がデータを使っているなど）。今の状態は上のとおりです。",
@@ -394,6 +417,8 @@ const enStartup: StartupMessages = {
   chooseTitle: "Choose the data folder again",
   chooseBody: "Use another folder that has a database (yunagi.db). It is checked before it is recorded, and no data is moved.",
   chooseLabel: "Folder path",
+  pickFolder: "Choose a folder",
+  pickFolderTitle: "Choose the folder that has the database",
   choose: "Use this folder",
   restoreTitle: "Restore from a backup",
   restoreBody: "Recreate the database from a backup in the backups folder of the data folder.",
@@ -458,6 +483,10 @@ const enStartup: StartupMessages = {
     corrupted: "It is damaged and can't be used.",
     not_yunagi: "It isn't a Yunagi database.",
     newer_schema: "It was made by a newer version of Yunagi and can't be used by this one.",
+    // Not raised by the startup actions (reasons for changing the data folder in Settings; i18n_settings.ts)
+    same_directory: "That's the current folder.",
+    inside_backups: "It can't be moved into the backups folder of the current folder.",
+    target_has_data: "That folder already has a database or backups.",
   },
   restoreFailed: "Restoring failed partway, so everything was left as it was.",
   notAttempted: "It stopped before starting (for example, something else is using the data). The current state is shown above.",
@@ -547,6 +576,8 @@ const ja: Messages = {
       reloaded: "前回の日が変わったため、一覧を読み直しました。",
     },
   },
+  settings: SETTINGS_MESSAGES.ja,
+  changeDataDir: "保存先を変える",
   palette: {
     label: "検索・日付・コマンド",
     placeholder: "検索、日付（2026-10-31・昨日）、コマンド",
@@ -645,6 +676,8 @@ const en: Messages = {
       reloaded: "The previous day changed, so the list was reloaded.",
     },
   },
+  settings: SETTINGS_MESSAGES.en,
+  changeDataDir: "Change the data folder",
   palette: {
     label: "Search, dates, and commands",
     placeholder: "Search, a date (2026-10-31, yesterday), or a command",

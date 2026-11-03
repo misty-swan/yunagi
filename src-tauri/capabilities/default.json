@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "メインウィンドウに許可する機能",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

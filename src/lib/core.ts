@@ -14,7 +14,9 @@ import {
   type CarryoverList,
   type CarryoverStatus,
   type Changed,
+  type CloudService,
   type CommandError,
+  type DataDirChanged,
   type Deleted,
   type Id,
   type Item,
@@ -27,6 +29,8 @@ import {
   type Position,
   type SearchHit,
   type SendResult,
+  type Settings,
+  type SettingsPatch,
   type Snapshot,
   type SplitResult,
   type Startup,
@@ -132,6 +136,23 @@ export const core = {
   /** 持ち越しを確定する。 */
   confirmCarryover: (decision: CarryoverDecision) =>
     call<CarryoverConfirmed>("confirm_carryover", { decision }),
+  /** 設定（既定値を当てた後のもの）。 */
+  getSettings: () => call<Settings>("get_settings"),
+  /** 設定を保存する（変える欄だけ）。保存した後の設定を返す。 */
+  saveSettings: (patch: SettingsPatch) => call<Settings>("save_settings", { patch }),
+  /** いまの保存先のフォルダ。 */
+  getDataDir: () => call<string>("get_data_dir"),
+  /** 保存先の候補 `dir` がクラウド同期フォルダ（の中）と判定できるか（判定できなければ `null`）。 */
+  checkDataDir: (dir: string) => call<CloudService | null>("check_data_dir", { dir }),
+  /** 保存先を `dir` に変える（データベースと `backups/` を移す）。 */
+  changeDataDir: (dir: string) => call<DataDirChanged>("change_data_dir", { dir }),
+  /** データベースのある既存のフォルダ `dir` を、データを移さずに保存先にする。開くデータベースが変わる。 */
+  useDataDir: (dir: string) => call<null>("use_data_dir", { dir }),
+  /** バックアップ `backup`（`listBackups` の `path`）から復元する。画面は、復元の後に読み込み直す。 */
+  restoreBackup: (backup: string) => call<null>("restore_backup", { backup }),
+  /** `from` から `to` までの日を、日付ごとの Markdown としてフォルダ `dir` に書き出す。書いたファイルのパスを返す。 */
+  exportMarkdown: (from: LogicalDate, to: LogicalDate, dir: string) =>
+    call<string[]>("export_markdown", { from, to, dir }),
   /** 全日付を `text` で探す（パレット S-04）。日付の新しい順に `limit` 件まで。 */
   search: (text: string, limit: number) => call<SearchHit[]>("search", { text, limit }),
   /**
