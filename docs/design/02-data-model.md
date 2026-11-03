@@ -82,7 +82,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | agent_client_id | TEXT FK→agent_client NULL | エージェントが作成した場合の識別 |
 | external_ref_id | TEXT NULL | 外部課題との紐付け（external_ref の表は MVP 後に作るため、それまでは外部キーを付けない） |
 | completed_at | TEXT NULL | 完了・解消時刻（未完了・未解消に戻すと NULL。すでに完了・解消済みへのやり直しでは変えない。操作仕様書 2章、MCP・CLI 仕様書 3章） |
-| created_at / updated_at / deleted_at | TEXT（deleted_at は NULL） | 監査用時刻。deleted_at は論理削除した時刻。何も変えずに成功を返した操作（すでに目的の状態の `complete_todo`・`reopen_todo`・`resolve_blocker`、今と同じ本文の `edit_todo`。MCP・CLI 仕様書 3章）では updated_at を変えない |
+| created_at / updated_at / deleted_at | TEXT（deleted_at は NULL） | 監査用時刻。deleted_at は論理削除した時刻。何も変えずに成功を返した操作（すでに目的の状態の `complete_todo`・`reopen_todo`・`resolve_blocker`、今と同じ本文の `edit_todo`・`edit_blocker`。MCP・CLI 仕様書 3章）では updated_at を変えない |
 
 持ち越しは「前回の日の項目を移動する」のではなく、「今日に新しい項目を作り、`carried_from_id` で元を指す」方式とする。前回の日とは、今日より前で項目またはノートが存在する直近の日であり、それより前の日は持ち越しの対象にしない。ここで「項目が存在する」は `deleted_at` が NULL の item が1件以上あること、「ノートが存在する」は note の `body` が空白以外の文字を含むことを指す。振り返りだけを書いた日は前回の日に含めない。過去日のボードが当時の状態のまま残り、振り返りと検索の信頼性が保たれる。
 
@@ -92,7 +92,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 - 持ち越しの画面（S-03）を表示している間に、エージェントが前回の日の項目を変えた場合は、一覧をその場で更新し、確定の時点の内容で持ち越す（確定の時点で未完了・未解消の項目だけを持ち越し、本文などは確定の時点の値を写す。画面設計書 5章）。
 - 見直しで「やめる」を選んだ TODO は、元項目を `status = dropped`、`close_reason = dropped` にする。「外部ツールへ戻す」（外部連携が有効で、外部課題と紐付いた TODO のみ）は `close_reason = returned_external` とする。
 - 「分割する」を選んだ場合は、元項目を `status = dropped`、`close_reason = split` にし、今日に作る子項目は `split_from_id` で元を指す（子項目の `carry_count` は 0）。
-- 取りやめた TODO（`status = dropped`）は、持ち越し済みの項目と同じく、その日の終わりの状態として残すため、`status`・`close_reason`・`text`・`completed_at` を変えない（2026-11-03 決定）。エージェントの書き込み（`edit_todo`・`complete_todo`・`reopen_todo`）は `invalid_argument` で拒み（MCP・CLI 仕様書 3章）、画面でも変えられない（操作仕様書 2章）。削除と並べ替えは通常どおりできる。`agent revert` でこれらの欄を戻すかは未決（MCP・CLI 仕様書 9章）。障害には `dropped` が無いため、この決まりは TODO だけに当てはまる。
+- 取りやめた TODO（`status = dropped`）は、持ち越し済みの項目と同じく、その日の終わりの状態として残すため、`status`・`close_reason`・`text`・`completed_at` を変えない（2026-11-03 決定）。エージェントの書き込み（`edit_todo`・`complete_todo`・`reopen_todo`。障害の本文を変える `edit_blocker` も、TODO の ID には書き込まない）は `invalid_argument` で拒み（MCP・CLI 仕様書 3章）、画面でも変えられない（操作仕様書 2章）。削除と並べ替えは通常どおりできる。`agent revert` でこれらの欄を戻すかは未決（MCP・CLI 仕様書 9章）。障害には `dropped` が無いため、この決まりは TODO だけに当てはまる。
 - 持ち越しで作る障害には、元項目の `resolution_note`（未解消に戻した障害に残っている解消メモ。操作仕様書 2章）を写さない。解消メモは元の日の障害に残る。
 - 持ち越した項目は、今日のリストの先頭に、前回の日の順のまま入るよう `sort_key` を付ける。
 
@@ -163,7 +163,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | revert_of_id | TEXT FK→change_log NULL | この記録が取り消し操作である場合、取り消した元の記録の id |
 | seen_at | TEXT NULL | 利用者が変更履歴画面で確認した時刻 |
 
-記録するのは、実際に何かを変えた操作だけとする。何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker` をやり直した場合、今と同じ本文の `edit_todo` など。MCP・CLI 仕様書 3章）は記録しない。やり直しのたびに同じ記録と未確認の印が増えないようにするため。利用者が画面で項目の状態を変えてから保存されるまでの間に、エージェントが同じ状態にした場合も、利用者の保存の書き込み時に、そのエージェントの記録から状態と完了時刻の欄を外し、何も残らなければ記録を消す（利用者の変更として扱う。アーキテクチャ設計書 4.1）。
+記録するのは、実際に何かを変えた操作だけとする。何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker` をやり直した場合、今と同じ本文の `edit_todo`・`edit_blocker` など。MCP・CLI 仕様書 3章）は記録しない。やり直しのたびに同じ記録と未確認の印が増えないようにするため。利用者が画面で項目の状態を変えてから保存されるまでの間に、エージェントが同じ状態にした場合も、利用者の保存の書き込み時に、そのエージェントの記録から状態と完了時刻の欄を外し、何も残らなければ記録を消す（利用者の変更として扱う。アーキテクチャ設計書 4.1）。
 
 取り消しは `before` を書き戻す新しい操作として実行し、取り消し自体も `revert_of_id` 付きで記録する。item では、`before` / `after` に入っている欄だけを書き戻し、ほかの欄には触れない（画面の保存が欄ごとに書くのと合わせるため。アーキテクチャ設計書 4.1）。人による編集は change_log に記録しないため、「対象がその後に人によって変更されている」かは、`after` に入っている欄（note・reflection では本文）の現在の値と、その記録の `after` が一致するかで判定する。一致しない場合は、取り消し前に差分を示して確認を求める。
 
