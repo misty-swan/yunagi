@@ -217,6 +217,7 @@ mod tests {
     use jiff::Timestamp;
 
     use super::*;
+    use crate::storage::data_dir::DefaultDir;
     use crate::storage::table::item::{self, Item, ItemKind, ItemStatus, Origin};
     use crate::storage::table::test_support::{at, date, ensure_day, open};
     use crate::storage::table::text_doc::{self, TextDoc};
@@ -703,7 +704,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("yunagi.db");
         let open_with = |migrations| {
-            let lock = DbLock::acquire(dir.path(), Duration::ZERO).unwrap();
+            let lock = DbLock::acquire(&DefaultDir::for_test(dir.path()), Duration::ZERO).unwrap();
             Database::open_with_migrations(lock, &path, migrations).unwrap()
         };
         {
