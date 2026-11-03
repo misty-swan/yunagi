@@ -79,7 +79,7 @@
       ...root.querySelectorAll<HTMLElement>(
         "button, input, select, textarea, a[href], [tabindex]:not([tabindex='-1'])",
       ),
-    ].filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
+    ].filter((el) => !el.hasAttribute("disabled"));
   }
 
   function onKeydown(e: KeyboardEvent) {

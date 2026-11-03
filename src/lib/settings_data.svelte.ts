@@ -171,11 +171,11 @@ export class DataSettings {
       if (paths.length === 0) {
         this.result = { kind: "nothing" };
       } else {
-        const done: DataResult = { kind: "exported", count: paths.length, dir: this.exportDir };
-        this.result = done;
-        // 書いたファイルの数とフォルダは、短時間だけ出す（画面設計書 7章）
+        this.result = { kind: "exported", count: paths.length, dir: this.exportDir };
+        // 書いたファイルの数とフォルダは、短時間だけ出す（画面設計書 7章）。次の書き出しは待ちを
+        // やり直すので（上の clearTimeout）、古い待ちが新しい結果を消すことはない
         this.#clear = setTimeout(() => {
-          if (this.result === done) this.result = null;
+          if (this.result?.kind === "exported") this.result = null;
         }, EXPORTED_SHOWN_MS);
       }
     } catch (e) {

@@ -37,6 +37,7 @@
   import type { ShellCommand } from "./shell/commands";
   import { Carryover } from "./lib/carryover.svelte";
   import CarryoverPanel from "./carryover/CarryoverPanel.svelte";
+  import { reloadPage } from "./lib/page";
   import { SettingsStore } from "./lib/settings.svelte";
   import { SettingsPanel } from "./lib/settings_panel.svelte";
   import { DataSettings } from "./lib/settings_data.svelte";
@@ -62,7 +63,7 @@
   // 保存先の変更・選び直し・復元の前に、まだ保存していない入力を送る。選び直しと復元の後は読み込み直す
   const dataSettings = new DataSettings({
     flush: () => save.flushAll(),
-    reload: () => window.location.reload(),
+    reload: reloadPage,
     today: () => session.today,
   });
   onDestroy(() => dataSettings.stop());

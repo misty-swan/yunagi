@@ -180,6 +180,28 @@ test("空の状態：TODO が空なら、今日は「今日やることを書く
   expect(text($(".r-todo .empty"))).toBe("Write what to do (Enter)");
 });
 
+test("持ち越し回数の印は、設定の見直しの回数以上で --warn にする", async () => {
+  const board = {
+    ...emptyBoard(TODAY),
+    todos: [bi(item(A, "設計を読む", { carryCount: 2 }))],
+    blockers: [bi(item("01JC00000000000000000000F0", "詰まり", { kind: "blocker", carryCount: 4 }))],
+  };
+  prefs.reviewThreshold = 3;
+  try {
+    await start({ boards: { [TODAY]: board } });
+    expect($(".r-todo .carry")?.classList.contains("warn")).toBe(false);
+    expect($(".r-blk .carry")?.classList.contains("warn")).toBe(true);
+    prefs.reviewThreshold = 2;
+    flushSync();
+    expect($(".r-todo .carry")?.classList.contains("warn")).toBe(true);
+    prefs.reviewThreshold = 5;
+    flushSync();
+    expect($(".r-blk .carry")?.classList.contains("warn")).toBe(false);
+  } finally {
+    prefs.reviewThreshold = 3;
+  }
+});
+
 test("行の表示：件数、完了の取り消し線、解消メモ、持ち越し先、取りやめた理由、持ち越し回数、エージェント", async () => {
   await start({
     boards: {
