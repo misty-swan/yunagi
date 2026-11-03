@@ -9,7 +9,7 @@
 //!   `updated: false` で成功し、`updated_at` も変えない。
 //! - 画面の操作（[`add`]・[`save_text`]・[`set_closed`]・[`save_resolution_note`]・[`delete`]・
 //!   [`restore`]・[`move_item`]・[`split`]）は、人の編集なので記録しない。持ち越しの確定
-//!   （[`super::carryover`]）も同じ。
+//!   （[`super::carryover`]）と行送り（[`super::note_send`]）も同じ。
 //! - どちらも、変えた欄だけを書く（item は版の番号を持たない。アーキテクチャ設計書 4.1）。
 //! - 項目を作るときは、その日の day の行が無ければ作る（[`day::ensure`]）。
 //!
@@ -604,6 +604,38 @@ pub fn add(
     })
 }
 
+/// ノートの行から項目を作る（行送り。[`super::note_send::send`] だけが使う）。その日の末尾
+/// （[`Position::Last`] と同じ。同じ種類の中でも末尾になる）に、`origin = note` で作る。`text` は
+/// 整えた本文。人の操作なので記録しない。呼び出し側のトランザクションの中で呼ぶ。
+pub(crate) fn add_from_note(
+    conn: &Connection,
+    date: LogicalDate,
+    kind: ItemKind,
+    text: String,
+    tz: &TimeZone,
+    now: Timestamp,
+) -> Result<Item, StorageError> {
+    // 末尾は基準の項目を使わないので、位置の誤りは起きない（key_at を使わずに求める）
+    let items = item_table::list_by_date(conn, date)?;
+    let sort_key = match sort_key::between(items.last().map(|i| i.sort_key.as_str()), None) {
+        Some(key) => key,
+        None => renumber(conn, &items, items.len(), 1)?.remove(0),
+    };
+    day::ensure(conn, date, tz, now)?;
+    insert_row(
+        conn,
+        NewItem {
+            date,
+            kind,
+            text,
+            sort_key,
+            origin: Origin::Note,
+            agent_client_id: None,
+        },
+        now,
+    )
+}
+
 /// 画面で項目の本文を保存する。前後の空白を除いて今と同じなら書かない。取りやめた TODO と
 /// 持ち越し済みの項目は変えられない（操作仕様書 2章）。
 pub fn save_text(
@@ -1026,6 +1058,11 @@ struct NewItem {
 
 /// 項目を作る。その日の day の行が先に要る（呼び出し側が [`day::ensure`] で作る）。
 fn insert_new(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, ItemError> {
+    Ok(insert_row(conn, new, now)?)
+}
+
+/// [`insert_new`] の中身（読み書きの失敗だけを返す）。
+fn insert_row(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, StorageError> {
     let item = Item {
         id: Ulid::generate(),
         date: new.date,
