@@ -12,14 +12,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::{board, carryover, export, item, note_send, text_doc};
+use yunagi_core::domain::{board, carryover, export, item, note_send, settings, text_doc};
+use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
 use crate::types::{
     BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList, CarryoverStatus,
-    CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, NoteMark, Overview,
-    Position, SearchHit, SendResult, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    CloudService, CommandError, DataDirChanged, Date, Deleted, Id, Item, ItemFields, ItemKind,
+    ItemOutcome, NoteMark, Overview, Position, SearchHit, SendResult, Settings, SettingsPatch,
+    Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -345,10 +347,10 @@ pub async fn note_marks(
 /// 選んだ、ある絶対パスのフォルダ）に `YYYY-MM-DD.md` として書き出し、書いたファイルのパスを日付の順に
 /// 返す（アーキテクチャ設計書 6.4）。書き出すものが無い日は書かない（何も無ければ空）。
 ///
-/// 書けなかったとき（フォルダが無い・絶対パスでない・書き込めないなど）は `Storage`（`detail` に
-/// ファイルのパス・置き換え終えたファイルの数・原因）。読み取りと同じく、保存の失敗中（アーキテクチャ
-/// 設計書 4.1）には数えない。書き出し先の誤りを別の種類にするかは、画面を作るときに決める（画面設計書
-/// 11章）。
+/// 書き出し先に書けなかったとき（フォルダが無い・絶対パスでない・書き込めないなど）は `ExportFailed`
+/// （置き換え終えたファイルの数 `replaced` と、ログ用の `detail`）。データベースの読み取りの失敗は
+/// `Storage`。どちらも、保存の失敗中（アーキテクチャ設計書 4.1）には数えない（2026-11-04 決定。
+/// アーキテクチャ設計書 4.3・6.4）。
 #[tauri::command]
 pub async fn export_markdown(
     core: Core<'_>,
@@ -359,11 +361,102 @@ pub async fn export_markdown(
     blocking(&core, move |core| {
         // データベースを使うのは読む間だけにし、文字列にしてファイルを書く間はほかのコマンドを待たせない
         let boards = core.read(|conn| export::read_between(conn, from.0, to.0))?;
-        let paths = export::write_files(Path::new(&dir), boards.into_days())
-            .map_err(|e| CommandError::storage(&e))?;
+        let paths = export::write_files(Path::new(&dir), boards.into_days())?;
         Ok(paths.iter().map(|p| p.display().to_string()).collect())
     })
     .await
+}
+
+/// 設定（既定値を当てた後のもの。画面設計書 7章）。起動のとき、外枠を出す前に読む。
+#[tauri::command]
+pub async fn get_settings(core: Core<'_>) -> Result<Settings, CommandError> {
+    blocking(&core, |core| {
+        core.read(|conn| settings::load(conn).map(Settings::from))
+    })
+    .await
+}
+
+/// 設定の保存結果と、変わったか（変わったら画面に知らせる）。
+struct SettingsSaved {
+    settings: Settings,
+    changed: bool,
+}
+
+impl Changes for SettingsSaved {
+    fn changed(&self) -> bool {
+        self.changed
+    }
+}
+
+/// 設定を保存する。`patch` は変える欄だけ。誤った値（凪メーターの始業が終業より前でない、フォント
+/// サイズが 13〜19 でない、見直しの回数が 1 未満、`HH:MM` でない時刻）は、何も書かずに
+/// `invalid_argument`。保存した後の設定を返す。
+///
+/// 設定の保存は、保存の失敗中（アーキテクチャ設計書 4.1）を始め・終えない（再試行を待つ入力では
+/// なく、失敗は画面に出して選び直すため）。日付の切り替わり時刻を変えたときは、すぐに今日を求め直す。
+#[tauri::command]
+pub async fn save_settings(
+    core: Core<'_>,
+    patch: SettingsPatch,
+) -> Result<Settings, CommandError> {
+    blocking(&core, move |core| {
+        let current = core.read(|conn| settings::load(conn))?;
+        let patch = patch.into_core(&current)?;
+        let moves_today = patch.day_boundary.is_some();
+        let saved = core.screen_write(ScreenWrite::Operation, |conn| {
+            let changed = settings::save(conn, &patch)?;
+            Ok::<_, CommandError>(SettingsSaved {
+                settings: Settings::from(settings::load(conn)?),
+                changed,
+            })
+        })?;
+        if moves_today && saved.changed {
+            core.check_today(now());
+        }
+        Ok(saved.settings)
+    })
+    .await
+}
+
+/// 保存先の候補 `dir` がクラウド同期フォルダ（の中）と判定できるか（画面設計書 7章。警告を出すため）。
+/// 判定できなければ `null`。
+#[tauri::command]
+pub async fn check_data_dir(
+    core: Core<'_>,
+    dir: String,
+) -> Result<Option<CloudService>, CommandError> {
+    blocking(&core, move |_| {
+        Ok(cloud_sync::detect_cloud_sync(Path::new(&dir)).map(CloudService::from))
+    })
+    .await
+}
+
+/// 保存先を `dir`（絶対パスのフォルダ）に変える：データベースと `backups/` を移し、`config.json` に
+/// 記録する（アーキテクチャ設計書 6章）。使えないときは何も変えずに `rejected`。移した後に消せなかった
+/// 元のファイルは `leftovers` で返す。
+#[tauri::command]
+pub async fn change_data_dir(core: Core<'_>, dir: String) -> Result<DataDirChanged, CommandError> {
+    blocking(&core, move |core| {
+        let leftovers = core.change_data_dir(Path::new(&dir))?;
+        Ok(DataDirChanged {
+            leftovers: leftovers.iter().map(|p| p.display().to_string()).collect(),
+        })
+    })
+    .await
+}
+
+/// データベースのある既存のフォルダ `dir` を、データを移さずに保存先として記録して開き直す。使えない
+/// ときは何も変えずに `rejected`。開くデータベースが別のものになるので、画面は読み込み直す。
+#[tauri::command]
+pub async fn use_data_dir(core: Core<'_>, dir: String) -> Result<(), CommandError> {
+    blocking(&core, move |core| core.use_data_dir(Path::new(&dir))).await
+}
+
+/// バックアップ `backup`（`list_backups` の `path`）から復元する。今のデータは復元前のバックアップに
+/// 退避する。使えないバックアップは何も変えずに `rejected`。画面は、復元の後に読み込み直す。
+#[tauri::command]
+pub async fn restore_backup(core: Core<'_>, backup: String) -> Result<(), CommandError> {
+    blocking(&core, move |core| core.restore_backup(Path::new(&backup))).await
 }
 
 /// 検索の件数の上限の上限（画面が大きな値を渡しても、ノートの本文をまとめて読み過ぎないため）。

@@ -63,6 +63,12 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::search,
         commands::report_ui_state,
         commands::export_markdown,
+        commands::get_settings,
+        commands::save_settings,
+        commands::check_data_dir,
+        commands::change_data_dir,
+        commands::use_data_dir,
+        commands::restore_backup,
     ]
 }
 

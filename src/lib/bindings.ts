@@ -592,20 +592,98 @@ export type TodayChanged = { today: LogicalDate, };
 export type BackupFailed = { detail: string, };
 
 /**
+ * テーマ（画面設計書 7章「表示」）。
+ */
+export type Theme = "system" | "light" | "dark";
+
+/**
+ * ノートの書体（画面設計書 7章「表示」、デザインガイド 4章）。
+ */
+export type NoteFont = "body" | "mono";
+
+/**
+ * 整理モードのレイアウト（画面設計書 3章「レイアウト」）。
+ */
+export type Layout = "A" | "B" | "C";
+
+/**
+ * 画面の言語。
+ */
+export type Locale = "ja" | "en";
+
+/**
+ * 画面に出す設定（既定値を当てた後のもの。データモデル設計書 3章 setting）。時刻は `HH:MM`。
+ */
+export type Settings = { 
+/**
+ * 日付の切り替わり時刻（既定 `04:00`）。
+ */
+dayBoundary: string, 
+/**
+ * 凪メーターの始業（既定 `09:00`）。
+ */
+meterStart: string, 
+/**
+ * 凪メーターの終業（既定 `19:00`）。始業より後。
+ */
+meterEnd: string, 
+/**
+ * 画面の言語。設定が無ければ `null`（OS の言語に合わせる）。
+ */
+locale: Locale | null, 
+/**
+ * 更新の自動確認（既定 `true`）。
+ */
+updateCheck: boolean, theme: Theme, 
+/**
+ * フォントサイズ（px。13〜19、既定 15）。
+ */
+fontSize: number, noteFont: NoteFont, layout: Layout, 
+/**
+ * 持ち越し見直しの回数（1 以上、既定 3）。
+ */
+carryoverReviewThreshold: number, 
+/**
+ * サイドバーの開閉（広いウィンドウの整理モードでの状態。既定は開く）。
+ */
+sidebarOpen: boolean, };
+
+/**
+ * 設定の保存：変える欄だけ（無い欄には触れない）。`meterStart`・`meterEnd` は、片方だけでも、
+ * もう片方は今の値を使う。
+ */
+export type SettingsPatch = { dayBoundary?: string, meterStart?: string, meterEnd?: string, locale?: Locale, updateCheck?: boolean, theme?: Theme, fontSize?: number, noteFont?: NoteFont, layout?: Layout, carryoverReviewThreshold?: number, sidebarOpen?: boolean, };
+
+/**
+ * クラウド同期のサービス（保存先の警告に使う。画面設計書 7章）。
+ */
+export type CloudService = "i_cloud_drive" | "dropbox" | "one_drive" | "google_drive";
+
+/**
+ * 保存先の変更の結果（`change_data_dir`）。
+ */
+export type DataDirChanged = { 
+/**
+ * 移した後に消せなかった、元の保存先のファイル・フォルダ（データは新しい保存先に移っている。
+ * 消すかどうかは利用者に任せる）。
+ */
+leftovers: Array<string>, };
+
+/**
  * コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
  * （Display の文をそのまま使わない。README「エラーの表示」）。
  */
-export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" } | { "kind": "not_found" } | { "kind": "invalid_argument", reason: InvalidReason, } | { "kind": "conflict" } & Conflict | { "kind": "restore_refused" } & RestoreRefused | { "kind": "storage", detail: string, } | { "kind": "rejected", reason: RejectReason, } | { "kind": "put_back_failed", setAside: string, detail: string, } | { "kind": "internal", detail: string, };
+export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" } | { "kind": "not_found" } | { "kind": "invalid_argument", reason: InvalidReason, } | { "kind": "conflict" } & Conflict | { "kind": "restore_refused" } & RestoreRefused | { "kind": "storage", detail: string, } | { "kind": "rejected", reason: RejectReason, } | { "kind": "export_failed", replaced: number, detail: string, } | { "kind": "put_back_failed", setAside: string, detail: string, } | { "kind": "internal", detail: string, };
 
 /**
  * 引数の誤りの種類。
  */
-export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line";
+export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line" | "meter_hours" | "font_size" | "review_threshold" | "time_of_day";
 
 /**
  * 選んだバックアップ・保存先を使えない理由。
  */
-export type RejectReason = "invalid_path" | "not_a_directory" | "no_database" | "unreadable" | "corrupted" | "not_yunagi" | "newer_schema";
+export type RejectReason = "invalid_path" | "not_a_directory" | "no_database" | "unreadable" | "corrupted" | "not_yunagi" | "newer_schema" | "same_directory" | "inside_backups" | "target_has_data";
 
 /**
  * 受け付けられない状態の理由。

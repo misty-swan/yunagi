@@ -11,6 +11,7 @@
 //! Tauri には依存しない（知らせ先は [`Notify`] で受け取る）。Tauri とのつなぎは `crate::run`。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -97,7 +98,19 @@ pub struct AppCore {
     /// 持つ、退避した前のデータベースの場所（無かったときは中が `None`）。持っている間、開いた状態は
     /// [`Startup::Restored`] として知らせる（画面が読み込み直しても、場所を示せるように）。
     restored: Mutex<Option<Option<PathBuf>>>,
+    /// 動いている間の保存先の変更・選び直し・復元の最中か（[`AppCore::begin_maintenance`]）。
+    /// 最中は、定期バックアップを始めない。
+    maintenance: AtomicBool,
     notify: Notify,
+}
+
+/// 動いている間の保存先の変更・選び直し・復元の最中であることの印（手放すと終わる）。
+struct Maintenance<'a>(&'a AtomicBool);
+
+impl Drop for Maintenance<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// 定期バックアップの進み具合。作るのは一度に1つだけ。
@@ -234,6 +247,7 @@ impl AppCore {
             today: Mutex::new(None),
             backup: Mutex::new(BackupState::default()),
             restored: Mutex::new(None),
+            maintenance: AtomicBool::new(false),
             notify,
         })
     }
@@ -369,6 +383,121 @@ impl AppCore {
         let startup = self.startup();
         self.notify(Notice::Startup(startup.clone()));
         Ok(startup)
+    }
+
+    // ---- 動いている間の保存先の変更・選び直し・復元（設定画面のデータ区分。画面設計書 7章） ----
+    //
+    // 起動時の操作（上）と違い、データベースを開いたまま画面が動いている。画面を消さないよう、
+    // 状態は「開いた」のまま変えず（[`Notice::Startup`] も出さない）、データベースを使う間は
+    // `db` のロックを持ち続けて、ほかのコマンドを待たせる（途中の状態を見せない）。定期バックアップとは
+    // 重ねない（アーキテクチャ設計書 6.2）。
+
+    /// 保存先の変更・選び直し・復元を始める。ほかのそれが最中なら [`CommandError::InvalidState`]。
+    /// 作っている途中の定期バックアップを待ち、手放すまで新しい定期バックアップを始めさせない。
+    fn begin_maintenance(&self) -> Result<Maintenance<'_>, CommandError> {
+        self.maintenance
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| CommandError::InvalidState)?;
+        let guard = Maintenance(&self.maintenance);
+        self.wait_for_backup();
+        Ok(guard)
+    }
+
+    /// 開いているデータベースを、`yunagi.lock` を離さずに閉じて `f` を行い、同じロックで開き直す。
+    /// 開き直せなかったときは、開けなかった状態を知らせる（画面は起動時の画面に戻る）。
+    ///
+    /// 開いていなければ [`CommandError::NotReady`]。閉じるのに失敗したときは、データベースを元に戻して
+    /// 何もせずに [`CommandError::Storage`]。
+    fn with_database_closed<T>(
+        &self,
+        f: impl FnOnce(&DbLock) -> Result<T, CommandError>,
+    ) -> Result<T, CommandError> {
+        let _maintenance = self.begin_maintenance()?;
+        let mut slot = lock(&self.db);
+        if !matches!(*slot, Slot::Open(_)) {
+            return Err(CommandError::NotReady);
+        }
+        let Slot::Open(db) = std::mem::replace(&mut *slot, Slot::Opening) else {
+            unreachable!("checked above");
+        };
+        let held = match db.close_keeping_lock() {
+            Ok(held) => held,
+            Err(e) => {
+                let e = *e;
+                *slot = Slot::Open(e.db);
+                return Err(CommandError::storage(&e.error));
+            }
+        };
+        let result = f(&held);
+        let reopened = open_slot(held, Database::open);
+        let opened = matches!(reopened, Slot::Open(_));
+        *slot = reopened;
+        drop(slot);
+        if !opened {
+            self.notify(Notice::Startup(self.startup()));
+        }
+        result
+    }
+
+    /// 保存先を `dir` に変える（データベースと `backups/` を移し、`config.json` に記録する。アーキテクチャ
+    /// 設計書 6章）。使えない保存先は何も変えずに [`CommandError::Rejected`]。結果は、移した後に消せなかった
+    /// 元のファイル。
+    pub fn change_data_dir(&self, dir: &Path) -> Result<Vec<PathBuf>, CommandError> {
+        self.with_database_closed(|held| {
+            data_dir::change_data_dir(held, dir)
+                .map(|report| report.leftovers)
+                .map_err(|e| {
+                    eprintln!(
+                        "yunagi: could not change the data directory to {}: {}",
+                        dir.display(),
+                        chain(&e)
+                    );
+                    data_dir_rejected(&e)
+                })
+        })
+    }
+
+    /// データベースのある既存のフォルダ `dir` を、データを移さずに保存先として記録して開き直す
+    /// （保存先の選び直し。アーキテクチャ設計書 6章）。使えないフォルダは何も変えずに
+    /// [`CommandError::Rejected`]。開くデータベースが別のものになるので、画面は読み込み直す。
+    pub fn use_data_dir(&self, dir: &Path) -> Result<(), CommandError> {
+        self.with_database_closed(|held| {
+            data_dir::use_existing_data_dir(held, dir).map_err(|e| {
+                eprintln!(
+                    "yunagi: could not use {} as the data directory: {}",
+                    dir.display(),
+                    chain(&e)
+                );
+                data_dir_rejected(&e)
+            })
+        })?;
+        // 開いたデータベースは別のものなので、その日の定期バックアップを作り直す
+        lock(&self.backup).done_for = None;
+        self.notify_changed(ChangeSource::Screen);
+        Ok(())
+    }
+
+    /// バックアップ `backup`（`list_backups` の `path`）から復元する（アーキテクチャ設計書 6.2）。
+    /// 今のデータは復元前のバックアップに退避する。使えないバックアップは何も変えずに
+    /// [`CommandError::Rejected`]。画面は、復元の後に読み込み直す。
+    pub fn restore_backup(&self, backup: &Path) -> Result<(), CommandError> {
+        let _maintenance = self.begin_maintenance()?;
+        {
+            let mut slot = lock(&self.db);
+            let Slot::Open(db) = &mut *slot else {
+                return Err(CommandError::NotReady);
+            };
+            db.restore_backup(backup).map_err(|e| {
+                eprintln!(
+                    "yunagi: could not restore from {}: {}",
+                    backup.display(),
+                    chain(&e)
+                );
+                backup_error(&e)
+            })?;
+        }
+        self.notify_changed(ChangeSource::Screen);
+        Ok(())
     }
 
     /// [`AppCore::begin`] の後で `yunagi.lock` を取る（選び直し・戻すとき）。取れなければ、開けなかった
@@ -574,7 +703,9 @@ impl AppCore {
     fn start_daily_backup(self: &Arc<Self>, today: LogicalDate) {
         let mut state = lock(&self.backup);
         let running = state.running.as_ref().is_some_and(|h| !h.is_finished());
-        if running || state.done_for == Some(today) {
+        // 保存先の変更・選び直し・復元の最中は始めない（ファイルを差し替えるため）。終わった後の
+        // 次の確かめ（30 秒後）で作る
+        if running || state.done_for == Some(today) || self.maintenance.load(Ordering::Acquire) {
             return;
         }
         let job = match self.with_db(|db| db.daily_backup().map_err(|e| CommandError::storage(&e)))
@@ -757,17 +888,8 @@ fn is_corruption(e: &rusqlite::Error) -> bool {
 
 /// 選んだバックアップで戻せなかった理由（[`AppCore::restore_at_startup`]）。
 fn recover_error(e: &RecoverError) -> CommandError {
-    let reject = |reason| CommandError::Rejected { reason };
     match e {
-        RecoverError::Backup(b) => match b {
-            BackupError::Corrupted { .. } => reject(RejectReason::Corrupted),
-            BackupError::NotYunagiDatabase(_) => reject(RejectReason::NotYunagi),
-            BackupError::Storage(StorageError::UnsupportedSchema { .. }) => {
-                reject(RejectReason::NewerSchema)
-            }
-            BackupError::Sqlite(_) | BackupError::NotABackup(_) => reject(RejectReason::Unreadable),
-            _ => CommandError::storage(e),
-        },
+        RecoverError::Backup(b) => backup_error(b),
         // 前のデータベースが退避した場所に残っている。画面はその場所を示す
         RecoverError::PutBackFailed { set_aside, .. } => CommandError::PutBackFailed {
             set_aside: set_aside.display().to_string(),
@@ -777,10 +899,30 @@ fn recover_error(e: &RecoverError) -> CommandError {
     }
 }
 
-/// 選んだ保存先を使えなかった理由（[`AppCore::choose_data_dir`]）。
+/// 選んだバックアップを使えなかった理由（起動時の回復と、設定画面の復元）。使えない（確かめて断った）
+/// ものは `rejected`、それ以外は `storage`。
+fn backup_error(e: &BackupError) -> CommandError {
+    let reject = |reason| CommandError::Rejected { reason };
+    match e {
+        BackupError::Corrupted { .. } => reject(RejectReason::Corrupted),
+        BackupError::NotYunagiDatabase(_) => reject(RejectReason::NotYunagi),
+        BackupError::Storage(StorageError::UnsupportedSchema { .. }) => {
+            reject(RejectReason::NewerSchema)
+        }
+        BackupError::Sqlite(_) | BackupError::NotABackup(_) => reject(RejectReason::Unreadable),
+        _ => CommandError::storage(e),
+    }
+}
+
+/// 選んだ保存先を使えなかった理由（[`AppCore::choose_data_dir`]・[`AppCore::change_data_dir`]）。
 fn data_dir_rejected(e: &DataDirError) -> CommandError {
     let reject = |reason| CommandError::Rejected { reason };
     match e {
+        DataDirError::SameDirectory(_) => reject(RejectReason::SameDirectory),
+        DataDirError::InsideBackups(_) => reject(RejectReason::InsideBackups),
+        DataDirError::TargetHasDatabase(_) | DataDirError::TargetHasBackups(_) => {
+            reject(RejectReason::TargetHasData)
+        }
         DataDirError::NotAbsolute(_)
         | DataDirError::NotNormalized(_)
         | DataDirError::NotUtf8(_) => reject(RejectReason::InvalidPath),
