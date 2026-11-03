@@ -44,3 +44,13 @@ GitHub Actions の開発用 CI（`.github/workflows/ci.yml`）は、PR と main 
 型チェックの設定は2つに分けている。`tsconfig.json` は画面（`src/`。ブラウザで動く）用、`tsconfig.node.json` は設定ファイル（Node.js で動く）用。
 
 `experiments/`（技術選定の試作）と `prototype/`（画面の見本）は本番のコードではなく、上のコマンドの対象にも入れていない。
+
+## コードの書き方
+
+### エラーの表示（Rust）
+
+- エラーの型の Display（`to_string()` で得る文）には、その層で何が失敗したか（何をしようとしたか・どのファイルか）だけを書き、原因のエラーの文は含めない。原因は `source()` で返す。両方に書くと、原因をたどって表示したときに同じ文が二重に出るため（2026-11-03 決定）。
+- 別のエラーを包むだけの種類（`StorageError::Lock`・`BackupError::Storage` など）は、Display も `source()` も中身のものをそのまま返す（透過）。
+- 原因が2つある種類（`StorageError::RestoreFailed` など）は、主な原因を `source()` で返し、もう一方は原因まで含めて Display に書く。
+- 利用者やログに1行で出すときは、`yunagi_core::storage::ErrorChain` で原因まで `: ` でつなぐ。rusqlite など外部のエラーには Display と `source()` の両方に同じ文を出すものがあるので、`ErrorChain` は前の文に含まれている文を省く。
+- MCP・CLI のエラーの `message`（`docs/design/05-mcp-cli-spec.md` 4.3）や画面のエラー表示（`docs/design/03-ui-spec.md` の保存の失敗の原因の表示など）の文は、Display をそのまま使わず、エラーの種類から作る。原因の文は、ログや詳細の表示に `ErrorChain` で添える。

@@ -155,9 +155,8 @@ impl fmt::Display for LockError {
                 path.display(),
                 waited.as_millis()
             ),
-            Self::Io { path, source } => {
-                write!(f, "could not lock {}: {source}", path.display())
-            }
+            // 原因の文は含めない（source() で返す。README「エラーの表示」）
+            Self::Io { path, .. } => write!(f, "could not lock {}", path.display()),
         }
     }
 }
@@ -193,7 +192,8 @@ impl fmt::Debug for CloseError {
 
 impl fmt::Display for CloseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "could not close the database: {}", self.error)
+        // 原因の文は含めない（source() で返す。README「エラーの表示」）
+        write!(f, "could not close the database")
     }
 }
 

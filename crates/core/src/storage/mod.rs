@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-pub use error::StorageError;
+pub use error::{ErrorChain, StorageError};
 pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
 pub use ulid::{ParseUlidError, Ulid};
 
