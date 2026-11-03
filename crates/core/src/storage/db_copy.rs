@@ -71,6 +71,10 @@ pub(super) fn copy(src: &Connection, to: &Path) -> Result<(), CopyError> {
 
 /// フォルダの中の名前の変更・追加をディスクに反映する（電源断で消えないように）。
 /// Unix 系だけで行う（Windows はフォルダを開いて反映する方法を std が持たない）。
+///
+/// 自動バックアップ・保存先の変更・`config.json` の保存は、失敗しても続ける（`let _ =`）。
+/// 名前の変更そのものは済んでいて、反映できなくても困るのは直後に電源が落ちたときだけのため。
+/// マイグレーション前のバックアップは、これまでどおり失敗にする。
 pub(super) fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     fs::File::open(dir)?.sync_all()?;
