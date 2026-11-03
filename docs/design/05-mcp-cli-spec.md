@@ -163,7 +163,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 
 返り値の細部（2026-11-03 決定。コアの `domain::board`）：
 
-- `todos`・`blockers` は、その日の削除されていない項目を、画面と同じ並び順で返す。`todos` には取りやめた TODO（`status: "dropped"`）も入れ、理由を `close_reason`（`dropped` / `split` / `returned_external`。それ以外の TODO は `null`）で返す（取りやめた TODO への書き込みのエラーと同じ値。3章）。エージェントが、取りやめた TODO を操作の対象から外し、利用者に理由を正しく伝えられるようにするため。
+- `todos`・`blockers` は、その日の削除されていない項目を、画面と同じ並び順で返す。`todos` には取りやめた TODO（`status: "dropped"`）も入れ、理由を `close_reason`（`dropped` / `split` / `returned_external`。それ以外の TODO は `null`）で返す（取りやめた TODO への書き込みのエラーと同じ値。3章）。エージェントが、取りやめた TODO を操作の対象から外し、利用者に理由を正しく伝えられるようにするため。障害の項目には `close_reason` の欄を入れない（障害は取りやめず、状態は `open` / `resolved` だけなので。データモデル設計書 3章 item）。障害には代わりに `resolution_note` を入れる（無ければ `null`。未解消に戻した障害にも残っていることがある。3章）。逆に TODO には `resolution_note` の欄を入れない（2026-11-03 決定）。
 - `note.length` は本文の文字数（Unicode のコードポイントの数。バイト数ではない）。`headings` は時刻付き見出しの文字（データモデル設計書 3章 note）。まだ書いていない日は `reflection` が `""`、`note` が `{"headings": [], "length": 0}`。
 - `open_board` は `date`・`todos`・`blockers` だけを返す（振り返りとノートは返さない）。項目の形は `get_board` と同じで、`status` が `open` の項目だけを入れる。過去の日の項目は持ち越しても `status` を変えないので、持ち越し済みの項目も入る（`carried_to_id` で見分ける。件数の「残り」と同じく、その日の終わりの状態を表す）。
 - どちらも読むだけで、day の行を作らない。

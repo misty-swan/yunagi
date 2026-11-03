@@ -108,7 +108,7 @@ pub fn search(conn: &Connection, query: &SearchQuery<'_>) -> Result<Vec<SearchHi
         let ids: Vec<Ulid> = item_ids.iter().flatten().copied().collect();
         let carried = item_table::carried_to_many(conn, &ids)?;
         for (hit, id) in hits.iter_mut().zip(item_ids) {
-            hit.carried_to = id.and_then(|id| carried.get(&id)).map(CarriedTo::from);
+            hit.carried_to = id.and_then(|id| carried.get(&id)).copied();
         }
         Ok(hits)
     })
@@ -163,7 +163,9 @@ macro_rules! with_body {
             "WHEN 'note' THEN (SELECT body FROM note WHERE date = hit.ref_id) ",
             "WHEN 'reflection' THEN (SELECT body FROM reflection WHERE date = hit.ref_id) ",
             "ELSE i.text END, ",
-            "CASE WHEN i.status = 'resolved' THEN i.resolution_note END ",
+            "CASE WHEN i.status = 'resolved' THEN i.resolution_note END, ",
+            // 項目の id（持ち越し先を読むため。ノート・振り返りは NULL）
+            "i.id AS item_id ",
             "FROM (",
             $($inner,)+
             // 項目の本文と解消メモは、item を1回引いて読む
@@ -216,21 +218,16 @@ const LIKE_SQL: &str = with_body!(
 
 /// 結果の1行と、項目なら項目の id（持ち越し先を読むため）。
 fn from_row(row: &Row<'_>) -> rusqlite::Result<(SearchHit, Option<Ulid>)> {
-    let kind: SearchKind = row.get(0)?;
-    // 項目の ref_id は item.id なので、ULID として読む（ノート・振り返りは日付）
-    let item_id = match kind {
-        SearchKind::Todo | SearchKind::Blocker => Some(row.get(1)?),
-        SearchKind::Note | SearchKind::Reflection => None,
-    };
     let hit = SearchHit {
-        kind,
+        kind: row.get(0)?,
         ref_id: row.get(1)?,
         date: row.get(2)?,
         body: row.get(3)?,
         resolution_note: row.get(4)?,
         carried_to: None,
     };
-    Ok((hit, item_id))
+    // 項目の ref_id と同じ item.id を、ULID として読む（ノート・振り返りは NULL）
+    Ok((hit, row.get(5)?))
 }
 
 /// 検索語を、FTS5 の1つの句（`"…"`）にする。句の中の `"` は2つ重ねる。

@@ -91,17 +91,6 @@ pub fn save(
 }
 
 /// `before` より前で `after` より後（`None` なら下限なし）の日のうち、本文が空白（Unicode の空白文字）
-/// 以外の文字を含む、最も新しい日。無ければ `None`。新しい日から順に読み、見つかったら止める。
-pub fn latest_nonblank_date(
-    conn: &Connection,
-    doc: TextDoc,
-    before: LogicalDate,
-    after: Option<LogicalDate>,
-) -> Result<Option<LogicalDate>, StorageError> {
-    Ok(nonblank_dates(conn, doc, before, after, 1)?.pop())
-}
-
-/// `before` より前で `after` より後（`None` なら下限なし）の日のうち、本文が空白（Unicode の空白文字）
 /// 以外の文字を含む日を、新しい順に `limit` 日まで返す。新しい日から順に読み、`limit` 日見つかったら止める。
 pub fn nonblank_dates(
     conn: &Connection,
@@ -191,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_nonblank_date_skips_blank_bodies_and_respects_the_range() {
+    fn nonblank_dates_skip_blank_bodies_and_respect_the_range() {
         let (db, _dir) = open();
         let conn = db.connection();
         let t = at("2026-11-03T01:00:00Z");
@@ -205,13 +194,18 @@ mod tests {
             save(conn, TextDoc::Note, d, body, t).unwrap();
         }
         let today = date("2026-11-03");
-        let latest = |after| latest_nonblank_date(conn, TextDoc::Note, today, after).unwrap();
+        let latest = |after| {
+            nonblank_dates(conn, TextDoc::Note, today, after, 1)
+                .unwrap()
+                .pop()
+        };
         assert_eq!(latest(None), Some(date("2026-10-30")));
         assert_eq!(latest(Some(date("2026-10-29"))), Some(date("2026-10-30")));
         assert_eq!(latest(Some(date("2026-10-30"))), None);
-        assert_eq!(
-            latest_nonblank_date(conn, TextDoc::Reflection, today, None).unwrap(),
-            None
+        assert!(
+            nonblank_dates(conn, TextDoc::Reflection, today, None, 1)
+                .unwrap()
+                .is_empty()
         );
     }
 

@@ -152,6 +152,23 @@ pub fn get(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
     .optional()?)
 }
 
+/// id が `ids` のどれかの行（id ごと）。論理削除したものも返す。無い id は入れない。1回だけ読む。
+pub fn get_many(conn: &Connection, ids: &[Ulid]) -> Result<HashMap<Ulid, Item>, StorageError> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM item WHERE id IN (SELECT value FROM json_each(?1))"
+    ))?;
+    let rows = stmt.query_map([json_ids(ids)], from_row)?;
+    rows.map(|r| r.map(|item| (item.id, item)))
+        .collect::<rusqlite::Result<_>>()
+        .map_err(Into::into)
+}
+
+/// id の並びを JSON の配列にする（SQL の中で json_each で開き、文を件数によらず1つにするため）。
+fn json_ids(ids: &[Ulid]) -> String {
+    serde_json::to_string(&ids.iter().map(Ulid::to_string).collect::<Vec<_>>())
+        .expect("a list of strings is always serialized")
+}
+
 /// その日の項目を並び順（`sort_key`、同じなら id）で返す。論理削除したものは含めない。
 pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, StorageError> {
     let mut stmt = conn.prepare_cached(&format!(
@@ -159,6 +176,28 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, S
     ))?;
     let rows = stmt.query_map([date], from_row)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// その日の、未完了の TODO と未解消の障害（`status = open`）の id（id の順）。論理削除したものは
+/// 含めない。持ち越しの対象があるかを確かめるのに使う（前面に出すたびに呼ばれるので、id だけを読む）。
+pub fn open_ids_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Ulid>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id FROM item WHERE date = ?1 AND status = 'open' AND deleted_at IS NULL ORDER BY id",
+    )?;
+    let rows = stmt.query_map([date], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// その日に、未完了の TODO か未解消の障害（`status = open`。論理削除したものは除く）のうち、
+/// `carried_from_id` でそれを指す項目（削除したものを含む）が1件も無いものがあるか。あれば、その項目は
+/// 持ち越し済みでない（[`carried_to`] が `None`）。1件見つかったら止める。
+pub fn has_open_without_copies(conn: &Connection, date: LogicalDate) -> Result<bool, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM item AS i WHERE i.date = ?1 AND i.status = 'open' \
+         AND i.deleted_at IS NULL \
+         AND NOT EXISTS (SELECT 1 FROM item AS c WHERE c.carried_from_id = i.id))",
+    )?;
+    Ok(stmt.query_row([date], |r| r.get(0))?)
 }
 
 /// `from` から `to` まで（両端を含む）の日の項目を、日付・並び順（`sort_key`、同じなら id）で返す。
@@ -191,19 +230,6 @@ pub fn dates_before(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// `before` より前で、削除されていない項目がある最も新しい日。無ければ `None`。
-pub fn latest_date_before(
-    conn: &Connection,
-    before: LogicalDate,
-) -> Result<Option<LogicalDate>, StorageError> {
-    Ok(dates_before(conn, before, 1)?.pop())
-}
-
-/// `carried_from_id` で `id` を指す項目（`id` を持ち越して作った項目）。論理削除したものも含める。
-pub fn list_carried_from(conn: &Connection, id: Ulid) -> Result<Vec<Item>, StorageError> {
-    list_carried_from_any(conn, &[id])
-}
-
 /// 項目の持ち越し先の id と日付（MCP・CLI の `carried_to_id`・`carried_to_date`。MCP・CLI 仕様書 3章）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CarriedTo {
@@ -211,22 +237,14 @@ pub struct CarriedTo {
     pub date: LogicalDate,
 }
 
-impl From<&Item> for CarriedTo {
-    fn from(item: &Item) -> Self {
-        Self {
-            id: item.id,
-            date: item.date,
-        }
-    }
-}
-
 /// 項目 `id` の持ち越し先（データモデル設計書 3章 `carried_to_id`）：`carried_from_id` で `id` を
 /// 指す項目をたどり、最初に行き着いた削除されていない項目。削除されている項目は、さらにそれを
 /// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。
 ///
 /// 行き着く項目は常に1件以下に保つ（データモデル設計書 3章）。壊れたデータで2件以上あるときは、
-/// 持ち越しの段の浅いほう、同じ段では、たどった元の項目の id の順、その中で id の小さいほうを返す。
-pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
+/// 持ち越しの段の浅いほう、同じ段では、1つ前の段の項目（指されている項目）の id の順、その中で
+/// id の小さいほうを返す。
+pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<CarriedTo>, StorageError> {
     carried_to_skipping(conn, id, None)
 }
 
@@ -236,7 +254,7 @@ pub fn carried_to_skipping(
     conn: &Connection,
     id: Ulid,
     skip: Option<Ulid>,
-) -> Result<Option<Item>, StorageError> {
+) -> Result<Option<CarriedTo>, StorageError> {
     Ok(walk_carried_to(conn, &[id], skip)?.remove(&id))
 }
 
@@ -245,8 +263,38 @@ pub fn carried_to_skipping(
 pub fn carried_to_many(
     conn: &Connection,
     ids: &[Ulid],
-) -> Result<HashMap<Ulid, Item>, StorageError> {
+) -> Result<HashMap<Ulid, CarriedTo>, StorageError> {
     walk_carried_to(conn, ids, None)
+}
+
+/// 項目 `ids` それぞれの、最後の持ち越し先：[`carried_to`] を、行き着く項目が無くなるまで繰り返した
+/// 先（A→B→C と持ち越して、どれも削除されていなければ、A の最後の持ち越し先は C）。持ち越し済みの
+/// 項目だけを入れる。1回ごとに [`carried_to_many`] でまとめて読む。
+pub fn last_carried_many(
+    conn: &Connection,
+    ids: &[Ulid],
+) -> Result<HashMap<Ulid, CarriedTo>, StorageError> {
+    let mut last: HashMap<Ulid, CarriedTo> = HashMap::new();
+    // 壊れたデータで輪になっていても止まるように、元ごとに一度通った項目は通らない
+    let mut visited: HashSet<(Ulid, Ulid)> = ids.iter().map(|&id| (id, id)).collect();
+    // （元, 今いる項目）
+    let mut frontier: Vec<(Ulid, Ulid)> = ids.iter().map(|&id| (id, id)).collect();
+    while !frontier.is_empty() {
+        let nodes: Vec<Ulid> = frontier.iter().map(|&(_, node)| node).collect();
+        let next = carried_to_many(conn, &nodes)?;
+        frontier.retain_mut(|(origin, node)| {
+            let Some(&to) = next.get(node) else {
+                return false;
+            };
+            if !visited.insert((*origin, to.id)) {
+                return false;
+            }
+            last.insert(*origin, to);
+            *node = to.id;
+            true
+        });
+    }
+    Ok(last)
 }
 
 /// [`carried_to`]・[`carried_to_many`] のたどり方。`ids` の各項目から、持ち越しの1段ずつ、まとめて読む。
@@ -254,8 +302,8 @@ fn walk_carried_to(
     conn: &Connection,
     ids: &[Ulid],
     skip: Option<Ulid>,
-) -> Result<HashMap<Ulid, Item>, StorageError> {
-    let mut found: HashMap<Ulid, Item> = HashMap::new();
+) -> Result<HashMap<Ulid, CarriedTo>, StorageError> {
+    let mut found: HashMap<Ulid, CarriedTo> = HashMap::new();
     // たどる元ごとに、一度見た項目はたどらない（壊れたデータで輪になっていても止まるように）。
     // 元どうしが同じ持ち越しの並びにあることもある（検索の結果に A と、A の持ち越し先 B が並ぶなど）ので、
     // 元ごとに分けて数える
@@ -271,16 +319,17 @@ fn walk_carried_to(
         }
     }
     while !frontier.is_empty() {
+        // 元ごとに、指されている項目の id の順に調べる（同じ段で2件以上に行き着く壊れたデータでの選び方）
+        frontier.sort_unstable();
         let parents: Vec<Ulid> = frontier
             .iter()
             .map(|&(_, node)| node)
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
-        let mut children: HashMap<Ulid, Vec<Item>> = HashMap::new();
-        for child in list_carried_from_any(conn, &parents)? {
-            let parent = child.carried_from_id.expect("selected by carried_from_id");
-            children.entry(parent).or_default().push(child);
+        let mut children: HashMap<Ulid, Vec<Link>> = HashMap::new();
+        for link in list_links_from(conn, &parents)? {
+            children.entry(link.from).or_default().push(link);
         }
         let mut next = Vec::new();
         for (origin, node) in frontier {
@@ -288,14 +337,14 @@ fn walk_carried_to(
                 continue;
             }
             for child in children.get(&node).into_iter().flatten() {
-                if !seen.insert((origin, child.id)) {
+                if !seen.insert((origin, child.to.id)) {
                     continue;
                 }
-                if child.deleted_at.is_none() {
-                    found.insert(origin, child.clone());
+                if child.live {
+                    found.insert(origin, child.to);
                     break;
                 }
-                next.push((origin, child.id));
+                next.push((origin, child.to.id));
             }
         }
         // 同じ段で先に行き着いた元の、残りの枝はたどらない
@@ -305,16 +354,31 @@ fn walk_carried_to(
     Ok(found)
 }
 
+/// 持ち越しの1段：`from` を持ち越して作った項目 `to`。
+struct Link {
+    from: Ulid,
+    to: CarriedTo,
+    /// `to` が削除されていないか。
+    live: bool,
+}
+
 /// `carried_from_id` で `ids` のどれかを指す項目（id の順）。論理削除したものも含める。
-fn list_carried_from_any(conn: &Connection, ids: &[Ulid]) -> Result<Vec<Item>, StorageError> {
-    // id は JSON の配列で渡し、SQL の中で json_each で開く（文を件数によらず1つにするため）
-    let ids = serde_json::to_string(&ids.iter().map(Ulid::to_string).collect::<Vec<_>>())
-        .expect("a list of strings is always serialized");
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {COLUMNS} FROM item WHERE carried_from_id IN (SELECT value FROM json_each(?1)) \
-         ORDER BY id"
-    ))?;
-    let rows = stmt.query_map([ids], from_row)?;
+/// たどるのに要る列だけを読む。
+fn list_links_from(conn: &Connection, ids: &[Ulid]) -> Result<Vec<Link>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT carried_from_id, id, date, deleted_at IS NULL FROM item \
+         WHERE carried_from_id IN (SELECT value FROM json_each(?1)) ORDER BY id",
+    )?;
+    let rows = stmt.query_map([json_ids(ids)], |r| {
+        Ok(Link {
+            from: r.get(0)?,
+            to: CarriedTo {
+                id: r.get(1)?,
+                date: r.get(2)?,
+            },
+            live: r.get(3)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -572,11 +636,31 @@ mod tests {
     }
 
     #[test]
-    fn latest_date_before_skips_deleted_items_and_later_days() {
+    fn open_ids_by_date_are_open_live_items_of_the_day() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = ensure_day(&db, "2026-11-03");
+        let other = ensure_day(&db, "2026-11-02");
+        let open_item = todo(d, "open", "a");
+        let done = Item {
+            status: ItemStatus::Done,
+            ..todo(d, "done", "b")
+        };
+        let deleted = todo(d, "deleted", "c");
+        for item in [&open_item, &done, &deleted, &todo(other, "other day", "a")] {
+            insert(conn, item).unwrap();
+        }
+        assert!(soft_delete(conn, deleted.id, at("2026-11-03T05:00:00Z")).unwrap());
+        assert_eq!(open_ids_by_date(conn, d).unwrap(), [open_item.id]);
+    }
+
+    #[test]
+    fn dates_before_skip_deleted_items_and_later_days() {
         let (db, _dir) = open();
         let conn = db.connection();
         let today = date("2026-11-03");
-        assert_eq!(latest_date_before(conn, today).unwrap(), None);
+        let latest = |before| dates_before(conn, before, 1).unwrap().pop();
+        assert_eq!(latest(today), None);
         for d in ["2026-10-30", "2026-11-03"] {
             let d = ensure_day(&db, d);
             insert(conn, &todo(d, "x", "a")).unwrap();
@@ -584,30 +668,8 @@ mod tests {
         let deleted = todo(ensure_day(&db, "2026-11-01"), "deleted", "a");
         insert(conn, &deleted).unwrap();
         soft_delete(conn, deleted.id, at("2026-11-03T05:00:00Z")).unwrap();
-        assert_eq!(
-            latest_date_before(conn, today).unwrap(),
-            Some(date("2026-10-30"))
-        );
-        assert_eq!(latest_date_before(conn, date("2026-10-30")).unwrap(), None);
-    }
-
-    #[test]
-    fn list_carried_from_finds_the_copies() {
-        let (db, _dir) = open();
-        let conn = db.connection();
-        let yesterday = ensure_day(&db, "2026-11-02");
-        let today = ensure_day(&db, "2026-11-03");
-        let source = todo(yesterday, "元", "a");
-        insert(conn, &source).unwrap();
-        assert!(list_carried_from(conn, source.id).unwrap().is_empty());
-
-        let carried = Item {
-            carry_count: 1,
-            carried_from_id: Some(source.id),
-            ..todo(today, "元", "a")
-        };
-        insert(conn, &carried).unwrap();
-        assert_eq!(list_carried_from(conn, source.id).unwrap(), [carried]);
+        assert_eq!(latest(today), Some(date("2026-10-30")));
+        assert_eq!(latest(date("2026-10-30")), None);
     }
 
     #[test]
@@ -689,6 +751,98 @@ mod tests {
                 .id,
             second.1
         );
+    }
+
+    #[test]
+    fn carried_to_of_broken_data_picks_by_the_id_of_the_item_one_step_before() {
+        // A を B1・B2 へ、B1→C1、B2→C2、C1→D1、C2→D2 と持ち越し、B・C をすべて削除する。
+        // B1 < B2 だが C2 < C1 にすると、たどった道の順（B1 の側が先）でなく、1つ前の段の
+        // 項目（C1・C2）の id の順で選び、D2 を返す（データモデル設計書 3章）
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let days =
+            ["2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03"].map(|d| ensure_day(&db, d));
+        let carried = |date, from: &Item| Item {
+            carried_from_id: Some(from.id),
+            ..todo(date, &from.text, "a")
+        };
+        let a = todo(days[0], "A", "a");
+        let b1 = carried(days[1], &a);
+        let b2 = carried(days[1], &a);
+        // id は作った順に大きくなるので、C2 を先に作る
+        let c2 = carried(days[2], &b2);
+        let c1 = carried(days[2], &b1);
+        let d1 = carried(days[3], &c1);
+        let d2 = carried(days[3], &c2);
+        assert!(b1.id < b2.id && c2.id < c1.id);
+        for item in [&a, &b1, &b2, &c1, &c2, &d1, &d2] {
+            insert(conn, item).unwrap();
+        }
+        let t = at("2026-11-03T05:00:00Z");
+        for item in [&b1, &b2, &c1, &c2] {
+            assert!(soft_delete(conn, item.id, t).unwrap());
+        }
+        assert_eq!(carried_to(conn, a.id).unwrap().unwrap().id, d2.id);
+        assert_eq!(carried_to_many(conn, &[a.id]).unwrap()[&a.id].id, d2.id);
+        // C2 を飛ばすと、残る D1 に行き着く
+        assert_eq!(
+            carried_to_skipping(conn, a.id, Some(c2.id))
+                .unwrap()
+                .unwrap()
+                .id,
+            d1.id
+        );
+    }
+
+    #[test]
+    fn batch_reads_for_carried_items() {
+        // A（11/01）→ B（11/02）→ C（11/03）、B は削除。D（11/02）は持ち越していない。
+        // E（11/02）→ F（11/03）、F は削除（E を指す項目はあるが、持ち越し済みでない）
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let days = ["2026-11-01", "2026-11-02", "2026-11-03"].map(|d| ensure_day(&db, d));
+        let carried = |date, from: &Item| Item {
+            carried_from_id: Some(from.id),
+            ..todo(date, &from.text, "a")
+        };
+        let a = todo(days[0], "A", "a");
+        let b = carried(days[1], &a);
+        let c = carried(days[2], &b);
+        let d = todo(days[1], "D", "b");
+        let e = todo(days[1], "E", "c");
+        let f = carried(days[2], &e);
+        for item in [&a, &b, &c, &d, &e, &f] {
+            insert(conn, item).unwrap();
+        }
+        let t = at("2026-11-03T05:00:00Z");
+        assert!(soft_delete(conn, b.id, t).unwrap());
+        assert!(soft_delete(conn, f.id, t).unwrap());
+
+        // get_many は削除したものも返し、無い id は入れない
+        let many = get_many(conn, &[a.id, b.id, Ulid::generate()]).unwrap();
+        assert_eq!(many.len(), 2);
+        assert_eq!(many[&b.id].deleted_at, Some(t));
+        assert!(get_many(conn, &[]).unwrap().is_empty());
+
+        // 最後の持ち越し先：A と B は C、C・D・E は持ち越し済みでない
+        let last = last_carried_many(conn, &[a.id, b.id, c.id, d.id, e.id]).unwrap();
+        let mut found: Vec<_> = last.iter().map(|(from, to)| (*from, to.id)).collect();
+        found.sort();
+        let mut expected = vec![(a.id, c.id), (b.id, c.id)];
+        expected.sort();
+        assert_eq!(found, expected);
+        assert_eq!(last[&a.id].date, days[2]);
+
+        // 11/02 には一度も持ち越していない D がある。D を完了すると、残る E は指す項目（削除した F）がある
+        assert!(has_open_without_copies(conn, days[1]).unwrap());
+        let done = ItemChanges {
+            status: Some(ItemStatus::Done),
+            ..ItemChanges::default()
+        };
+        assert!(update_fields(conn, d.id, &done, t).unwrap());
+        assert!(!has_open_without_copies(conn, days[1]).unwrap());
+        assert_eq!(open_ids_by_date(conn, days[1]).unwrap(), [e.id]);
+        assert!(has_open_without_copies(conn, days[2]).unwrap()); // C
     }
 
     #[test]

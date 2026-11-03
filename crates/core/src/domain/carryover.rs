@@ -19,14 +19,13 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
-use super::item::{self, CloseReason, InvalidArgument, Item, ItemKind, ItemStatus, carried_to};
+use super::item::{self, CloseReason, InvalidArgument, Item, ItemKind, ItemStatus};
 use crate::domain::logical_date::LogicalDate;
 use crate::domain::{day, sort_key};
 use crate::storage::table::day::{self as day_table, CarryoverMark};
 use crate::storage::table::item::{self as item_table, ItemChanges};
 use crate::storage::table::setting;
-use crate::storage::table::text_doc::{self, TextDoc};
-use crate::storage::{StorageError, Ulid, in_transaction};
+use crate::storage::{StorageError, Ulid, in_read_transaction, in_transaction};
 
 /// 設定のキー：持ち越しの見直しの回数（データモデル設計書 3章 setting）。
 pub const REVIEW_THRESHOLD_KEY: &str = "carryover_review_threshold";
@@ -35,15 +34,13 @@ pub const REVIEW_THRESHOLD_KEY: &str = "carryover_review_threshold";
 pub const DEFAULT_REVIEW_THRESHOLD: i64 = 3;
 
 /// 今日 `today` の「前回の日」：今日より前で、削除されていない項目か、空白以外の文字を含むノートが
-/// ある直近の日（データモデル設計書 3章 item）。振り返りだけの日は含めない。無ければ `None`。
+/// ある直近の日（データモデル設計書 3章 item。[`day::days_with_items_or_note`]）。振り返りだけの日は
+/// 含めない。無ければ `None`。
 pub fn previous_day(
     conn: &Connection,
     today: LogicalDate,
 ) -> Result<Option<LogicalDate>, StorageError> {
-    let with_items = item_table::latest_date_before(conn, today)?;
-    // 項目のある日より後のノートだけを見ればよい
-    let with_note = text_doc::latest_nonblank_date(conn, TextDoc::Note, today, with_items)?;
-    Ok(with_note.or(with_items))
+    Ok(day::days_with_items_or_note(conn, today, 1)?.pop())
 }
 
 /// 持ち越しの見直しの回数（設定 `carryover_review_threshold`）。1 以上の整数でない値（未設定を含む）は
@@ -77,49 +74,48 @@ pub struct Candidates {
 }
 
 /// 持ち越しの画面に出すもの。前回の日が無ければ `None`。前回の日に出す項目が無ければ、
-/// `items` は空。
+/// `items` は空。前回の日・項目・持ち越し先は、同じ時点の内容を読む。
 pub fn candidates(
     conn: &Connection,
     today: LogicalDate,
 ) -> Result<Option<Candidates>, StorageError> {
-    let Some(from) = previous_day(conn, today)? else {
-        return Ok(None);
-    };
-    let threshold = review_threshold(conn)?;
-    let items = open_items(conn, from)?
-        .into_iter()
-        .map(|item| Candidate {
-            review: item.kind == ItemKind::Todo && item.carry_count >= threshold,
-            item,
-        })
-        .collect();
-    Ok(Some(Candidates { from, items }))
+    in_read_transaction(conn, || {
+        let Some(from) = previous_day(conn, today)? else {
+            return Ok(None);
+        };
+        let threshold = review_threshold(conn)?;
+        let items = open_items(conn, from)?
+            .into_iter()
+            .map(|item| Candidate {
+                review: item.kind == ItemKind::Todo && item.carry_count >= threshold,
+                item,
+            })
+            .collect();
+        Ok(Some(Candidates { from, items }))
+    })
 }
 
 /// その日の、未完了の TODO と未解消の障害のうち、まだ持ち越し済みでないもの（並び順）。
+/// 持ち越し先は、まとめて読む（[`item_table::carried_to_many`]）。
 fn open_items(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, StorageError> {
-    let mut items = Vec::new();
-    for item in item_table::list_by_date(conn, date)? {
-        if is_pending(conn, &item)? {
-            items.push(item);
-        }
-    }
+    let mut items = item_table::list_by_date(conn, date)?;
+    items.retain(|item| item.status == ItemStatus::Open);
+    let ids: Vec<Ulid> = items.iter().map(|item| item.id).collect();
+    let carried = item_table::carried_to_many(conn, &ids)?;
+    items.retain(|item| !carried.contains_key(&item.id));
     Ok(items)
 }
 
-/// その日に持ち越しの対象が1件でもあるか（見つかったら止める）。
+/// その日に持ち越しの対象（未完了・未解消で、まだ持ち越し済みでない項目）が1件でもあるか。
+/// 前面に出すたびに呼ばれるので、まず一度も持ち越していない項目を1件だけ探し、無いときだけ
+/// 持ち越し先をたどる（項目は id だけを読む）。
 fn has_pending(conn: &Connection, date: LogicalDate) -> Result<bool, StorageError> {
-    for item in item_table::list_by_date(conn, date)? {
-        if is_pending(conn, &item)? {
-            return Ok(true);
-        }
+    if item_table::has_open_without_copies(conn, date)? {
+        return Ok(true);
     }
-    Ok(false)
-}
-
-/// 持ち越しの対象か：未完了・未解消で、まだ持ち越し済みでない。
-fn is_pending(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
-    Ok(item.status == ItemStatus::Open && carried_to(conn, item.id)?.is_none())
+    let ids = item_table::open_ids_by_date(conn, date)?;
+    let carried = item_table::carried_to_many(conn, &ids)?;
+    Ok(ids.iter().any(|id| !carried.contains_key(id)))
 }
 
 /// 持ち越しの画面を、いつ出すか（画面設計書 5章）。
@@ -146,29 +142,31 @@ pub struct Pending {
 /// 無ければ `None`（画面を出さず、パレットの「持ち越しを開く」も出さない）。
 ///
 /// 状態は day の行に記録するので、アプリを再起動しても保たれる（データモデル設計書 3章 day）。
+/// day の行・前回の日・項目・持ち越し先は、同じ時点の内容を読む。
 pub fn status(conn: &Connection, today: LogicalDate) -> Result<Option<Pending>, StorageError> {
-    let row = day_table::get(conn, today)?;
-    if row.as_ref().is_some_and(|d| d.carryover_done_at.is_some()) {
-        return Ok(None);
-    }
-    let Some(from) = previous_day(conn, today)? else {
-        return Ok(None);
-    };
-    // 1件あれば足りる（前面に出すたびに呼ばれるので、全件をたどらない）
-    if !has_pending(conn, from)? {
-        return Ok(None);
-    }
-    let prompt = match row {
-        Some(d) if d.carryover_postponed_at.is_some() => {
-            if d.carryover_reshown_at.is_some() {
-                Prompt::OnRequest
-            } else {
-                Prompt::ReshowOnFocus
-            }
+    in_read_transaction(conn, || {
+        let row = day_table::get(conn, today)?;
+        if row.as_ref().is_some_and(|d| d.carryover_done_at.is_some()) {
+            return Ok(None);
         }
-        _ => Prompt::Show,
-    };
-    Ok(Some(Pending { from, prompt }))
+        let Some(from) = previous_day(conn, today)? else {
+            return Ok(None);
+        };
+        if !has_pending(conn, from)? {
+            return Ok(None);
+        }
+        let prompt = match row {
+            Some(d) if d.carryover_postponed_at.is_some() => {
+                if d.carryover_reshown_at.is_some() {
+                    Prompt::OnRequest
+                } else {
+                    Prompt::ReshowOnFocus
+                }
+            }
+            _ => Prompt::Show,
+        };
+        Ok(Some(Pending { from, prompt }))
+    })
 }
 
 /// 持ち越しを後回しにした（Esc）ことを記録する。その日の day の行が無ければ作る。持ち越しを
@@ -571,7 +569,9 @@ mod tests {
     use crate::domain::logical_date::DayBoundary;
     use crate::storage::Database;
     use crate::storage::table::agent_client::{CLI_ID, Scope};
+    use crate::storage::table::item::carried_to;
     use crate::storage::table::test_support::{at, date};
+    use crate::storage::table::text_doc::{self, TextDoc};
 
     const T0: &str = "2026-11-03T01:00:00Z";
     const T1: &str = "2026-11-03T02:00:00Z";
@@ -1153,7 +1153,7 @@ mod tests {
         assert!(done.closed.is_empty());
         assert_eq!(get(conn, split_then_completed.id).status, ItemStatus::Done);
         assert_eq!(
-            carried_to(conn, added.id).unwrap().unwrap().text,
+            get(conn, carried_to(conn, added.id).unwrap().unwrap().id).text,
             "足された"
         );
         assert_eq!(carried_to(conn, completed.id).unwrap(), None);

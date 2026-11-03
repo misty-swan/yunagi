@@ -38,7 +38,7 @@ use std::str::FromStr;
 use jiff::civil::{Date, Time};
 use jiff::fmt::temporal::{DateTimeParser, DateTimePrinter};
 use jiff::tz::{AmbiguousOffset, TimeZone};
-use jiff::{Timestamp, Zoned};
+use jiff::{Span, Timestamp, Zoned};
 
 /// 日付の切り替わり時刻（設定 `day_boundary`。`HH:MM`、既定 `04:00`）。
 ///
@@ -148,19 +148,26 @@ impl LogicalDate {
 
     /// 翌日の論理日付。9999-12-31 の翌日は無いので `None`。
     pub fn tomorrow(self) -> Option<Self> {
-        (self < Self::MAX)
-            .then(|| self.0.tomorrow().ok().map(Self))
-            .flatten()
+        self.add_days(1)
     }
 
     /// 前日の論理日付。0001-01-01 の前日は無いので `None`。
     pub fn yesterday(self) -> Option<Self> {
-        (self > Self::MIN)
-            .then(|| self.0.yesterday().ok().map(Self))
-            .flatten()
+        self.add_days(-1)
     }
 
-    /// jiff の日付として取り出す（日付の加減算などに使う）。
+    /// `days` 日後（負なら前）の論理日付。0001-01-01〜9999-12-31 の外になるなら `None`。
+    pub fn add_days(self, days: i32) -> Option<Self> {
+        // jiff の日数の範囲（およそ ±2万年）を超える値は、Span を作る時点で断る
+        let span = Span::new().try_days(days).ok()?;
+        self.0
+            .checked_add(span)
+            .ok()
+            .map(Self)
+            .filter(|d| (Self::MIN..=Self::MAX).contains(d))
+    }
+
+    /// jiff の日付として取り出す（曜日を見るなど）。
     pub fn as_date(self) -> Date {
         self.0
     }
@@ -414,6 +421,17 @@ mod tests {
     }
 
     // --- 切り替わり時刻をまたぐ ---
+
+    #[test]
+    fn add_days_moves_within_the_calendar() {
+        assert_eq!(date("2026-11-03").add_days(0), Some(date("2026-11-03")));
+        assert_eq!(date("2026-12-30").add_days(3), Some(date("2027-01-02")));
+        assert_eq!(date("2026-03-01").add_days(-1), Some(date("2026-02-28")));
+        assert_eq!(LogicalDate::MAX.add_days(1), None);
+        assert_eq!(LogicalDate::MIN.add_days(-1), None);
+        assert_eq!(LogicalDate::MIN.add_days(i32::MAX), None);
+        assert_eq!(LogicalDate::MAX.add_days(i32::MIN), None);
+    }
 
     #[test]
     fn before_boundary_is_previous_day() {
