@@ -99,10 +99,11 @@ pub fn latest_nonblank_date(
     after: Option<LogicalDate>,
 ) -> Result<Option<LogicalDate>, StorageError> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT date, body FROM {} WHERE date < ?1 AND (?2 IS NULL OR date > ?2) \
-         ORDER BY date DESC",
+        "SELECT date, body FROM {} WHERE date < ?1 AND date > ?2 ORDER BY date DESC",
         doc.table()
     ))?;
+    // 下限なしは空の文字列（どの日付より小さい）にして、主キーの範囲で読めるようにする
+    let after = after.map_or_else(String::new, |d| d.to_string());
     let mut rows = stmt.query(params![before, after])?;
     while let Some(row) = rows.next()? {
         let body: String = row.get(1)?;

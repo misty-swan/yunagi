@@ -20,8 +20,8 @@ use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
 use super::item::{self, CloseReason, InvalidArgument, Item, ItemKind, ItemStatus, carried_to};
-use crate::domain::day;
 use crate::domain::logical_date::LogicalDate;
+use crate::domain::{day, sort_key};
 use crate::storage::table::day::{self as day_table, CarryoverMark};
 use crate::storage::table::item::{self as item_table, ItemChanges};
 use crate::storage::table::setting;
@@ -100,11 +100,16 @@ pub fn candidates(
 fn open_items(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, StorageError> {
     let mut items = Vec::new();
     for item in item_table::list_by_date(conn, date)? {
-        if item.status == ItemStatus::Open && carried_to(conn, item.id)?.is_none() {
+        if is_pending(conn, &item)? {
             items.push(item);
         }
     }
     Ok(items)
+}
+
+/// 持ち越しの対象か：未完了・未解消で、まだ持ち越し済みでない。
+fn is_pending(conn: &Connection, item: &Item) -> Result<bool, StorageError> {
+    Ok(item.status == ItemStatus::Open && carried_to(conn, item.id)?.is_none())
 }
 
 /// 持ち越しの画面を、いつ出すか（画面設計書 5章）。
@@ -136,10 +141,18 @@ pub fn status(conn: &Connection, today: LogicalDate) -> Result<Option<Pending>, 
     if row.as_ref().is_some_and(|d| d.carryover_done_at.is_some()) {
         return Ok(None);
     }
-    let Some(c) = candidates(conn, today)? else {
+    let Some(from) = previous_day(conn, today)? else {
         return Ok(None);
     };
-    if c.items.is_empty() {
+    // 1件あれば足りる（前面に出すたびに呼ばれるので、全件をたどらない）
+    let mut pending = false;
+    for item in item_table::list_by_date(conn, from)? {
+        if is_pending(conn, &item)? {
+            pending = true;
+            break;
+        }
+    }
+    if !pending {
         return Ok(None);
     }
     let prompt = match row {
@@ -152,10 +165,7 @@ pub fn status(conn: &Connection, today: LogicalDate) -> Result<Option<Pending>, 
         }
         _ => Prompt::Show,
     };
-    Ok(Some(Pending {
-        from: c.from,
-        prompt,
-    }))
+    Ok(Some(Pending { from, prompt }))
 }
 
 /// 持ち越しを後回しにした（Esc）ことを記録する。その日の day の行が無ければ作る。
@@ -168,7 +178,8 @@ pub fn postpone(
     now: Timestamp,
 ) -> Result<(), StorageError> {
     in_transaction(conn, || {
-        mark_once(conn, today, CarryoverMark::Postponed, tz, now).map(|_| ())
+        day::ensure(conn, today, tz, now)?;
+        mark_once(conn, today, CarryoverMark::Postponed, now).map(|_| ())
     })
 }
 
@@ -190,16 +201,16 @@ pub fn mark_reshown(
     })
 }
 
-/// day の行が無ければ作り、持ち越しの時刻 `mark` が未設定なら `now` を書く。書いたら `true`。
+/// 持ち越しの時刻 `mark` が未設定なら `now` を書く。書いたら `true`。day の行は呼び出し側が先に作る。
 fn mark_once(
     conn: &Connection,
     today: LogicalDate,
     mark: CarryoverMark,
-    tz: &TimeZone,
     now: Timestamp,
 ) -> Result<bool, StorageError> {
-    day::ensure(conn, today, tz, now)?;
-    let row = day_table::get(conn, today)?.expect("the day row was just ensured");
+    let Some(row) = day_table::get(conn, today)? else {
+        return Ok(false);
+    };
     let current = match mark {
         CarryoverMark::Done => row.carryover_done_at,
         CarryoverMark::Postponed => row.carryover_postponed_at,
@@ -263,6 +274,9 @@ pub enum CarryoverError {
     /// 画面に出していた日が、今の前回の日と違う（その間に、より新しい日に項目かノートができたなど）。
     /// 画面は持ち越しの一覧を読み直す。`previous_day` は今の前回の日。
     PreviousDayChanged { previous_day: Option<LogicalDate> },
+    /// 今日の持ち越しはすでに終えている（`carryover_done_at` がある）。古い画面からの二度目の確定などで、
+    /// 先の確定を覆さないよう断る。
+    AlreadyDone,
     /// 見直しの選択が誤っている：障害への見直し（[`InvalidArgument::WrongKind`]）、外部課題と
     /// 紐付いていない TODO の「外部ツールへ戻す」（[`InvalidArgument::NotLinkedExternal`]）、
     /// 途中に改行のある子の本文（[`InvalidArgument::MultilineText`]）。
@@ -277,6 +291,7 @@ impl std::fmt::Display for CarryoverError {
             Self::PreviousDayChanged { .. } => {
                 f.write_str("the previous day changed while the carry-over was shown")
             }
+            Self::AlreadyDone => f.write_str("the carry-over for the day is already done"),
             Self::InvalidArgument(e) => e.fmt(f),
             Self::Storage(e) => e.fmt(f),
         }
@@ -288,7 +303,7 @@ impl std::error::Error for CarryoverError {
         match self {
             Self::InvalidArgument(e) => Some(e),
             Self::Storage(e) => Some(e),
-            Self::PreviousDayChanged { .. } => None,
+            Self::PreviousDayChanged { .. } | Self::AlreadyDone => None,
         }
     }
 }
@@ -320,7 +335,7 @@ enum NewEntry<'a> {
 }
 
 /// 持ち越しを確定する（画面設計書 5章）。その日の day の行が無ければ作り、`carryover_done_at` を
-/// 記録する（すでにあれば最初の時刻のまま）。
+/// 記録する。すでに終えていれば、何もせずに [`CarryoverError::AlreadyDone`]。
 ///
 /// - 確定の時点で持ち越しの対象のもの（前回の日の、まだ持ち越し済みでない未完了・未解消の項目）だけを
 ///   扱う。画面を開いた後に完了・解消した項目や、持ち越し済みになった項目は、選んでいても、見直しを
@@ -340,6 +355,9 @@ pub fn confirm(
     now: Timestamp,
 ) -> Result<Confirmed, CarryoverError> {
     in_transaction(conn, || {
+        if day_table::get(conn, today)?.is_some_and(|d| d.carryover_done_at.is_some()) {
+            return Err(CarryoverError::AlreadyDone);
+        }
         let from = previous_day(conn, today)?;
         if from != Some(decision.from) {
             return Err(CarryoverError::PreviousDayChanged { previous_day: from });
@@ -394,7 +412,7 @@ pub fn confirm(
             }
             closed.push(changes.applied_to(source, now));
         }
-        mark_once(conn, today, CarryoverMark::Done, tz, now)?;
+        mark_once(conn, today, CarryoverMark::Done, now)?;
         Ok(Confirmed { created, closed })
     })
 }
@@ -409,6 +427,12 @@ enum Checked {
 
 /// 見直しの選択を確かめる。子が1件も無い分割は `None`（見直しを選ばなかったものとして扱う）。
 fn check_review(source: &Item, review: &Review) -> Result<Option<Checked>, InvalidArgument> {
+    // 子の無い分割は、項目の種類によらず、見直しを選ばなかったものとして扱う
+    if let Review::Split(texts) = review
+        && texts.iter().all(|t| t.trim().is_empty())
+    {
+        return Ok(None);
+    }
     if source.kind != ItemKind::Todo {
         // 障害には取りやめの状態が無い（データモデル設計書 3章 item）
         return Err(InvalidArgument::WrongKind {
@@ -508,18 +532,10 @@ fn insert_at_start(
 /// `first`（`None` なら空の日）より前に並ぶ `n` 個のキー（先頭から順に）。`first` が形に当てはまらず
 /// 作れなければ `None`。
 fn keys_before(first: Option<&str>, n: usize) -> Option<Vec<String>> {
-    let Some(first) = first else {
-        return Some(crate::domain::sort_key::spread(n));
-    };
-    // 後ろから順に、1つ後ろのキーとの間に作る
-    let mut keys = Vec::with_capacity(n);
-    let mut next = first.to_owned();
-    for _ in 0..n {
-        next = crate::domain::sort_key::between(None, Some(&next))?;
-        keys.push(next.clone());
+    match first {
+        None => Some(sort_key::spread(n)),
+        Some(first) => sort_key::n_between(None, Some(first), n),
     }
-    keys.reverse();
-    Some(keys)
 }
 
 #[cfg(test)]
@@ -922,15 +938,63 @@ mod tests {
         let (db, _dir) = open();
         let conn = db.connection();
         let t = todo(conn, "2026-11-02", "分割しない");
+        // 障害への子の無い分割も、誤りにせず見直しを選ばなかったものとして扱う
+        let b = blocker(conn, "2026-11-02", "障害");
         let d = Decision {
             from: date("2026-11-02"),
             selection: Selection::All,
-            reviews: HashMap::from([(t.id, Review::Split(vec![" ".into(), "".into()]))]),
+            reviews: HashMap::from([
+                (t.id, Review::Split(vec![" ".into(), "".into()])),
+                (b.id, Review::Split(vec!["".into()])),
+            ]),
         };
         let done = confirm_at(conn, "2026-11-03", &d);
         assert!(done.closed.is_empty());
         assert_eq!(get(conn, t.id).status, ItemStatus::Open);
         assert_eq!(done.created[0].carried_from_id, Some(t.id));
+        assert_eq!(done.created[1].carried_from_id, Some(b.id));
+    }
+
+    #[test]
+    fn a_second_confirm_is_refused() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let t = todo(conn, "2026-11-02", "A");
+        confirm_at(conn, "2026-11-03", &decision("2026-11-02", Selection::None));
+        // 古い画面から「すべて持ち越す」が届いても、先の「持ち越さない」を覆さない
+        let mut d = decision("2026-11-02", Selection::All);
+        d.reviews.insert(t.id, Review::Drop);
+        assert!(matches!(
+            confirm(conn, date("2026-11-03"), &d, &tokyo(), at(T2)),
+            Err(CarryoverError::AlreadyDone)
+        ));
+        assert!(texts(conn, "2026-11-03").is_empty());
+        assert_eq!(get(conn, t.id).status, ItemStatus::Open);
+        assert_eq!(
+            day_table::get(conn, date("2026-11-03"))
+                .unwrap()
+                .unwrap()
+                .carryover_done_at,
+            Some(at(T1))
+        );
+    }
+
+    #[test]
+    fn many_carried_items_get_short_keys_before_existing_ones() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        for i in 0..40 {
+            todo(conn, "2026-11-02", &format!("{i}"));
+        }
+        let today = todo(conn, "2026-11-03", "今日");
+        let done = carry_all(conn, "2026-11-02", "2026-11-03");
+        assert_eq!(done.created.len(), 40);
+        let items = item_table::list_by_date(conn, date("2026-11-03")).unwrap();
+        assert_eq!(items.last().unwrap().id, today.id);
+        assert!(items.windows(2).all(|w| w[0].sort_key < w[1].sort_key));
+        assert!(items.iter().all(|i| i.sort_key.len() <= 8), "{items:?}");
+        // 今日の項目のキーは変えない
+        assert_eq!(get(conn, today.id), today);
     }
 
     #[test]
