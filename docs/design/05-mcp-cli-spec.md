@@ -17,7 +17,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | --- | --- | --- |
 | read | ボード・項目・ノート・振り返りの取得、検索 | 有効 |
 | todo | TODO の追加・編集・完了・取り消し | 無効 |
-| blocker | 障害の追加・解消 | 無効 |
+| blocker | 障害の追加・編集・解消 | 無効 |
 | append | 振り返りとノートの末尾への追記 | 無効 |
 | note_edit | ノートの既存行の書き換え・削除・並べ替え | 無効 |
 
@@ -42,6 +42,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | A-03 | `edit_todo` | `yunagi todo edit ID TEXT` | — | todo |
 | A-03 | `complete_todo` / `reopen_todo` | `yunagi todo complete ID` / `yunagi todo reopen ID` | `yunagi todo done ID` | todo |
 | A-04 | `add_blocker` | `yunagi blocker add TEXT [--date D]` | — | blocker |
+| A-04 | `edit_blocker` | `yunagi blocker edit ID TEXT` | — | blocker |
 | A-04 | `resolve_blocker` | `yunagi blocker resolve ID [--note TEXT]` | — | blocker |
 | A-05 | `append_reflection` | `yunagi reflection append TEXT [--date D]` | `yunagi reflect append` | append |
 | A-05 | `append_note` | `yunagi note append TEXT [--date D] [--heading [TITLE]]` | — | append |
@@ -75,14 +76,19 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - 画面でも、取りやめた TODO の状態と本文は変えられない（操作仕様書 2章）。削除と並べ替えは通常どおりできる。
   - 障害には取りやめの状態が無い（データモデル設計書 3章）ので、この決まりは TODO だけに当てはまる。
 - `edit_todo` に今と同じ本文が届いた場合も、`complete_todo`・`reopen_todo`・`resolve_blocker` と同じく、エラーにせず、何も変えずに成功を返す（2026-11-03 決定）。エージェントは応答が届かなかったときなどに、同じ `edit_todo` をそのままやり直してよい。エラーにすると、やり直したエージェントが、1回目が届いていたのか失敗したのかを区別できないため。
-  - 比べ方：項目の本文も1行（データモデル設計書 item の `text`）なので、上の解消メモと同じ決まりで扱う。コアは、`edit_todo`・`add_todo`・`add_blocker` の本文から、解消メモと同じ空白文字を前後から除いてから保存し、画面からの本文の保存も同じく除く（除いて空になる本文と、途中に改行を含む本文は `invalid_argument`）。保存済みの本文はいつも除いた後の形なので、比較は、送られた本文から除いた後の値と保存済みの本文の完全一致とする（`agent revert` の判定と同じ一致の仕方。7章）。一致すれば本文を書かない。CLI の `TEXT` に `-` を指定して標準入力から読んだ本文（4.1）の末尾の改行も除かれるので、同じコマンドのやり直しは同じ本文と判定される。
+  - 比べ方：項目の本文も1行（データモデル設計書 item の `text`）なので、上の解消メモと同じ決まりで扱う。コアは、`edit_todo`・`edit_blocker`・`add_todo`・`add_blocker` の本文から、解消メモと同じ空白文字を前後から除いてから保存し、画面からの本文の保存も同じく除く（除いて空になる本文と、途中に改行を含む本文は `invalid_argument`）。保存済みの本文はいつも除いた後の形なので、比較は、送られた本文から除いた後の値と保存済みの本文の完全一致とする（`agent revert` の判定と同じ一致の仕方。7章）。一致すれば本文を書かない。CLI の `TEXT` に `-` を指定して標準入力から読んだ本文（4.1）の末尾の改行も除かれるので、同じコマンドのやり直しは同じ本文と判定される。
   - 欄ごとの扱い：`edit_todo` が変える欄は、いまは本文だけである。後で欄を足した場合（MVP 後）も、change_log に変えた欄だけを入れる決まり（データモデル設計書 change_log）に合わせて、送られた欄ごとに今の値と比べ、違う欄だけを書く。一部の欄だけが同じ（本文は同じで、別の欄は違う）なら、違う欄だけを書いて `updated: true` で成功し、記録にもその欄だけを入れる。すべての欄が同じときだけ `updated: false` にする（`resolve_blocker` で、同じ本文がすでにあって書かなかった解消メモを記録に入れないのと同じ）。
-  - 判定の順：`permission_denied`・`not_found`・`invalid_argument`（取りやめた TODO を最初に。上記。空白だけの本文などもここで返すので、保存の再試行中でも `invalid_argument` になる）・`storage_unavailable` を先に確かめ、続けて `carried_over`（下記の持ち越し済みの項目）、`user_editing` の順に確かめ、どれにも当たらなければ今の値と比べる。そのため、同じ本文でも、取りやめた TODO なら `invalid_argument`、保存の再試行中は `storage_unavailable`、持ち越し済みの項目なら `carried_over`、その項目の本文を入力中なら `user_editing` になる。入力中を同じ本文の判定より先にするのは、入力中は画面の本文がまだ保存されておらず、保存済みの本文と同じでも、利用者の見ている本文とは違うことがあるため。
+  - 判定の順：`permission_denied`・`not_found`・`invalid_argument`（取りやめた TODO と、下記の障害の ID を最初に。上記。空白だけの本文などもここで返すので、保存の再試行中でも `invalid_argument` になる）・`storage_unavailable` を先に確かめ、続けて `carried_over`（下記の持ち越し済みの項目）、`user_editing` の順に確かめ、どれにも当たらなければ今の値と比べる。そのため、同じ本文でも、取りやめた TODO と障害の ID なら `invalid_argument`、保存の再試行中は `storage_unavailable`、持ち越し済みの項目なら `carried_over`、その項目の本文を入力中なら `user_editing` になる。入力中を同じ本文の判定より先にするのは、入力中は画面の本文がまだ保存されておらず、保存済みの本文と同じでも、利用者の見ている本文とは違うことがあるため。
   - 応答と記録：成功の応答には `resolve_blocker` と同じ `updated`（`true` / `false`）と、操作の後の本文 `text` を含める（前後の空白を除いて保存した本文を、エージェントが読み直さずに確かめられるようにするため）。CLI では、`--json` のときに同じ `updated`・`text` を含む JSON を出し、テキスト出力では `Edited.`（本文を変えた）・`Same text. Nothing changed.`（何も変えていない）を表示する。終了コードはどちらも 0。何も変えなかった場合（`updated: false`）は change_log に記録しない（7章）。記録するときは、`todo.edit` として実際に変えた欄だけ（いまは本文だけ）を `before` / `after` に入れる。
+- `edit_todo` に障害の ID が届いた場合は、本文を何も変えずに `invalid_argument` を返す。障害の本文は、新しく設ける `edit_blocker`（`blocker` スコープ）で変える（2026-11-03 決定）。`complete_todo`・`reopen_todo` に障害の ID を、`resolve_blocker` に TODO の ID を渡した場合と同じく、操作の名詞と項目の種類をそろえるため（命名規則）。`edit_todo` で障害を受け付けると、`todo` スコープだけのエージェントが障害の本文を変えられ、`blocker` スコープだけのエージェントは自分で足した障害の本文も直せなくなる（2章）。change_log にも、障害の変更が `todo.edit` として残る。
+  - `edit_blocker` の本文の扱いは、`edit_todo` と同じとする。今と同じ本文なら何も変えずに `updated: false` で成功し（上記）、前後の空白の除き方と、除いて空になる本文・途中に改行を含む本文の `invalid_argument`、持ち越し済みの障害への `carried_over`（下記）、その障害の本文を入力中の `user_editing`（解消メモの入力中は、本文とは別の欄なので受け付ける。アーキテクチャ設計書 4.1）、判定の順、成功の応答の `updated`・`text`、CLI の出力（`Edited.`・`Same text. Nothing changed.`。終了コード 0）も同じ。解消済みの障害も、未解消の障害と同じく受け付ける（完了済みの TODO への `edit_todo` と同じ）。記録するときは、`blocker.edit` として実際に変えた欄だけ（いまは本文だけ）を `before` / `after` に入れる。
+  - `edit_blocker` に TODO の ID（取りやめた TODO を含む）を渡した場合も、本文を何も変えずに `invalid_argument` を返す。
+  - 送られた本文が今の本文と同じでも、`updated: false` の成功にはせず `invalid_argument` を返す（取りやめた TODO への `edit_todo` と同じく、送った本文に関係なく同じ結果で伝えるため）。`message` は、やり直しても成功しないことと、使う操作を伝える（例：`This ID is a blocker, not a TODO. It was not changed. Use edit_blocker.`、`This ID is a TODO, not a blocker. It was not changed. Use edit_todo.`）。エージェントは同じ操作をやり直さず、示された操作で同じ ID に送り直す。
+  - 判定の順：`permission_denied`・`not_found` の次に確かめる（`invalid_argument` の一つ。取りやめた TODO への `edit_todo` と同じ位置で、本文が空などのほかの `invalid_argument` より先）。種類が違えば、本文を直しても、時間をおいても成功しないことを、最初の応答で伝えるため。そのため、保存の再試行中でも、持ち越し済みの項目でも、入力中の項目でも、`invalid_argument` になる。`permission_denied` は送られた操作のスコープで確かめるので、`todo` スコープを持たないエージェントが送った `edit_todo` は、ID が障害でも `permission_denied` になる。
 - 持ち越し済みの項目（持ち越し元。データモデル設計書 3章「持ち越し」）への書き込みは、持ち越し先へ向け直さず、何も変えずに拒む（2026-11-03 決定）。持ち越すと前の日の項目は `open` のまま残るため、そのまま受け付けると、前の日の項目だけが完了などになり、今日の持ち越しの項目は元のまま残って、利用者とエージェントの見ている状態が食い違うため。黙って向け直すと、エージェントが指定した項目とは別の項目が変わり、`edit_todo` の本文や解消メモの判定も別の項目で行われるため、向け直しはしない。
-  - 対象の操作：`edit_todo`・`complete_todo`・`reopen_todo`・`resolve_blocker`。ID が持ち越し済みの項目を指す場合は、その項目の状態（完了・未完了など）にかかわらず、`conflict`（`reason: carried_over`。4.3）を返す。同じ操作を何度送っても同じ結果になり、前の日の項目は変わらない。
+  - 対象の操作：`edit_todo`・`edit_blocker`・`complete_todo`・`reopen_todo`・`resolve_blocker`。ID が持ち越し済みの項目を指す場合は、その項目の状態（完了・未完了など）にかかわらず、`conflict`（`reason: carried_over`。4.3）を返す。同じ操作を何度送っても同じ結果になり、前の日の項目は変わらない。
   - 持ち越し先の知らせ方：エラーに、持ち越し先の項目の id `carried_to_id`（データモデル設計書 3章の定義）と、その項目の日付 `carried_to_date` を含める。持ち越しが続いている場合（前の日から次の日へ、さらに今日へ）は、送り直した先でも `carried_over` が返るので、同じようにたどる。持ち越し先が取りやめた TODO（`dropped`。持ち越した次の日の見直しで「やめる」などを選んだもの）であることもあり、その ID に送った `edit_todo`・`complete_todo`・`reopen_todo` は上の `invalid_argument` の決まりに従う。
-  - 判定の順：対象の4つの操作のどれでも、`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` の次に `carried_over` を確かめ、続けて `user_editing`、`note_exists` の順に確かめる（`resolve_blocker`・`complete_todo`・`reopen_todo` は上のそれぞれの判定の順、`edit_todo` は入力中の判定より前）。
+  - 判定の順：対象の5つの操作のどれでも、`permission_denied`・`not_found`・`invalid_argument`・`storage_unavailable` の次に `carried_over` を確かめ、続けて `user_editing`、`note_exists` の順に確かめる（`resolve_blocker`・`complete_todo`・`reopen_todo` は上のそれぞれの判定の順、`edit_todo`・`edit_blocker` は入力中の判定より前）。
   - 読み取り：`get_board`・`open_board` の各項目と、`search` の結果の項目には、持ち越し先の項目の id `carried_to_id` と日付 `carried_to_date` を含める（持ち越し済みでなければどちらも `null`。4.2）。エージェントは、前の日のボードを読んだときに、持ち越し済みの項目を操作の対象から外せる。
   - 持ち越し先の項目が削除され、たどっても削除されていない項目に行き着かない場合（データモデル設計書 3章）、元の項目は持ち越し済みでなくなり、通常どおり受け付ける（その項目が残っている唯一の写しになるため）。
   - `agent revert` で持ち越し済みの項目を戻す場合の扱いは未決（9章）。
@@ -191,7 +197,7 @@ API のレート制限を調査
 
 ## 7. 変更履歴（A-08）
 
-- todo・blocker・append・note_edit に該当する操作は、MCP・CLI のどちらからでも、すべて change_log に記録する（operation は 3章の命名規則に従う）。ただし、何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker`、今と同じ本文の `edit_todo` など。3章）は記録しない。
+- todo・blocker・append・note_edit に該当する操作は、MCP・CLI のどちらからでも、すべて change_log に記録する（operation は 3章の命名規則に従う）。ただし、何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker`、今と同じ本文の `edit_todo`・`edit_blocker` など。3章）は記録しない。
 - 利用者が画面で項目の状態を変えてから保存されるまでの間に届いた、同じ状態にする `complete_todo`・`reopen_todo`・`resolve_blocker` は、受け付けて成功を返すが、利用者の保存が書き込まれた時点で利用者の変更として扱い、その操作の記録から状態と完了時刻の欄を外す（何も残らなければ記録を消す。アーキテクチャ設計書 4.1）。利用者の保存が先に届いた場合に記録されないのと同じ結果にするため。
 - MCP・CLI から作成された項目には `origin = agent` と agent_client_id（CLI は `cli`）を記録し、画面で印を表示する。
 - `yunagi agent revert` は取り消しを実行し、対象がその後に人によって変更されている場合は `conflict`（`reason: changed`。終了コード 5）を返す（`--force` で上書き）。項目では、その記録の操作が変えた欄だけで判定し、取り消しもその欄だけを戻す（ほかの欄に人が加えた変更は残る。データモデル設計書 change_log）。取り消しの確定には 2章の確認が必要。
