@@ -495,21 +495,23 @@ fn text_doc_commands(_: &Path) {
 fn overview_counts(_: &Path) {
     let h = Harness::opened();
     let today = h.ok("today", json!({}));
-    let date = "2030-01-08";
+    // 先の日（今日から決める。決まった日付だと、その日が過ぎると Recent に入ってしまうため）
+    let later: LogicalDate = today.as_str().unwrap().parse().unwrap();
+    let later = later.add_days(30).unwrap();
+    let date = later.to_string();
+    let date = date.as_str();
     let before = h.ok("get_overview", json!({ "date": date }));
-    assert_eq!(before["today"], today);
     assert_eq!(before["recent"][0]["date"], today);
     assert_eq!(before["counts"]["todos"], 0);
 
     h.add_todo(date, "件数を数える");
     let agent = h.register_agent("overview", vec![Scope::Read, Scope::Todo]);
-    let ld: LogicalDate = date.parse().unwrap();
     h.core
         .agent_write(agent, |conn, a| {
             item::add_todo(
                 conn,
                 a,
-                ld,
+                later,
                 "エージェントが足した",
                 &jiff::tz::TimeZone::UTC,
                 yunagi_core::storage::table::now(),

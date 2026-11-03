@@ -236,15 +236,11 @@ export type RecentDay = { date: LogicalDate, counts: Counts, };
  */
 export type Overview = { 
 /**
- * 今日の論理日付（Recent の先頭）。
- */
-today: LogicalDate, 
-/**
  * 表示している日の件数（凪メーター）。
  */
 counts: Counts, 
 /**
- * サイドバーの Recent（先頭は今日。新しい順に最大7日）。
+ * サイドバーの Recent（先頭はいつも今日の論理日付。新しい順に最大7日）。
  */
 recent: Array<RecentDay>, 
 /**

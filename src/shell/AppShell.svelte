@@ -47,13 +47,15 @@
 
   const date = $derived(session.date);
   // session.today は日付が変わるとすぐ進む（overview.today は読み直すまで前の日のまま）
-  const today = $derived(session.today ?? session.overview?.today ?? null);
+  const today = $derived(session.today);
   const overview = $derived(session.overview);
   const scene = $derived(
     date !== null && today !== null && overview !== null
       ? meterScene(date, today, minutesOfDay(today, now), overview.counts)
       : null,
   );
+
+  const from = () => session.showing ?? date;
 
   function show(next: LogicalDate | null) {
     if (next !== null) session.show(next);
@@ -69,8 +71,9 @@
 
   const actions: Record<ShellAction, () => void> = {
     toggleMode: () => shell.toggleMode(),
-    prevDay: () => show(date === null ? null : addDays(date, -1)),
-    nextDay: () => show(date === null ? null : addDays(date, 1)),
+    // 読んでいる途中に続けて押しても1日ずつ進むよう、表示しようとしている日から数える
+    prevDay: () => show(from() === null ? null : addDays(from()!, -1)),
+    nextDay: () => show(from() === null ? null : addDays(from()!, 1)),
     today: goToday,
     palette: () => onCommand("palette"),
     settings: () => onCommand("settings"),
@@ -96,6 +99,7 @@
     <Sidebar
       {overview}
       {date}
+      {today}
       saveFailed={save.failing}
       {mac}
       onShow={show}

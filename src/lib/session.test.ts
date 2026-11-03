@@ -50,7 +50,7 @@ function board(date: string, text: string): Board {
 
 function overview(today: string): Overview {
   const counts = { todos: 1, done: 0, leftTodos: 1, leftBlockers: 0, resolved: 0, carried: 0 };
-  return { today, counts, recent: [{ date: today, counts }], unseenChanges: 0 };
+  return { counts, recent: [{ date: today, counts }], unseenChanges: 0 };
 }
 
 /** 模擬のコアの今日（テストの中で変えると、次の問い合わせから変わる）。 */
@@ -124,7 +124,7 @@ test("ほかの日を表示し、その日のまま読み込み直す。今日�
   session = startSession();
   const s = session;
   await until(() => s.date === "2026-11-03");
-  expect(s.overview?.today).toBe("2026-11-03");
+  expect(s.overview?.recent[0].date).toBe("2026-11-03");
 
   s.show("2026-11-01");
   await until(() => s.date === "2026-11-01");
@@ -134,7 +134,7 @@ test("ほかの日を表示し、その日のまま読み込み直す。今日�
   // ほかの日を表示している間に日付が変わっても、その日のまま（今日と Recent だけ変わる）
   clock.today = "2026-11-04";
   await emit(EVENTS.todayChanged, { today: "2026-11-04" });
-  await until(() => s.overview?.today === "2026-11-04");
+  await until(() => s.overview?.recent[0].date === "2026-11-04");
   expect(s.date).toBe("2026-11-01");
   expect(s.today).toBe("2026-11-04");
 
@@ -215,6 +215,17 @@ test("件数が読めなくてもボードは出し、前の日の件数は残�
   expect(s.overview).toBeNull();
   expect(s.error?.kind).toBe("storage");
   expect(s.today).toBe("2026-11-03");
+  // 間を空けて読み直し、読めたら出す
+  failOverview = false;
+  await vi.waitFor(
+    () => {
+      flushSync();
+      expect(s.overview).not.toBeNull();
+    },
+    { timeout: RETRY_MS * 3 },
+  );
+  expect(s.error).toBeNull();
+  expect(s.date).toBe("2026-11-02");
 });
 
 test("開いている途中なら、startup が届いてから読む", async () => {

@@ -52,9 +52,26 @@
   const uid = $props.id();
   const detailId = `${uid}-save-detail`;
 
-  // 保存できたら、原因の表示も閉じる
+  let header = $state<HTMLElement | null>(null);
+  let wrap = $state<HTMLElement | null>(null);
+
+  // 保存できたら、原因の表示も閉じる。中にフォーカスがあったら（再試行を押して成功したとき）、
+  // 消える部品と一緒にフォーカスを失わないよう、上部のバーへ移す
+  $effect.pre(() => {
+    if (save.failing) return;
+    if (wrap?.contains(document.activeElement)) header?.focus();
+    detailOpen = false;
+  });
+
+  // 原因の表示の外を押したら閉じる
   $effect(() => {
-    if (!save.failing) detailOpen = false;
+    if (!detailOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (e.target instanceof Node && wrap?.contains(e.target)) return;
+      detailOpen = false;
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
   });
 
   // 開いたら、原因の表示へフォーカスを移す（読み上げで原因と再試行が伝わり、Esc が届くように）
@@ -82,7 +99,7 @@
   }
 </script>
 
-<header class="top">
+<header class="top" bind:this={header} tabindex="-1">
   {#if showLogo}<span class="top-logo"><Logo /></span>{/if}
 
   {#if date !== null}
@@ -152,7 +169,13 @@
   {/if}
 
   {#if save.failing}
-    <div class="save-fail-wrap" role="presentation" onkeydown={onDetailKey} onfocusout={onDetailFocusOut}>
+    <div
+      class="save-fail-wrap"
+      bind:this={wrap}
+      role="presentation"
+      onkeydown={onDetailKey}
+      onfocusout={onDetailFocusOut}
+    >
       <button
         type="button"
         class="save-fail"
@@ -188,6 +211,10 @@
     padding: 0 var(--pad);
     flex: none;
     min-width: 0;
+  }
+
+  .top:focus {
+    outline: none;
   }
 
   .top-logo {

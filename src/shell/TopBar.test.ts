@@ -96,3 +96,29 @@ test("macOS ではキーを ⌘ で出す", () => {
   render(new SaveStatus());
   expect($(".search kbd")?.textContent).toBe("⌘K");
 });
+
+test("再試行で保存できたら、フォーカスを上部のバーへ移す。外を押すと原因の表示を閉じる", () => {
+  const save = new SaveStatus();
+  render(save);
+  save.failing = true;
+  save.error = { kind: "not_ready" };
+  flushSync();
+  $(".save-fail")?.click();
+  flushSync();
+  expect($(".pop")?.textContent).toContain("データベースを開けていません。");
+  ($(".pop .btn") as HTMLElement).focus();
+  save.failing = false;
+  save.error = null;
+  flushSync();
+  expect($(".pop")).toBeNull();
+  expect(document.activeElement).toBe($(".top"));
+
+  save.failing = true;
+  flushSync();
+  $(".save-fail")?.click();
+  flushSync();
+  expect($(".pop")).not.toBeNull();
+  $(".search")?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  flushSync();
+  expect($(".pop")).toBeNull();
+});

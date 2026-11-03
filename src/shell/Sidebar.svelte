@@ -13,6 +13,7 @@
   let {
     overview,
     date,
+    today,
     saveFailed,
     mac,
     onShow,
@@ -22,6 +23,8 @@
     overview: Overview | null;
     /** 表示している日。 */
     date: LogicalDate | null;
+    /** 今日の論理日付（上部のバーと同じもの）。 */
+    today: LogicalDate | null;
     saveFailed: boolean;
     mac: boolean;
     onShow: (date: LogicalDate) => void;
@@ -30,8 +33,8 @@
   } = $props();
 
   const m = $derived(t());
-  const today = $derived(overview?.recent[0]);
-  const todayLeft = $derived(today ? progressOf(today.counts).left : 0);
+  const todayCounts = $derived(overview?.recent.find((d) => d.date === today)?.counts);
+  const todayLeft = $derived(todayCounts ? progressOf(todayCounts).left : 0);
   const unseen = $derived(overview?.unseenChanges ?? 0);
 </script>
 
@@ -42,7 +45,7 @@
     <button
       type="button"
       class="nav-btn"
-      aria-current={date !== null && date === overview?.today ? "page" : undefined}
+      aria-current={date !== null && date === today ? "page" : undefined}
       onclick={onToday}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -83,7 +86,7 @@
           <MiniWave ratio={p.leftRatio} calm={p.calm} />
           <span class="rl">
             {shortDate(day.date)}
-            {#if day.date === overview?.today}<span class="rt">{m.labels.today}</span>{/if}
+            {#if day.date === today}<span class="rt">{m.labels.today}</span>{/if}
           </span>
           {#if c.todos > 0}<span class="rc">{c.done}/{c.todos}</span>{/if}
         </button>

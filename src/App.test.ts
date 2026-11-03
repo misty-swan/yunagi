@@ -58,10 +58,9 @@ function mockCore() {
         case "get_overview": {
           const date = (args as { date: string }).date;
           const o: Overview = {
-            today: clock.today,
             counts: date === TODAY ? today : counts({ todos: 2, done: 2 }),
             recent: [
-              { date: TODAY, counts: today },
+              { date: clock.today, counts: today },
               { date: "2026-11-02", counts: counts({ todos: 2, done: 2 }) },
             ],
             unseenChanges: 2,
@@ -259,4 +258,11 @@ test("ほかの日を見ている間に日付が変わったら、その日の�
   press({ key: "t", code: "KeyT", ctrlKey: true });
   await until(() => $("main.content")?.dataset.date === "2026-11-04");
   expect($(".today-pill.is-today")).not.toBeNull();
+});
+
+test("読んでいる途中に続けて押しても、1日ずつ進む", async () => {
+  await start();
+  press({ key: "]", code: "BracketRight", ctrlKey: true });
+  press({ key: "]", code: "BracketRight", ctrlKey: true });
+  await until(() => $("main.content")?.dataset.date === "2026-11-05");
 });

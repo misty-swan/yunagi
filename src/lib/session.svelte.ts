@@ -19,6 +19,11 @@ export interface Session {
   readonly today: LogicalDate | null;
   /** 表示している日。読むまでは `null`。 */
   readonly date: LogicalDate | null;
+  /**
+   * 表示しようとしている日（`show` で移って読んでいる途中の日。読み終えると `date` と同じ）。
+   * 前日・翌日への移動を続けて押したとき、ここから数える。決まるまでは `null`。
+   */
+  readonly showing: LogicalDate | null;
   /** 表示している日のボード。読むまでは `null`。 */
   readonly board: Board | null;
   /** 表示している日の、画面の骨組みの件数。読むまでは `null`。 */
@@ -47,7 +52,8 @@ export function startSession(): Session {
   let loads = 0;
   // 表示する日（読んでいる・読み終えた日）。日を移って読んでいる途中に changed が届いても、
   // 前の日を読み直さないよう、読み始めた時点で進める。まだ決まっていなければ今日を読む
-  let target: LogicalDate | undefined;
+  let target = $state<LogicalDate | undefined>(undefined);
+  let overviewRetry: ReturnType<typeof setTimeout> | undefined;
   // 知っている最新の今日（`today` より先に、core.today() の答えと today-changed で進める）。
   // 最初の読み込みを終える前に日付が変わっても、今日を表示していたかを見分けるため
   let knownToday: LogicalDate | undefined;
@@ -59,6 +65,7 @@ export function startSession(): Session {
 
   async function load(next?: LogicalDate) {
     const n = ++loads;
+    clearTimeout(overviewRetry);
     if (next !== undefined) target = next;
     try {
       let day = target;
@@ -76,13 +83,17 @@ export function startSession(): Session {
       if (knownToday !== undefined) today = knownToday;
       if (o.status === "fulfilled") {
         overview = o.value;
-        knownToday = o.value.today;
-        today = o.value.today;
+        // Recent の先頭はいつも今日
+        knownToday = o.value.recent[0]?.date ?? knownToday;
+        if (knownToday !== undefined) today = knownToday;
         error = null;
       } else {
-        // 前の日の件数を、表示している日のものとして出さない
+        // 前の日の件数を、表示している日のものとして出さない。読めるまで間を空けて読み直す
         overview = null;
         fail(o.reason);
+        overviewRetry = setTimeout(() => {
+          if (!stopped && n === loads) void load();
+        }, RETRY_MS);
       }
     } catch (e) {
       if (!stopped && n === loads) fail(e);
@@ -154,6 +165,9 @@ export function startSession(): Session {
     get date() {
       return date;
     },
+    get showing() {
+      return target ?? null;
+    },
     get board() {
       return board;
     },
@@ -169,6 +183,7 @@ export function startSession(): Session {
     },
     async stop() {
       stopped = true;
+      clearTimeout(overviewRetry);
       for (const u of unlisten.splice(0)) u();
       // 聞き始めている途中のものは、終わったところで（stopped を見て）やめる
       await listening;

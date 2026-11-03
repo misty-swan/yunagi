@@ -52,11 +52,16 @@ test("IME の変換中はショートカットとして扱わない", () => {
   expect(shellActionOf(key({ code: "KeyJ", key: "Process", ctrlKey: true, keyCode: 229 }), false)).toBeNull();
 });
 
-test("記号は Option・AltGr と打つ配列でも動き、文字のキーは Alt を付けると動かない", () => {
-  // ドイツ語の配列：Windows の AltGr+8 は Ctrl+Alt として届く。macOS は Option+5
-  expect(shellActionOf(key({ code: "Digit8", key: "[", ctrlKey: true, altKey: true }), false)).toBe("prevDay");
+test("記号を Option・AltGr と打つ配列：macOS は動き、Windows・Linux は文字の入力を妨げない", () => {
+  // ドイツ語の配列：macOS は Option+5 で [
   expect(shellActionOf(key({ code: "Digit5", key: "[", metaKey: true, altKey: true }), true)).toBe("prevDay");
-  expect(shellActionOf(key({ code: "Minus", key: "\\", ctrlKey: true, altKey: true }), false)).toBe("sidebar");
+  // Windows の AltGr+8 は Ctrl+Alt として届く。[ の入力なので扱わない
+  expect(shellActionOf(key({ code: "Digit8", key: "[", ctrlKey: true, altKey: true }), false)).toBeNull();
+  expect(shellActionOf(key({ code: "Minus", key: "\\", ctrlKey: true, altKey: true }), false)).toBeNull();
+  // 代わりに、US 配列の [ ] \ の位置のキー（ドイツ語の配列の ü + #）で動く
+  expect(shellActionOf(key({ code: "BracketLeft", key: "ü", ctrlKey: true }), false)).toBe("prevDay");
+  expect(shellActionOf(key({ code: "BracketRight", key: "+", ctrlKey: true }), false)).toBe("nextDay");
+  expect(shellActionOf(key({ code: "Backslash", key: "#", ctrlKey: true }), false)).toBe("sidebar");
   expect(shellActionOf(key({ code: "KeyJ", key: "j", ctrlKey: true, altKey: true }), false)).toBeNull();
   // Shift で別の文字になる記号は当たらない（US 配列の Shift+[ は {）
   expect(shellActionOf(key({ code: "BracketLeft", key: "{", ctrlKey: true, shiftKey: true }), false)).toBeNull();

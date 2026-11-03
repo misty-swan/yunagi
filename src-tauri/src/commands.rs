@@ -68,7 +68,7 @@ pub async fn get_board(core: Core<'_>, date: Date) -> Result<Board, CommandError
 pub async fn get_overview(core: Core<'_>, date: Date) -> Result<Overview, CommandError> {
     blocking(&core, move |core| {
         let today = core.today()?;
-        core.read(|conn| board::overview(conn, date.0, today).map(|o| Overview::new(today, o)))
+        core.read(|conn| board::overview(conn, date.0, today).map(Overview::new))
     })
     .await
 }

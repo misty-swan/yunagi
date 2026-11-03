@@ -501,11 +501,9 @@ pub struct RecentDay {
 #[cfg_attr(test, derive(TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Overview {
-    /// 今日の論理日付（Recent の先頭）。
-    pub today: Date,
     /// 表示している日の件数（凪メーター）。
     pub counts: Counts,
-    /// サイドバーの Recent（先頭は今日。新しい順に最大7日）。
+    /// サイドバーの Recent（先頭はいつも今日の論理日付。新しい順に最大7日）。
     pub recent: Vec<RecentDay>,
     /// エージェントによる未確認の変更の数。
     #[cfg_attr(test, ts(type = "number"))]
@@ -513,9 +511,8 @@ pub struct Overview {
 }
 
 impl Overview {
-    pub fn new(today: LogicalDate, o: board::Overview) -> Self {
+    pub fn new(o: board::Overview) -> Self {
         Self {
-            today: Date(today),
             counts: o.counts.into(),
             recent: o
                 .recent
