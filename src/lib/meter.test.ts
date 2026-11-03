@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Counts } from "./bindings";
-import { hhmm, meterScene, minutesOfDay, WORK_END_MIN, WORK_START_MIN } from "./meter";
+import { hhmm, meterScene, minutesOfDay, progressOf, WORK_END_MIN, WORK_START_MIN } from "./meter";
 
 const counts = (c: Partial<Counts>): Counts => ({
   todos: 0,
@@ -63,4 +63,21 @@ test("論理日付の切り替わり前の深夜は、前の日の続きの時�
   expect(minutesOfDay(TODAY, new Date(2026, 9, 30, 1, 30))).toBe(24 * 60 + 90);
   expect(hhmm(16 * 60 + 42)).toBe("16:42");
   expect(hhmm(24 * 60 + 90)).toBe("1:30");
+});
+
+test("終業が始業より後でない時間帯でも、太陽の位置が決まる", () => {
+  const c = counts({ todos: 1, leftTodos: 1 });
+  const same = { start: 9 * 60, end: 9 * 60 };
+  expect(meterScene(TODAY, TODAY, 8 * 60, c, same).progress).toBe(0);
+  const after = meterScene(TODAY, TODAY, 10 * 60, c, same);
+  expect(after.progress).toBe(1);
+  expect(after.sunk).toBe(true);
+  expect(Number.isNaN(meterScene(TODAY, TODAY, 10 * 60, c, { start: 600, end: 300 }).progress)).toBe(false);
+});
+
+test("残りの様子は凪メーターとサイドバーで同じ数え方", () => {
+  const c = counts({ todos: 3, done: 1, leftTodos: 2, leftBlockers: 1, resolved: 1 });
+  expect(progressOf(c)).toEqual({ left: 3, total: 5, leftRatio: 0.6, calm: false });
+  const s = meterScene(TODAY, TODAY, 600, c);
+  expect([s.left, s.total, s.leftRatio, s.calm]).toEqual([3, 5, 0.6, false]);
 });

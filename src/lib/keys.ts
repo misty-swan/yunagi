@@ -18,7 +18,7 @@ interface Binding {
   /**
    * 文字のキーは `KeyboardEvent.code`（配列によらず同じ位置のキー。ロシア語の配列などでも動く）。
    * 記号のキーは `KeyboardEvent.key`（押した文字。JIS 配列では `[` `]` `\` の位置が US 配列と
-   * ずれ、`code` では別のキーに当たるため）。
+   * ずれ、`code` では別のキーに当たるため）。`shift` は文字のキーにだけ使う。
    */
   match: { code: string } | { keys: readonly string[] };
   shift: boolean;
@@ -70,10 +70,15 @@ export function shellActionOf(e: KeyLike, mac: boolean): ShellAction | null {
   if (e.isComposing || e.keyCode === 229) return null;
   const mod = mac ? e.metaKey : e.ctrlKey;
   const other = mac ? e.ctrlKey : e.metaKey;
-  if (!mod || other || e.altKey) return null;
+  if (!mod || other) return null;
   for (const [action, b] of Object.entries(BINDINGS) as [ShellAction, Binding][]) {
-    if (b.shift !== e.shiftKey) continue;
-    if ("code" in b.match ? e.code === b.match.code : b.match.keys.includes(e.key)) return action;
+    if ("code" in b.match) {
+      if (e.code === b.match.code && b.shift === e.shiftKey && !e.altKey) return action;
+    } else if (b.match.keys.includes(e.key)) {
+      // 記号を Option（macOS）・AltGr（Windows では Ctrl+Alt として届く）や Shift と打つ配列
+      // （ドイツ語の配列の [ など）でも動くよう、押した文字が合えば Alt と Shift は問わない
+      return action;
+    }
   }
   return null;
 }

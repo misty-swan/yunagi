@@ -166,6 +166,57 @@ test("開く前に表示する日を決めたら、開いてからその日を�
   expect(calls.some((c) => c.cmd === "today")).toBe(false);
 });
 
+test("最初の読み込みを終える前に日付が変わっても、新しい今日へ移る", async () => {
+  let release: (() => void) | undefined;
+  mockIPC(
+    async (cmd, args) => {
+      if (cmd === "startup_status") return { state: "ready" };
+      if (cmd === "today") return "2026-11-03";
+      const date = (args as { date: string }).date;
+      if (cmd === "get_board") {
+        if (date === "2026-11-03") await new Promise<void>((r) => (release = r));
+        return board(date, date);
+      }
+      if (cmd === "get_overview") return overview("2026-11-04");
+    },
+    { shouldMockEvents: true },
+  );
+  session = startSession();
+  const s = session;
+  await vi.waitFor(() => expect(release).toBeDefined());
+  await emit(EVENTS.todayChanged, { today: "2026-11-04" });
+  release?.();
+  await until(() => s.date === "2026-11-04");
+  expect(s.today).toBe("2026-11-04");
+});
+
+test("件数が読めなくてもボードは出し、前の日の件数は残さない", async () => {
+  let failOverview = false;
+  mockIPC(
+    (cmd, args) => {
+      if (cmd === "startup_status") return { state: "ready" };
+      if (cmd === "today") return "2026-11-03";
+      const date = (args as { date: string }).date;
+      if (cmd === "get_board") return board(date, date);
+      if (cmd === "get_overview") {
+        if (failOverview) throw { kind: "storage", detail: "x" };
+        return overview("2026-11-03");
+      }
+    },
+    { shouldMockEvents: true },
+  );
+  session = startSession();
+  const s = session;
+  await until(() => s.overview !== null);
+  failOverview = true;
+  s.show("2026-11-02");
+  await until(() => s.date === "2026-11-02");
+  expect(s.board?.todos[0].item.text).toBe("2026-11-02");
+  expect(s.overview).toBeNull();
+  expect(s.error?.kind).toBe("storage");
+  expect(s.today).toBe("2026-11-03");
+});
+
 test("開いている途中なら、startup が届いてから読む", async () => {
   const calls = mockCore({ state: "opening" }, { "2026-11-03": "x" });
   session = startSession();

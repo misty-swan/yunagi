@@ -65,16 +65,22 @@ test("保存に失敗している間は「保存できていません」を出�
   expect(fail?.textContent?.trim()).toBe("保存できていません");
   fail?.click();
   flushSync();
-  const pop = $("#save-detail");
+  const pop = $(".pop");
+  // 開くとフォーカスが原因の表示へ移り、ボタンはそれを指す
+  expect(document.activeElement).toBe(pop);
+  expect(fail?.getAttribute("aria-controls")).toBe(pop?.id);
+  expect(fail?.getAttribute("aria-expanded")).toBe("true");
   // 原因は種類に合わせた文で、内部のエラーの文は出さない
   expect(pop?.textContent).toContain("保存先に書き込めません。");
   expect(pop?.textContent).not.toContain("disk I/O");
-  ($("#save-detail .btn") as HTMLElement).click();
+  ($(".pop .btn") as HTMLElement).click();
   expect(retry).toHaveBeenCalledOnce();
-  // Esc で閉じる
-  pop?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  // Esc で閉じ、フォーカスを「保存できていません」へ戻す（フォーカスのある要素に Esc を送る）
+  document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   flushSync();
-  expect($("#save-detail")).toBeNull();
+  expect($(".pop")).toBeNull();
+  expect(document.activeElement).toBe(fail);
+  expect(fail?.hasAttribute("aria-controls")).toBe(false);
   // 成功したら消す
   fail?.click();
   flushSync();
@@ -83,7 +89,7 @@ test("保存に失敗している間は「保存できていません」を出�
   save.saving = false;
   flushSync();
   expect($(".save-fail")).toBeNull();
-  expect($("#save-detail")).toBeNull();
+  expect($(".pop")).toBeNull();
 });
 
 test("macOS ではキーを ⌘ で出す", () => {

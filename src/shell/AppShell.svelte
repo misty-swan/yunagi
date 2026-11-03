@@ -46,7 +46,8 @@
   $effect(() => shell.setWidth(innerWidth));
 
   const date = $derived(session.date);
-  const today = $derived(session.overview?.today ?? session.today);
+  // session.today は日付が変わるとすぐ進む（overview.today は読み直すまで前の日のまま）
+  const today = $derived(session.today ?? session.overview?.today ?? null);
   const overview = $derived(session.overview);
   const scene = $derived(
     date !== null && today !== null && overview !== null
@@ -82,6 +83,8 @@
     const action = shellActionOf(e, mac);
     if (action === null) return;
     e.preventDefault();
+    // 押し続けたときの繰り返しでは動かさない（モードの切り替えが行き来し、日の移動の読み込みが重なるため）
+    if (e.repeat) return;
     actions[action]();
   }
 </script>

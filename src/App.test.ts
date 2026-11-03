@@ -10,6 +10,7 @@ let app: ReturnType<typeof mount> | undefined;
 
 beforeEach(() => {
   prefs.lang = "ja";
+  clock.today = TODAY;
   setWidth(1280);
 });
 
@@ -29,6 +30,8 @@ function setWidth(width: number) {
 }
 
 const TODAY = "2026-11-03";
+/** 模擬のコアの今日（テストの中で日付を変えるときに進める）。 */
+const clock = { today: TODAY };
 
 function counts(c: Partial<Counts>): Counts {
   return { todos: 0, done: 0, leftTodos: 0, leftBlockers: 0, resolved: 0, carried: 0, ...c };
@@ -49,13 +52,13 @@ function mockCore() {
         case "startup_status":
           return { state: "ready" };
         case "today":
-          return TODAY;
+          return clock.today;
         case "get_board":
           return emptyBoard((args as { date: string }).date);
         case "get_overview": {
           const date = (args as { date: string }).date;
           const o: Overview = {
-            today: TODAY,
+            today: clock.today,
             counts: date === TODAY ? today : counts({ todos: 2, done: 2 }),
             recent: [
               { date: TODAY, counts: today },
@@ -236,4 +239,24 @@ test("コアのデータが変わったら、件数を読み直す", async () =>
   const before = calls.filter((c) => c.cmd === "get_overview").length;
   await emit(EVENTS.changed, { by: "agent" });
   await until(() => calls.filter((c) => c.cmd === "get_overview").length === before + 1);
+});
+
+test("押し続けたときの繰り返しでは動かさない", async () => {
+  await start();
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  press({ key: "j", code: "KeyJ", ctrlKey: true, repeat: true });
+  press({ key: "j", code: "KeyJ", ctrlKey: true, repeat: true });
+  expect($("main.content")?.dataset.mode).toBe("note");
+});
+
+test("ほかの日を見ている間に日付が変わったら、その日のまま。Mod+T で新しい今日へ移る", async () => {
+  await start();
+  press({ key: "[", code: "BracketLeft", ctrlKey: true });
+  await until(() => $("main.content")?.dataset.date === "2026-11-02");
+  clock.today = "2026-11-04";
+  await emit(EVENTS.todayChanged, { today: "2026-11-04" });
+  // すぐに Mod+T を押しても、前の今日ではなく新しい今日へ移る
+  press({ key: "t", code: "KeyT", ctrlKey: true });
+  await until(() => $("main.content")?.dataset.date === "2026-11-04");
+  expect($(".today-pill.is-today")).not.toBeNull();
 });

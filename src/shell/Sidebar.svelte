@@ -5,6 +5,7 @@
   import { shortDate } from "../lib/dates";
   import { t } from "../lib/i18n";
   import { keyLabel } from "../lib/keys";
+  import { progressOf } from "../lib/meter";
   import Logo from "./Logo.svelte";
   import MiniWave from "./MiniWave.svelte";
   import type { ShellCommand } from "./commands";
@@ -30,7 +31,7 @@
 
   const m = $derived(t());
   const today = $derived(overview?.recent[0]);
-  const todayLeft = $derived(today ? today.counts.leftTodos + today.counts.leftBlockers : 0);
+  const todayLeft = $derived(today ? progressOf(today.counts).left : 0);
   const unseen = $derived(overview?.unseenChanges ?? 0);
 </script>
 
@@ -71,8 +72,7 @@
   <ul class="recent">
     {#each overview?.recent ?? [] as day (day.date)}
       {@const c = day.counts}
-      {@const left = c.leftTodos + c.leftBlockers}
-      {@const total = c.todos + c.leftBlockers + c.resolved}
+      {@const p = progressOf(c)}
       <li>
         <button
           type="button"
@@ -80,7 +80,7 @@
           aria-current={day.date === date ? "date" : undefined}
           onclick={() => onShow(day.date)}
         >
-          <MiniWave ratio={total === 0 ? 0 : left / total} calm={total > 0 && left === 0} />
+          <MiniWave ratio={p.leftRatio} calm={p.calm} />
           <span class="rl">
             {shortDate(day.date)}
             {#if day.date === overview?.today}<span class="rt">{m.labels.today}</span>{/if}

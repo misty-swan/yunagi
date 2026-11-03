@@ -16,20 +16,30 @@ export const WORK_END_MIN = 19 * 60;
 /** 時刻の文字の種類。 */
 export type MeterTime = { kind: "now"; minutes: number } | { kind: "dayEnd" } | { kind: "notYet" };
 
-export interface MeterScene {
+/** 件数から決まる、残りの様子（凪メーターとサイドバーの Recent の波で共通）。 */
+export interface Progress {
+  /** 残り（未完了の TODO と未解消の障害）。 */
+  left: number;
+  /** TODO と障害の合計（取りやめた TODO は除く）。 */
+  total: number;
+  /** 残りの割合（0〜1。項目が無ければ 0）。 */
+  leftRatio: number;
+  /** 項目があり、残りが 0 件（凪）。 */
+  calm: boolean;
+}
+
+export function progressOf(counts: Counts): Progress {
+  const left = counts.leftTodos + counts.leftBlockers;
+  const total = counts.todos + counts.leftBlockers + counts.resolved;
+  return { left, total, leftRatio: total === 0 ? 0 : left / total, calm: total > 0 && left === 0 };
+}
+
+export interface MeterScene extends Progress {
   time: MeterTime;
   /** 太陽の進み（0 が始業、1 が終業）。 */
   progress: number;
   /** 終業を過ぎて、水平線に半分沈んでいる。 */
   sunk: boolean;
-  /** 残り（未完了の TODO と未解消の障害）。 */
-  left: number;
-  /** TODO と障害の合計（取りやめた TODO は除く）。 */
-  total: number;
-  /** 残りの割合（0〜1）。 */
-  leftRatio: number;
-  /** 項目があり、残りが 0 件（凪）。 */
-  calm: boolean;
   /** 光の道の本数。 */
   paths: number;
 }
@@ -45,7 +55,8 @@ export function minutesOfDay(today: LogicalDate, now: Date): number {
 
 /**
  * 表示している日 `date` の凪メーターの中身。`today` は今日の論理日付、`minutes` は今日の
- * いまの時刻（`minutesOfDay`）。
+ * いまの時刻（`minutesOfDay`）。`hours` は始業と終業（終業が始業より後でなければ、始業の前は
+ * 始業の位置、始業からは終業を過ぎた位置にする）。
  */
 export function meterScene(
   date: LogicalDate,
@@ -57,20 +68,18 @@ export function meterScene(
   const time: MeterTime =
     date < today ? { kind: "dayEnd" } : date > today ? { kind: "notYet" } : { kind: "now", minutes };
   const at = time.kind === "dayEnd" ? hours.end : time.kind === "notYet" ? hours.start : minutes;
-  const progress = Math.min(1, Math.max(0, (at - hours.start) / (hours.end - hours.start)));
-  const left = counts.leftTodos + counts.leftBlockers;
-  const total = counts.todos + counts.leftBlockers + counts.resolved;
-  const closed = total - left;
+  const span = hours.end - hours.start;
+  const progress =
+    span > 0 ? Math.min(1, Math.max(0, (at - hours.start) / span)) : at < hours.start ? 0 : 1;
+  const p = progressOf(counts);
+  const closed = p.total - p.left;
   return {
+    ...p,
     time,
     progress,
-    sunk: at >= hours.end,
-    left,
-    total,
-    leftRatio: total === 0 ? 0 : left / total,
-    calm: total > 0 && left === 0,
+    sunk: progress >= 1,
     // 終えたものがあれば 2 本から、すべて終えると 8 本
-    paths: total === 0 || closed === 0 ? 0 : Math.round(2 + (6 * closed) / total),
+    paths: closed === 0 ? 0 : Math.round(2 + (6 * closed) / p.total),
   };
 }
 

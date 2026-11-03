@@ -47,17 +47,38 @@
     return kind === "storage" || kind === "not_ready" || kind === "internal" ? kind : null;
   });
   let detailOpen = $state(false);
+  let detail = $state<HTMLElement | null>(null);
+  let failButton = $state<HTMLButtonElement | null>(null);
+  const uid = $props.id();
+  const detailId = `${uid}-save-detail`;
 
   // 保存できたら、原因の表示も閉じる
   $effect(() => {
     if (!save.failing) detailOpen = false;
   });
 
+  // 開いたら、原因の表示へフォーカスを移す（読み上げで原因と再試行が伝わり、Esc が届くように）
+  $effect(() => {
+    if (detailOpen) detail?.focus();
+  });
+
+  function closeDetail() {
+    detailOpen = false;
+    failButton?.focus();
+  }
+
   function onDetailKey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" && detailOpen) {
       e.stopPropagation();
-      detailOpen = false;
+      closeDetail();
     }
+  }
+
+  // 原因の表示の外へフォーカスが移ったら閉じる
+  function onDetailFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget instanceof Node && e.currentTarget.contains(next)) return;
+    if (next !== null) detailOpen = false;
   }
 </script>
 
@@ -131,18 +152,19 @@
   {/if}
 
   {#if save.failing}
-    <div class="save-fail-wrap">
+    <div class="save-fail-wrap" role="presentation" onkeydown={onDetailKey} onfocusout={onDetailFocusOut}>
       <button
         type="button"
         class="save-fail"
+        bind:this={failButton}
         aria-expanded={detailOpen}
-        aria-controls="save-detail"
+        aria-controls={detailOpen ? detailId : undefined}
         onclick={() => (detailOpen = !detailOpen)}
       >
         {m.saveFailed}
       </button>
       {#if detailOpen}
-        <div class="pop" id="save-detail" role="dialog" aria-label={m.saveFailed} tabindex="-1" onkeydown={onDetailKey}>
+        <div class="pop" id={detailId} bind:this={detail} role="dialog" aria-label={m.saveFailed} tabindex="-1">
           {#if cause}<p>{m.saveCause[cause]}</p>{/if}
           <p class="muted">{m.saveKeep}</p>
           <div class="actions">

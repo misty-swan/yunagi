@@ -48,6 +48,9 @@ export function startSession(): Session {
   // 表示する日（読んでいる・読み終えた日）。日を移って読んでいる途中に changed が届いても、
   // 前の日を読み直さないよう、読み始めた時点で進める。まだ決まっていなければ今日を読む
   let target: LogicalDate | undefined;
+  // 知っている最新の今日（`today` より先に、core.today() の答えと today-changed で進める）。
+  // 最初の読み込みを終える前に日付が変わっても、今日を表示していたかを見分けるため
+  let knownToday: LogicalDate | undefined;
   const unlisten: UnlistenFn[] = [];
 
   const fail = (e: unknown) => {
@@ -61,15 +64,26 @@ export function startSession(): Session {
       let day = target;
       if (day === undefined) {
         day = await core.today();
+        knownToday ??= day;
         if (n === loads) target = day;
       }
-      const [b, o] = await Promise.all([core.getBoard(day), core.getOverview(day)]);
+      // ボードは、件数（overview）が読めなくても出す
+      const [b, o] = await Promise.allSettled([core.getBoard(day), core.getOverview(day)]);
       if (stopped || n !== loads) return;
+      if (b.status === "rejected") throw b.reason;
       date = day;
-      board = b;
-      overview = o;
-      today = o.today;
-      error = null;
+      board = b.value;
+      if (knownToday !== undefined) today = knownToday;
+      if (o.status === "fulfilled") {
+        overview = o.value;
+        knownToday = o.value.today;
+        today = o.value.today;
+        error = null;
+      } else {
+        // 前の日の件数を、表示している日のものとして出さない
+        overview = null;
+        fail(o.reason);
+      }
     } catch (e) {
       if (!stopped && n === loads) fail(e);
     }
@@ -77,7 +91,8 @@ export function startSession(): Session {
 
   function onTodayChanged(next: LogicalDate) {
     // 今日（またはまだ決まっていない日）を表示していたなら、新しい今日へ移る
-    const follow = target === undefined || target === today;
+    const follow = target === undefined || target === knownToday;
+    knownToday = next;
     today = next;
     if (startup?.state === "ready") void load(follow ? next : target);
     else if (follow) target = next;
