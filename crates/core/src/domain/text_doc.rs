@@ -23,7 +23,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
-use super::agent::{self, Agent, PermissionDenied, ScopeError};
+use super::agent::{self, Agent, PermissionDenied, StorageUnavailable};
 use super::note_body::{self, Changed, InvalidArgument, LineEdit, LineEditError};
 use crate::domain::day;
 use crate::domain::logical_date::LogicalDate;
@@ -61,7 +61,7 @@ pub enum TextDocError {
     InvalidArgument(InvalidArgument),
     /// 画面の保存の書き込みが失敗して再試行している（`storage_unavailable`。アーキテクチャ設計書
     /// 4.1）。何も書いていない。
-    StorageUnavailable,
+    StorageUnavailable(StorageUnavailable),
     /// `edit_note` の行が、エージェントの読んだ後に変わっている（`conflict`、`reason: changed`）。
     /// 何も書いていない。
     Changed(Changed),
@@ -77,9 +77,7 @@ impl std::fmt::Display for TextDocError {
         match self {
             Self::PermissionDenied(e) => e.fmt(f),
             Self::InvalidArgument(e) => e.fmt(f),
-            Self::StorageUnavailable => {
-                f.write_str("the app is retrying a failed save, so writes are not accepted")
-            }
+            Self::StorageUnavailable(e) => e.fmt(f),
             Self::Changed(e) => e.fmt(f),
             Self::Stale { latest } => write!(
                 f,
@@ -97,7 +95,7 @@ impl std::error::Error for TextDocError {
             Self::InvalidArgument(e) => Some(e),
             Self::Storage(e) => Some(e),
             Self::PermissionDenied(_)
-            | Self::StorageUnavailable
+            | Self::StorageUnavailable(_)
             | Self::Changed(_)
             | Self::Stale { .. } => None,
         }
@@ -116,12 +114,15 @@ impl From<rusqlite::Error> for TextDocError {
     }
 }
 
-impl From<ScopeError> for TextDocError {
-    fn from(e: ScopeError) -> Self {
-        match e {
-            ScopeError::Denied(e) => Self::PermissionDenied(e),
-            ScopeError::Storage(e) => Self::Storage(e),
-        }
+impl From<PermissionDenied> for TextDocError {
+    fn from(e: PermissionDenied) -> Self {
+        Self::PermissionDenied(e)
+    }
+}
+
+impl From<StorageUnavailable> for TextDocError {
+    fn from(e: StorageUnavailable) -> Self {
+        Self::StorageUnavailable(e)
     }
 }
 
@@ -324,16 +325,14 @@ fn write_by_agent(
     let doc = operation.doc();
     in_transaction(conn, || {
         // 権限の確かめも、書き込みと同じトランザクションで行う（項目の操作と同じ）
-        agent::require_scope(conn, agent.client_id, operation.scope())?;
+        agent::require_scope::<TextDocError>(conn, agent.client_id, operation.scope())?;
         let current = get(conn, doc, date)?;
         // 判定の順：引数の誤り、保存の失敗中、行の食い違い（changed）（MCP・CLI 仕様書 3.2・4.3）
         let body = new_body(&current.body);
         if let Err(e @ TextDocError::InvalidArgument(_)) = body {
             return Err(e);
         }
-        if agent.ui.save_failing() {
-            return Err(TextDocError::StorageUnavailable);
-        }
+        agent::require_save_working(agent)?;
         let body = body?;
         if body == current.body {
             return Ok(Written {
@@ -933,12 +932,12 @@ mod tests {
         ] {
             assert!(matches!(
                 edit_note(conn, d, &e, &agent, &tokyo(), at(NOW)),
-                Err(TextDocError::StorageUnavailable)
+                Err(TextDocError::StorageUnavailable(_))
             ));
         }
         assert!(matches!(
             append_reflection(conn, d, "x", &agent, &tokyo(), at(NOW)),
-            Err(TextDocError::StorageUnavailable)
+            Err(TextDocError::StorageUnavailable(_))
         ));
         assert_eq!(get(conn, TextDoc::Note, d).unwrap().rev, 1);
     }

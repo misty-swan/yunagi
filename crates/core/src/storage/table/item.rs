@@ -156,6 +156,19 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, S
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// `before` より前で、削除されていない項目がある最も新しい日。無ければ `None`。
+pub fn latest_date_before(
+    conn: &Connection,
+    before: LogicalDate,
+) -> Result<Option<LogicalDate>, StorageError> {
+    Ok(query_row(
+        conn,
+        "SELECT MAX(date) FROM item WHERE date < ?1 AND deleted_at IS NULL",
+        [before],
+        |r| r.get(0),
+    )?)
+}
+
 /// `carried_from_id` で `id` を指す項目（`id` を持ち越して作った項目）。論理削除したものも含める。
 pub fn list_carried_from(conn: &Connection, id: Ulid) -> Result<Vec<Item>, StorageError> {
     let mut stmt = conn.prepare_cached(&format!(
@@ -416,6 +429,26 @@ mod tests {
             .map(|i| i.text)
             .collect();
         assert_eq!(texts, ["a", "b"]);
+    }
+
+    #[test]
+    fn latest_date_before_skips_deleted_items_and_later_days() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let today = date("2026-11-03");
+        assert_eq!(latest_date_before(conn, today).unwrap(), None);
+        for d in ["2026-10-30", "2026-11-03"] {
+            let d = ensure_day(&db, d);
+            insert(conn, &todo(d, "x", "a")).unwrap();
+        }
+        let deleted = todo(ensure_day(&db, "2026-11-01"), "deleted", "a");
+        insert(conn, &deleted).unwrap();
+        soft_delete(conn, deleted.id, at("2026-11-03T05:00:00Z")).unwrap();
+        assert_eq!(
+            latest_date_before(conn, today).unwrap(),
+            Some(date("2026-10-30"))
+        );
+        assert_eq!(latest_date_before(conn, date("2026-10-30")).unwrap(), None);
     }
 
     #[test]

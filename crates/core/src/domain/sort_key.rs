@@ -44,6 +44,23 @@ pub fn between(before: Option<&str>, after: Option<&str>) -> Option<String> {
     ))
 }
 
+/// `before` と `after` の間に入る `n` 個のキー（先頭から順に並ぶ）。真ん中から二分して作るので、
+/// 片側へ寄せて詰めるより短い（キーの長さは `n` の対数ほどしか増えない）。作れないときは
+/// [`between`] と同じく `None`。
+pub fn n_between(before: Option<&str>, after: Option<&str>, n: usize) -> Option<Vec<String>> {
+    if n == 0 {
+        // 作るものが無くても、隣の形は確かめる
+        return between(before, after).map(|_| Vec::new());
+    }
+    let mid = between(before, after)?;
+    let left = n_between(before, Some(&mid), (n - 1) / 2)?;
+    let right = n_between(Some(&mid), after, n - 1 - (n - 1) / 2)?;
+    let mut keys = left;
+    keys.push(mid);
+    keys.extend(right);
+    Some(keys)
+}
+
 /// `n` 個のキーを、先頭から順に並ぶように作る（その日のキーの付け直しに使う）。
 /// 同じ桁数の値を 0 と 1 の間に等しい間隔で置くので、どのキーの間にも後から入れられる。
 pub fn spread(n: usize) -> Vec<String> {
@@ -172,6 +189,28 @@ mod tests {
         assert_eq!(sorted.len(), keys.len());
         // 同じ所へ 100 回入れても、キーは長くなりすぎない
         assert!(keys.iter().all(|k| k.len() < 120), "{keys:?}");
+    }
+
+    #[test]
+    fn n_between_makes_ordered_short_keys() {
+        assert_eq!(n_between(None, Some("V"), 0), Some(vec![]));
+        assert_eq!(n_between(Some("a0"), None, 0), None);
+        assert_eq!(n_between(Some("b"), Some("a"), 3), None);
+        for (before, after) in [(None, Some("1")), (None, Some("V")), (Some("a"), Some("b"))] {
+            for n in [1, 2, 3, 40, 300] {
+                let keys = n_between(before, after, n).unwrap();
+                assert_eq!(keys.len(), n);
+                assert!(keys.iter().all(|k| is_valid(k)));
+                assert!(keys.windows(2).all(|w| w[0] < w[1]));
+                assert!(before.is_none_or(|b| b < keys[0].as_str()));
+                assert!(after.is_none_or(|a| keys[n - 1].as_str() < a));
+                // 二分するので、40 件でも短い
+                assert!(
+                    keys.iter().all(|k| k.len() <= 8),
+                    "{before:?} {after:?} {n}: {keys:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -95,23 +95,44 @@ impl std::fmt::Display for PermissionDenied {
 
 impl std::error::Error for PermissionDenied {}
 
-/// [`require_scope`] の失敗。
-#[derive(Debug)]
-pub enum ScopeError {
-    Denied(PermissionDenied),
-    Storage(StorageError),
+/// 画面の保存の書き込みが失敗して再試行している（`storage_unavailable`。アーキテクチャ設計書 4.1）。
+/// 何も書いていない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageUnavailable;
+
+impl std::fmt::Display for StorageUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the app is retrying a failed save, so writes are not accepted")
+    }
 }
 
+impl std::error::Error for StorageUnavailable {}
+
 /// エージェント `client_id` に `scope` が許可されているかを確かめる。許可されていなければ
-/// [`ScopeError::Denied`]。登録されていないエージェントは、何も許可されていないものとして扱う。
-pub fn require_scope(conn: &Connection, client_id: Ulid, scope: Scope) -> Result<(), ScopeError> {
-    let client = agent_client::get(conn, client_id).map_err(ScopeError::Storage)?;
+/// [`PermissionDenied`]。登録されていないエージェントは、何も許可されていないものとして扱う。
+///
+/// 失敗は、呼び出し側のエラーの型 `E` にして返す（ノートと項目の操作で、同じ変換を書かないため）。
+pub fn require_scope<E>(conn: &Connection, client_id: Ulid, scope: Scope) -> Result<(), E>
+where
+    E: From<PermissionDenied> + From<StorageError>,
+{
+    let client = agent_client::get(conn, client_id)?;
     if client.is_some_and(|c| c.scopes.contains(&scope)) {
         Ok(())
     } else {
-        Err(ScopeError::Denied(PermissionDenied {
+        Err(PermissionDenied {
             required_scope: scope,
-        }))
+        }
+        .into())
+    }
+}
+
+/// 画面の保存の失敗中なら [`StorageUnavailable`]（アーキテクチャ設計書 4.1）。
+pub fn require_save_working(agent: &Agent<'_>) -> Result<(), StorageUnavailable> {
+    if agent.ui.save_failing() {
+        Err(StorageUnavailable)
+    } else {
+        Ok(())
     }
 }
 
@@ -159,29 +180,70 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::grant;
+    use super::test_support::{FakeUi, grant};
     use super::*;
     use crate::storage::table::agent_client::CLI_ID;
     use crate::storage::table::test_support::open;
+
+    /// テスト用の、require_scope の失敗の型。
+    #[derive(Debug)]
+    enum Failure {
+        Denied(PermissionDenied),
+        Storage,
+    }
+
+    impl From<PermissionDenied> for Failure {
+        fn from(e: PermissionDenied) -> Self {
+            Self::Denied(e)
+        }
+    }
+
+    impl From<StorageError> for Failure {
+        fn from(_: StorageError) -> Self {
+            Self::Storage
+        }
+    }
+
+    fn check(conn: &Connection, client_id: Ulid, scope: Scope) -> Result<(), Failure> {
+        require_scope(conn, client_id, scope)
+    }
 
     #[test]
     fn scopes_must_be_granted() {
         let (db, _dir) = open();
         let conn = db.connection();
-        assert!(require_scope(conn, CLI_ID, Scope::Read).is_ok());
+        assert!(check(conn, CLI_ID, Scope::Read).is_ok());
         assert!(matches!(
-            require_scope(conn, CLI_ID, Scope::Todo),
-            Err(ScopeError::Denied(PermissionDenied {
+            check(conn, CLI_ID, Scope::Todo),
+            Err(Failure::Denied(PermissionDenied {
                 required_scope: Scope::Todo
             }))
         ));
         grant(conn, CLI_ID, &[Scope::Todo]);
-        assert!(require_scope(conn, CLI_ID, Scope::Todo).is_ok());
-        assert!(require_scope(conn, CLI_ID, Scope::Blocker).is_err());
+        assert!(check(conn, CLI_ID, Scope::Todo).is_ok());
+        assert!(check(conn, CLI_ID, Scope::Blocker).is_err());
         // 登録されていないエージェントには何も許可しない
         assert!(matches!(
-            require_scope(conn, Ulid::from_u128(99), Scope::Read),
-            Err(ScopeError::Denied(_))
+            check(conn, Ulid::from_u128(99), Scope::Read),
+            Err(Failure::Denied(_))
         ));
+        assert!(!matches!(
+            check(conn, CLI_ID, Scope::Read),
+            Err(Failure::Storage)
+        ));
+    }
+
+    #[test]
+    fn save_failures_refuse_agent_writes() {
+        let failing = FakeUi {
+            save_failing: true,
+            ..FakeUi::default()
+        };
+        let agent = Agent {
+            client_id: CLI_ID,
+            ui: &failing,
+        };
+        assert_eq!(require_save_working(&agent), Err(StorageUnavailable));
+        assert_eq!(require_save_working(&Agent::without_ui(CLI_ID)), Ok(()));
     }
 }
