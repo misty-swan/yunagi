@@ -1,7 +1,8 @@
 //! ドメイン層：日付ボード、TODO、障害、振り返り、ノート、持ち越し
-//! （docs/design/01-architecture.md 2章）。中身は後続の課題で作る。
+//! （docs/design/01-architecture.md 2章）。
 
 pub mod agent;
+pub mod carryover;
 pub mod day;
 pub mod item;
 pub mod logical_date;

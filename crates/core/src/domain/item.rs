@@ -8,7 +8,8 @@
 //!   確かめ、実際に何かを変えたときだけ書き込んで change_log に記録する。何も変えない操作は
 //!   `updated: false` で成功し、`updated_at` も変えない。
 //! - 画面の操作（[`add`]・[`save_text`]・[`set_closed`]・[`save_resolution_note`]・[`delete`]・
-//!   [`move_item`]・[`split`]）は、人の編集なので記録しない。
+//!   [`restore`]・[`move_item`]・[`split`]）は、人の編集なので記録しない。持ち越しの確定
+//!   （[`super::carryover`]）も同じ。
 //! - どちらも、変えた欄だけを書く（item は版の番号を持たない。アーキテクチャ設計書 4.1）。
 //! - 項目を作るときは、その日の day の行が無ければ作る（[`day::ensure`]）。
 //!
@@ -24,7 +25,7 @@ use jiff::tz::TimeZone;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
-use super::agent::{self, Agent, ItemField, PermissionDenied, ScopeError};
+use super::agent::{self, Agent, ItemField, PermissionDenied, StorageUnavailable};
 use super::sort_key;
 use crate::domain::day;
 use crate::domain::logical_date::LogicalDate;
@@ -127,6 +128,8 @@ pub enum InvalidArgument {
     MultilineNote,
     /// 位置の基準の項目が、同じ日の（削除されていない、動かす項目とは別の）項目でない。
     InvalidPosition,
+    /// 持ち越しの見直しで「外部ツールへ戻す」を選んだ TODO が、外部課題と紐付いていない。
+    NotLinkedExternal,
 }
 
 impl std::fmt::Display for InvalidArgument {
@@ -151,6 +154,7 @@ impl std::fmt::Display for InvalidArgument {
             Self::InvalidPosition => {
                 f.write_str("the position does not refer to another item of the same day")
             }
+            Self::NotLinkedExternal => f.write_str("the TODO is not linked to an external issue"),
         }
     }
 }
@@ -171,6 +175,18 @@ pub enum Conflict {
     NoteExists { resolution_note: String },
 }
 
+/// 削除した持ち越し先を戻せない（データモデル設計書 3章 item。画面の Mod+Z の [`restore`] だけで起きる）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreRefused {
+    /// 削除した後に、持ち越し元の項目の状態・本文・解消メモ・完了時刻のどれかが変わった。
+    SourceChanged,
+    /// 削除した後に、持ち越し元の項目がほかの項目へ持ち越された。その持ち越し先とその日付。
+    SourceCarriedOver {
+        carried_to_id: Ulid,
+        carried_to_date: LogicalDate,
+    },
+}
+
 /// 項目の操作が失敗した理由。どれも、何も書いていない（トランザクションは取り消してある）。
 #[derive(Debug)]
 pub enum ItemError {
@@ -179,9 +195,9 @@ pub enum ItemError {
     /// ID の項目が無いか、削除されている（`not_found`）。
     NotFound,
     InvalidArgument(InvalidArgument),
-    /// 画面の保存の書き込みが失敗して再試行している（`storage_unavailable`。アーキテクチャ設計書 4.1）。
-    StorageUnavailable,
+    StorageUnavailable(StorageUnavailable),
     Conflict(Conflict),
+    RestoreRefused(RestoreRefused),
     /// 読み書きに失敗した。
     Storage(StorageError),
 }
@@ -192,9 +208,7 @@ impl std::fmt::Display for ItemError {
             Self::PermissionDenied(e) => e.fmt(f),
             Self::NotFound => f.write_str("the item was not found"),
             Self::InvalidArgument(e) => e.fmt(f),
-            Self::StorageUnavailable => {
-                f.write_str("the app is retrying a failed save, so writes are not accepted")
-            }
+            Self::StorageUnavailable(e) => e.fmt(f),
             Self::Conflict(Conflict::CarriedOver {
                 carried_to_date, ..
             }) => write!(f, "the item was carried over to {carried_to_date}"),
@@ -202,6 +216,15 @@ impl std::fmt::Display for ItemError {
             Self::Conflict(Conflict::NoteExists { .. }) => {
                 f.write_str("the blocker already has a different resolution note")
             }
+            Self::RestoreRefused(RestoreRefused::SourceChanged) => {
+                f.write_str("the item it was carried over from was changed after the delete")
+            }
+            Self::RestoreRefused(RestoreRefused::SourceCarriedOver {
+                carried_to_date, ..
+            }) => write!(
+                f,
+                "the item it was carried over from was carried over again to {carried_to_date}"
+            ),
             Self::Storage(e) => e.fmt(f),
         }
     }
@@ -214,8 +237,9 @@ impl std::error::Error for ItemError {
             Self::Storage(e) => Some(e),
             Self::PermissionDenied(_)
             | Self::NotFound
-            | Self::StorageUnavailable
-            | Self::Conflict(_) => None,
+            | Self::StorageUnavailable(_)
+            | Self::Conflict(_)
+            | Self::RestoreRefused(_) => None,
         }
     }
 }
@@ -244,12 +268,21 @@ impl From<Conflict> for ItemError {
     }
 }
 
-impl From<ScopeError> for ItemError {
-    fn from(e: ScopeError) -> Self {
-        match e {
-            ScopeError::Denied(e) => Self::PermissionDenied(e),
-            ScopeError::Storage(e) => Self::Storage(e),
-        }
+impl From<PermissionDenied> for ItemError {
+    fn from(e: PermissionDenied) -> Self {
+        Self::PermissionDenied(e)
+    }
+}
+
+impl From<StorageUnavailable> for ItemError {
+    fn from(e: StorageUnavailable) -> Self {
+        Self::StorageUnavailable(e)
+    }
+}
+
+impl From<RestoreRefused> for ItemError {
+    fn from(e: RestoreRefused) -> Self {
+        Self::RestoreRefused(e)
     }
 }
 
@@ -404,11 +437,12 @@ pub fn resolve_blocker(
         if let Some(note) = note {
             match item.resolution_note.as_deref() {
                 // 保存済みの解消メモはいつも前後の空白を除いた形だが、除かずに入った値でも
-                // 同じ本文と判定する（やり直しが note_exists にならないように）
+                // 同じ本文と判定する（やり直しが note_exists にならないように）。応答で返す
+                // 解消メモも、除いた形にする
                 Some(existing) if existing.trim() == note => {}
                 Some(existing) if !existing.trim().is_empty() => {
                     return Err(Conflict::NoteExists {
-                        resolution_note: existing.to_owned(),
+                        resolution_note: existing.trim().to_owned(),
                     }
                     .into());
                 }
@@ -440,11 +474,10 @@ fn add_by_agent(
     now: Timestamp,
 ) -> Result<Item, ItemError> {
     in_transaction(conn, || {
-        agent::require_scope(conn, agent.client_id, op.scope())?;
+        agent::require_scope::<ItemError>(conn, agent.client_id, op.scope())?;
         let text = one_line_text(text)?;
-        if agent.ui.save_failing() {
-            return Err(ItemError::StorageUnavailable);
-        }
+        agent::require_save_working(agent)?;
+        let sort_key = key_at(conn, date, op.kind(), Position::Last, None)?;
         day::ensure(conn, date, tz, now)?;
         let item = insert_new(
             conn,
@@ -452,7 +485,7 @@ fn add_by_agent(
                 date,
                 kind: op.kind(),
                 text,
-                position: Position::Last,
+                sort_key,
                 origin: Origin::Agent,
                 agent_client_id: Some(agent.client_id),
             },
@@ -505,7 +538,7 @@ fn target_for_agent(
     op: ItemOperation,
     id: Ulid,
 ) -> Result<Item, ItemError> {
-    agent::require_scope(conn, agent.client_id, op.scope())?;
+    agent::require_scope::<ItemError>(conn, agent.client_id, op.scope())?;
     let item = load(conn, id)?;
     // 取りやめた TODO は、種類の違う操作（edit_blocker・resolve_blocker）に届いても、送り直した
     // 先でも成功しないので、種類の違いより先に返す
@@ -529,9 +562,7 @@ fn ready_for_agent(
     item: &Item,
     field: Option<ItemField>,
 ) -> Result<(), ItemError> {
-    if agent.ui.save_failing() {
-        return Err(ItemError::StorageUnavailable);
-    }
+    agent::require_save_working(agent)?;
     check_not_carried(conn, item)?;
     if field.is_some_and(|f| agent.ui.is_editing(item.id, f)) {
         return Err(Conflict::UserEditing.into());
@@ -554,8 +585,9 @@ pub fn add(
 ) -> Result<Item, ItemError> {
     in_transaction(conn, || {
         let text = one_line_text(text)?;
-        // 位置の誤りでは day の行を作らないよう、先に確かめる
-        key_at(conn, date, kind, position, None)?;
+        // 位置の誤りでは day の行を作らないよう、キーを先に決める（day の行が無ければ、
+        // その日に項目は無く、付け直しも起きない）
+        let sort_key = key_at(conn, date, kind, position, None)?;
         day::ensure(conn, date, tz, now)?;
         insert_new(
             conn,
@@ -563,7 +595,7 @@ pub fn add(
                 date,
                 kind,
                 text,
-                position,
+                sort_key,
                 origin: Origin::Human,
                 agent_client_id: None,
             },
@@ -650,14 +682,101 @@ pub fn save_resolution_note(
     })
 }
 
-/// 画面で項目を削除する（論理削除）。取りやめた TODO と持ち越し済みの項目も削除できる。
-pub fn delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<(), ItemError> {
-    in_transaction(conn, || {
-        if item_table::soft_delete(conn, id, now)? {
-            Ok(())
-        } else {
-            Err(ItemError::NotFound)
+/// [`delete`] の結果。画面は、削除の取り消し（Mod+Z）のために取り消しの履歴に持ち、[`restore`] に渡す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deleted {
+    /// 削除した後の項目。
+    pub item: Item,
+    /// 持ち越しで作った項目（`carried_from_id` がある）なら、削除の時点の持ち越し元の欄。
+    pub source: Option<SourceState>,
+}
+
+/// 持ち越し先を削除した時点の、持ち越し元の項目の欄のうち、変わったら削除を戻せなくなるもの
+/// （データモデル設計書 3章 item）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceState {
+    pub id: Ulid,
+    pub status: ItemStatus,
+    pub text: String,
+    pub resolution_note: Option<String>,
+    pub completed_at: Option<Timestamp>,
+}
+
+impl SourceState {
+    fn of(item: &Item) -> Self {
+        Self {
+            id: item.id,
+            status: item.status,
+            text: item.text.clone(),
+            resolution_note: item.resolution_note.clone(),
+            completed_at: item.completed_at,
         }
+    }
+}
+
+/// 画面で項目を削除する（論理削除）。取りやめた TODO と持ち越し済みの項目も削除できる。
+pub fn delete(conn: &Connection, id: Ulid, now: Timestamp) -> Result<Deleted, ItemError> {
+    in_transaction(conn, || {
+        let item = load(conn, id)?;
+        let source = match item.carried_from_id {
+            Some(from) => item_table::get(conn, from)?.map(|s| SourceState::of(&s)),
+            None => None,
+        };
+        if !item_table::soft_delete(conn, id, now)? {
+            return Err(ItemError::NotFound);
+        }
+        Ok(Deleted {
+            item: Item {
+                deleted_at: Some(now),
+                updated_at: now,
+                ..item
+            },
+            source,
+        })
+    })
+}
+
+/// 画面で削除を取り消す（Mod+Z）。`deleted` は [`delete`] の結果。戻した後の項目を返す。
+///
+/// - 項目が無いか、削除されていなければ [`ItemError::NotFound`]。
+/// - 持ち越し先の項目は、削除した後に持ち越し元が変わったか、ほかの項目へ持ち越されていれば
+///   戻さない（[`RestoreRefused`]。データモデル設計書 3章 item）。持ち越し先が2件にならないように
+///   するため。
+/// - 戻した項目のキーが、その後に同じ日のほかの項目と重なった（または形に当てはまらない）なら、
+///   その日のキーを並び順を変えずに付け直す（付け直しは削除されていない項目だけを書くので、
+///   削除の間に重なりうる）。
+pub fn restore(conn: &Connection, deleted: &Deleted, now: Timestamp) -> Result<Item, ItemError> {
+    in_transaction(conn, || {
+        let id = deleted.item.id;
+        let item = match item_table::get(conn, id)? {
+            Some(item) if item.deleted_at.is_some() => item,
+            _ => return Err(ItemError::NotFound),
+        };
+        if let Some(from) = item.carried_from_id {
+            let source = item_table::get(conn, from)?;
+            if source.as_ref().map(SourceState::of) != deleted.source {
+                return Err(RestoreRefused::SourceChanged.into());
+            }
+            if let Some(to) = carried_to_skipping(conn, from, Some(id))? {
+                return Err(RestoreRefused::SourceCarriedOver {
+                    carried_to_id: to.id,
+                    carried_to_date: to.date,
+                }
+                .into());
+            }
+        }
+        if !item_table::restore(conn, id, now)? {
+            return Err(ItemError::NotFound);
+        }
+        let others = item_table::list_by_date(conn, item.date)?;
+        let clashes = !sort_key::is_valid(&item.sort_key)
+            || others
+                .iter()
+                .any(|o| o.id != id && o.sort_key == item.sort_key);
+        if clashes {
+            renumber(conn, &others, others.len(), 0)?;
+        }
+        load(conn, id)
     })
 }
 
@@ -699,13 +818,14 @@ pub fn split(
         let second = one_line_text(second)?;
         let item = target_for_screen(conn, id)?;
         // 元の項目があるので、day の行もある
+        let sort_key = key_at(conn, item.date, item.kind, Position::After(item.id), None)?;
         let new = insert_new(
             conn,
             NewItem {
                 date: item.date,
                 kind: item.kind,
                 text: second,
-                position: Position::After(item.id),
+                sort_key,
                 origin: Origin::Human,
                 agent_client_id: None,
             },
@@ -724,7 +844,17 @@ pub fn split(
 /// 指す項目をたどり、最初に行き着いた削除されていない項目。削除されている項目は、さらにそれを
 /// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。
 pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    let mut seen = HashSet::from([id]);
+    carried_to_skipping(conn, id, None)
+}
+
+/// [`carried_to`] と同じたどり方で、`skip` の項目（とその先）はたどらない。削除した持ち越し先を
+/// 戻すときに、持ち越し元がほかの項目へ持ち越されていないかを確かめるのに使う。
+fn carried_to_skipping(
+    conn: &Connection,
+    id: Ulid,
+    skip: Option<Ulid>,
+) -> Result<Option<Item>, StorageError> {
+    let mut seen: HashSet<Ulid> = [Some(id), skip].into_iter().flatten().collect();
     let mut pending = vec![id];
     while let Some(from) = pending.pop() {
         for next in item_table::list_carried_from(conn, from)? {
@@ -760,16 +890,17 @@ fn target_for_screen(conn: &Connection, id: Ulid) -> Result<Item, ItemError> {
     Ok(item)
 }
 
-/// 本文を `text`（整えたもの）にする書き換え。今と同じなら何も変えない。
+/// 本文を `text`（整えたもの）にする書き換え。今と同じなら何も変えない。保存済みの本文はいつも
+/// 前後の空白を除いた形だが、除かずに入った値でも、除いて同じなら同じとみなす（解消メモと同じ）。
 fn text_change(item: &Item, text: String) -> ItemChanges {
     ItemChanges {
-        text: (text != item.text).then_some(text),
+        text: (text != item.text.trim()).then_some(text),
         ..ItemChanges::default()
     }
 }
 
 /// 項目の本文を整える（[`one_line`]）。
-fn one_line_text(text: &str) -> Result<String, InvalidArgument> {
+pub(crate) fn one_line_text(text: &str) -> Result<String, InvalidArgument> {
     one_line(
         text,
         InvalidArgument::EmptyText,
@@ -887,14 +1018,14 @@ struct NewItem {
     kind: ItemKind,
     /// 整えた本文。
     text: String,
-    position: Position,
+    /// [`key_at`] で決めたキー。
+    sort_key: String,
     origin: Origin,
     agent_client_id: Option<Ulid>,
 }
 
 /// 項目を作る。その日の day の行が先に要る（呼び出し側が [`day::ensure`] で作る）。
 fn insert_new(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, ItemError> {
-    let sort_key = key_at(conn, new.date, new.kind, new.position, None)?;
     let item = Item {
         id: Ulid::generate(),
         date: new.date,
@@ -902,7 +1033,7 @@ fn insert_new(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, I
         text: new.text,
         status: ItemStatus::Open,
         close_reason: None,
-        sort_key,
+        sort_key: new.sort_key,
         carry_count: 0,
         carried_from_id: None,
         split_from_id: None,
@@ -920,10 +1051,11 @@ fn insert_new(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, I
 }
 
 /// その日の並びの `position` に置く、種類 `kind` の項目のキー。`moving` は動かす項目（並びから除いて
-/// 数える）で、すでにその位置にあれば、そのキーをそのまま返す。
+/// 数える）。
 ///
 /// TODO と障害は1つの並びにキーを持つが、画面はそれぞれの種類だけを並べるので、`Before`・`After` の
-/// 基準は同じ種類の項目に限る（違う種類なら [`InvalidArgument::InvalidPosition`]）。
+/// 基準は同じ種類の項目に限り（違う種類なら [`InvalidArgument::InvalidPosition`]）、先頭・末尾も
+/// 同じ種類の中で数える。`moving` が同じ種類の中ですでにその位置にあれば、そのキーをそのまま返す。
 ///
 /// 隣のキーの間にキーを作れない（形に当てはまらない、同じキーが並ぶ）ときは、その日のほかの項目の
 /// キーを付け直してから作る（並び順は変えない）。
@@ -938,40 +1070,67 @@ fn key_at(
         .into_iter()
         .filter(|i| Some(i.id) != moving.map(|m| m.id))
         .collect();
+    // 同じ種類の項目の、並び全体での位置
+    let same: Vec<usize> = (0..items.len())
+        .filter(|&i| items[i].kind == kind)
+        .collect();
     let index_of = |id: Ulid| {
-        items
-            .iter()
-            .position(|i| i.id == id && i.kind == kind)
+        same.iter()
+            .position(|&i| items[i].id == id)
             .ok_or(InvalidArgument::InvalidPosition)
     };
-    let at = match position {
+    // 同じ種類の中で、何番目の前に置くか
+    let nth = match position {
         Position::First => 0,
-        Position::Last => items.len(),
+        Position::Last => same.len(),
         Position::Before(id) => index_of(id)?,
         Position::After(id) => index_of(id)? + 1,
     };
-    let before = at.checked_sub(1).map(|i| items[i].sort_key.as_str());
-    let after = items.get(at).map(|i| i.sort_key.as_str());
     if let Some(m) = moving
         && sort_key::is_valid(&m.sort_key)
-        && before.is_none_or(|b| b < m.sort_key.as_str())
-        && after.is_none_or(|a| m.sort_key.as_str() < a)
+        && nth
+            .checked_sub(1)
+            .is_none_or(|i| items[same[i]].sort_key < m.sort_key)
+        && same
+            .get(nth)
+            .is_none_or(|&i| m.sort_key < items[i].sort_key)
     {
         return Ok(m.sort_key.clone());
     }
+    // 並び全体での位置。基準があれば、そのすぐ前・後。先頭・末尾は並び全体の先頭・末尾
+    let at = match position {
+        Position::First => 0,
+        Position::Last => items.len(),
+        Position::Before(_) | Position::After(_) => {
+            same.get(nth).copied().unwrap_or_else(|| same[nth - 1] + 1)
+        }
+    };
+    let before = at.checked_sub(1).map(|i| items[i].sort_key.as_str());
+    let after = items.get(at).map(|i| i.sort_key.as_str());
     if let Some(key) = sort_key::between(before, after) {
         return Ok(key);
     }
-    // 付け直す。`at` の位置を空けておく。並び順は変わらないので、updated_at は変えず、
-    // エージェントの操作でも記録しない（データモデル設計書 3章 item）
-    let keys = sort_key::spread(items.len() + 1);
+    let mut keys = renumber(conn, &items, at, 1)?;
+    Ok(keys.remove(0))
+}
+
+/// その日の項目 `items`（並び順）のキーを、並び順を変えずに付け直し、`at` 番目の前に `gap` 個の
+/// キーを空けて、その空けたキーを返す（先頭から順に並ぶ）。並び順は変わらないので、`updated_at` は
+/// 変えず、エージェントの操作でも記録しない（データモデル設計書 3章 item）。
+pub(crate) fn renumber(
+    conn: &Connection,
+    items: &[Item],
+    at: usize,
+    gap: usize,
+) -> Result<Vec<String>, StorageError> {
+    let keys = sort_key::spread(items.len() + gap);
     for (i, item) in items.iter().enumerate() {
-        let key = &keys[if i < at { i } else { i + 1 }];
+        let key = &keys[if i < at { i } else { i + gap }];
         if &item.sort_key != key {
             item_table::renumber_sort_key(conn, item.id, key)?;
         }
     }
-    Ok(keys[at].clone())
+    Ok(keys[at..at + gap].to_vec())
 }
 
 /// change_log に、エージェントの項目の操作を記録する。
@@ -1249,7 +1408,7 @@ mod tests {
         }
         assert!(matches!(
             add_todo(conn, &with_ui(&failing), d, "x", &tokyo(), at(T0)),
-            Err(ItemError::StorageUnavailable)
+            Err(ItemError::StorageUnavailable(_))
         ));
         // どれも何も作らない
         assert_eq!(day_table::get(conn, d).unwrap(), None);
@@ -1376,7 +1535,7 @@ mod tests {
         // 同じ本文でも、保存の失敗中は storage_unavailable
         assert!(matches!(
             edit_todo(conn, &with_ui(&failing), item.id, "a", at(T1)),
-            Err(ItemError::StorageUnavailable)
+            Err(ItemError::StorageUnavailable(_))
         ));
         // 同じ本文でも、入力中なら user_editing（解消メモの入力中は関係ない）
         let editing = FakeUi::editing(item.id, ItemField::Text);
@@ -1581,7 +1740,7 @@ mod tests {
         };
         assert!(matches!(
             complete_todo(conn, &with_ui(&failing), item.id, at(T1)),
-            Err(ItemError::StorageUnavailable)
+            Err(ItemError::StorageUnavailable(_))
         ));
         // 持ち越し済みなら、すでに目的の状態でも carried_over
         let carried = carry(conn, &get(conn, item.id), "2026-11-04");
@@ -1990,6 +2149,142 @@ mod tests {
             InvalidArgument::InvalidPosition
         );
         assert!(logs(conn, a.id).len() == 1);
+    }
+
+    #[test]
+    fn first_and_last_count_only_items_of_the_same_kind() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        // 並び全体では [t1, b1, t2, b2]。画面の TODO の並びは [t1, t2]、障害の並びは [b1, b2]
+        let t1 = todo(conn, "t1");
+        let b1 = blocker(conn, "b1");
+        let t2 = todo(conn, "t2");
+        let b2 = blocker(conn, "b2");
+        for (id, p) in [
+            (t1.id, Position::First),
+            (t2.id, Position::Last),
+            (b1.id, Position::First),
+            (b2.id, Position::Last),
+        ] {
+            assert!(!move_item(conn, id, p, at(T1)).unwrap().updated, "{p:?}");
+        }
+        // 同じ種類の中で先頭・末尾でなければ動かす
+        assert!(
+            move_item(conn, t2.id, Position::First, at(T1))
+                .unwrap()
+                .updated
+        );
+        assert!(
+            move_item(conn, b1.id, Position::Last, at(T1))
+                .unwrap()
+                .updated
+        );
+        assert_eq!(texts(conn, "2026-11-03"), ["t2", "t1", "b2", "b1"]);
+    }
+
+    #[test]
+    fn restore_brings_the_item_back_and_renumbers_a_clashing_key() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let a = todo(conn, "a");
+        let b = todo(conn, "b");
+        let deleted = delete(conn, a.id, at(T1)).unwrap();
+        assert_eq!(deleted.source, None);
+        assert_eq!(deleted.item.deleted_at, Some(at(T1)));
+        // 削除の間に、付け直しで同じキーがほかの項目に付いた
+        conn.execute(
+            "UPDATE item SET sort_key = ?1 WHERE id = ?2",
+            rusqlite::params![a.sort_key, b.id],
+        )
+        .unwrap();
+        let restored = restore(conn, &deleted, at(T2)).unwrap();
+        assert_eq!(restored.deleted_at, None);
+        assert_eq!(restored.updated_at, at(T2));
+        let items = item_table::list_by_date(conn, date("2026-11-03")).unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| sort_key::is_valid(&i.sort_key)));
+        assert!(items[0].sort_key < items[1].sort_key);
+        // 付け直した項目の updated_at は変えない
+        assert_eq!(get(conn, b.id).updated_at, at(T0));
+        // 戻した後は削除されていないので、もう一度は戻せない
+        assert!(matches!(
+            restore(conn, &deleted, at(T2)),
+            Err(ItemError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn restore_keeps_a_key_that_does_not_clash() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let a = todo(conn, "a");
+        let b = todo(conn, "b");
+        let deleted = delete(conn, a.id, at(T1)).unwrap();
+        let restored = restore(conn, &deleted, at(T2)).unwrap();
+        assert_eq!(restored.sort_key, a.sort_key);
+        assert_eq!(get(conn, b.id), b);
+        assert_eq!(texts(conn, "2026-11-03"), ["a", "b"]);
+    }
+
+    #[test]
+    fn add_takes_a_key_once_even_when_renumbering() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let a = todo(conn, "a");
+        let b = todo(conn, "b");
+        conn.execute("UPDATE item SET sort_key = 'a'", []).unwrap();
+        let (first, second) = if a.id < b.id { (a, b) } else { (b, a) };
+        let new = add(
+            conn,
+            date("2026-11-03"),
+            ItemKind::Todo,
+            "new",
+            Position::After(first.id),
+            &tokyo(),
+            at(T1),
+        )
+        .unwrap();
+        assert_eq!(get(conn, new.id), new);
+        let items = item_table::list_by_date(conn, date("2026-11-03")).unwrap();
+        let ids: Vec<_> = items.iter().map(|i| i.id).collect();
+        assert_eq!(ids, [first.id, new.id, second.id]);
+        assert!(items.windows(2).all(|w| w[0].sort_key < w[1].sort_key));
+    }
+
+    #[test]
+    fn stored_text_is_compared_without_surrounding_spaces() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let item = todo(conn, "a");
+        // 前後の空白を除かずに入った本文（コアの書き込みは作らない）
+        conn.execute("UPDATE item SET text = ' a　' WHERE id = ?1", [item.id])
+            .unwrap();
+        assert!(
+            !edit_todo(conn, &cli(), item.id, "a", at(T1))
+                .unwrap()
+                .updated
+        );
+        assert!(!save_text(conn, item.id, "a ", at(T1)).unwrap().updated);
+        assert_eq!(get(conn, item.id).updated_at, at(T0));
+        assert_eq!(logs(conn, item.id).len(), 1);
+    }
+
+    #[test]
+    fn note_exists_returns_the_note_without_surrounding_spaces() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let b = blocker(conn, "b");
+        conn.execute(
+            "UPDATE item SET resolution_note = ' 再起動で直った　' WHERE id = ?1",
+            [b.id],
+        )
+        .unwrap();
+        assert_eq!(
+            conflict(resolve_blocker(conn, &cli(), b.id, Some("別"), at(T1))),
+            Conflict::NoteExists {
+                resolution_note: "再起動で直った".into()
+            }
+        );
     }
 
     #[test]
