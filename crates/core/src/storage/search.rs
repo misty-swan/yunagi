@@ -1,14 +1,20 @@
 //! 全日付の TODO・障害・ノート・振り返りの横断検索（docs/design/02-data-model.md 4章）。
 //!
 //! 索引（FTS5 の `search_index` と、行の種類・日付を持つ `search_index_ref`）はマイグレーション 2 で作り、item・note・reflection の
-//! 更新のたびにトリガーでそろえる（`migrations/0002_search_index.sql`）。ここは検索だけを行う。
+//! 更新のたびにトリガーでそろえる（`migrations/0002_search_index.sql`）。解消済みの障害の解消メモは、
+//! マイグレーション 3 で同じ索引の別の列に足した（`migrations/0003_search_resolution_note.sql`）。
+//! ここは検索だけを行う。
 //!
 //! # 一致の決まり
 //!
 //! - 検索語は前後の空白を除き、全体を1つの文字列として、本文のどこかに含まれていれば一致とする
 //!   （部分一致。空白で語に分けない）。前後の空白を除いて空なら、何も返さない。
+//! - 項目は、本文（item.text）か、解消済みの障害の解消メモ（item.resolution_note）のどちらかに
+//!   含まれていれば一致とする。本文と解消メモにまたがる文字列には一致しない。未解消に戻した障害に
+//!   残っている解消メモは、画面に出ないので探さない。
 //! - 3文字以上の検索語は索引（trigram）で探す。trigram は3文字未満の語に索引を使えないため、
-//!   2文字以下の検索語は元の表（item.text、note.body、reflection.body）への `LIKE` で探す。
+//!   2文字以下の検索語は元の表（item.text・item.resolution_note、note.body、reflection.body）への
+//!   `LIKE` で探す。
 //!   文字数は Unicode の文字（コードポイント）で数える。
 //! - ASCII の英字の大文字・小文字は区別しない。ASCII 以外（全角英字・`Ä` など）の大文字・小文字は、
 //!   3文字以上では区別せず（trigram の既定）、2文字以下では区別する（SQLite の `LIKE` は
@@ -57,6 +63,9 @@ pub struct SearchHit {
     /// 本文の全体（項目は1行の本文、ノート・振り返りは本文すべて）。
     /// 一致した部分の切り出しは使う側で行う。
     pub body: String,
+    /// 解消済みの障害の解消メモ（無ければ `None`。TODO・ノート・振り返りはいつも `None`）。
+    /// 一致したのが本文か解消メモかは、使う側が切り出すときに見分ける。
+    pub resolution_note: Option<String>,
 }
 
 /// 3文字以上の検索語は索引で探す。
@@ -127,23 +136,29 @@ const KIND_ORDER: [SearchKind; 4] = [
     SearchKind::Reflection,
 ];
 
-/// `$inner`（種類・ref_id・日付を並べて件数を切った副問い合わせ）の各行に、元の表の本文を付ける。
+/// `$inner`（種類・ref_id・日付を並べて件数を切った副問い合わせ）の各行に、元の表の本文と
+/// （解消済みの障害なら）解消メモを付ける。
 macro_rules! with_body {
     ($($inner:expr),+ $(,)?) => {
         concat!(
-            "SELECT kind, ref_id, date, CASE kind ",
+            // item も kind・date の列を持つので、結合したものを包んでから並べる
+            "SELECT * FROM (SELECT hit.kind AS kind, hit.ref_id AS ref_id, hit.date AS date, CASE hit.kind ",
             "WHEN 'note' THEN (SELECT body FROM note WHERE date = hit.ref_id) ",
             "WHEN 'reflection' THEN (SELECT body FROM reflection WHERE date = hit.ref_id) ",
-            "ELSE (SELECT text FROM item WHERE id = hit.ref_id) END FROM (",
+            "ELSE i.text END, ",
+            "CASE WHEN i.status = 'resolved' THEN i.resolution_note END ",
+            "FROM (",
             $($inner,)+
-            ") AS hit ORDER BY ",
+            // 項目の本文と解消メモは、item を1回引いて読む
+            ") AS hit LEFT JOIN item AS i ON hit.kind NOT IN ('note', 'reflection') ",
+            "AND i.id = hit.ref_id) ORDER BY ",
             order!(),
         )
     };
 }
 
-/// 索引で探す文。`?1` は FTS5 の句（[`fts_phrase`]）。索引は本文の写しを持たないので、
-/// 種類・日付は search_index_ref から読む。
+/// 索引で探す文。`?1` は FTS5 の句（[`fts_phrase`]）。句はどの列（本文・解消メモ）にも一致し、
+/// 列をまたがない。索引は本文の写しを持たないので、種類・日付は search_index_ref から読む。
 const INDEXED_SQL: &str = with_body!(
     "SELECT r.kind AS kind, r.ref_id AS ref_id, r.date AS date ",
     "FROM search_index JOIN search_index_ref AS r ON r.id = search_index.rowid ",
@@ -165,7 +180,8 @@ const LIKE_SQL: &str = with_body!(
     date_filter!(),
     " AND ",
     kind_filter!("kind"),
-    " AND text LIKE ?1 ESCAPE '\\' ",
+    " AND (text LIKE ?1 ESCAPE '\\' ",
+    "OR (status = 'resolved' AND resolution_note LIKE ?1 ESCAPE '\\')) ",
     "UNION ALL SELECT 'note', date, date FROM note WHERE ",
     kind_filter!("'note'"),
     " AND ",
@@ -187,6 +203,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
         ref_id: row.get(1)?,
         date: row.get(2)?,
         body: row.get(3)?,
+        resolution_note: row.get(4)?,
     })
 }
 
@@ -284,6 +301,8 @@ mod tests {
     /// - search_index_ref の種類・id・日付の組が、元の表（論理削除していない項目、ノート、振り返り）と同じ
     /// - 索引の行と search_index_ref の行が同じ数で、元の各行の本文（3文字以上）で索引を引くと、
     ///   その行の行番号が見つかる（索引は本文の写しを持たないので、引いて確かめる）
+    /// - 解消済みの障害の解消メモ（3文字以上）で解消メモの列を引くと、その行の行番号が見つかり、
+    ///   未解消の障害に残っている解消メモでは見つからない
     /// - FTS5 の `integrity-check` で、索引そのものが壊れていない
     fn assert_index_consistent(db: &Database) {
         let conn = db.connection();
@@ -338,6 +357,30 @@ mod tests {
             assert!(
                 found.contains(&id.parse().unwrap()),
                 "{body:?} is not indexed"
+            );
+        }
+        let notes = rows(
+            "SELECT CAST(r.id AS TEXT), i.resolution_note, i.status, '' FROM search_index_ref AS r \
+             JOIN item AS i ON r.source = 'item' AND r.ref_id = i.id \
+             WHERE i.resolution_note IS NOT NULL",
+        );
+        for (id, note, status, _) in notes {
+            if note.chars().count() < MIN_INDEXED_CHARS {
+                continue;
+            }
+            let found: Vec<i64> = conn
+                .prepare("SELECT rowid FROM search_index WHERE search_index MATCH ?1")
+                .unwrap()
+                .query_map([format!("resolution_note : {}", fts_phrase(&note))], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(
+                found.contains(&id.parse().unwrap()),
+                status == "resolved",
+                "{note:?} ({status})"
             );
         }
     }
@@ -479,6 +522,7 @@ mod tests {
                 ref_id: todo.id.to_string(),
                 date: date("2026-11-02"),
                 body: "API のレート制限を調査".into(),
+                resolution_note: None,
             }]
         );
         // ノート・振り返りの ref_id は日付
@@ -642,6 +686,113 @@ mod tests {
         assert_index_consistent(&db);
     }
 
+    /// 解消済みの障害を `d` に作る。
+    fn add_resolved(db: &Database, d: &str, text: &str, note: &str) -> Item {
+        let d = ensure_day(db, d);
+        let mut blocker = new_item(d, ItemKind::Blocker, text);
+        blocker.status = ItemStatus::Resolved;
+        blocker.resolution_note = Some(note.into());
+        blocker.completed_at = Some(at(T0));
+        item::insert(db.connection(), &blocker).unwrap();
+        blocker
+    }
+
+    #[test]
+    fn finds_resolution_notes_of_resolved_blockers() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let mut blocker = add_resolved(
+            &db,
+            "2026-11-02",
+            "本番に繋がらない",
+            "DNS の設定ミスが原因",
+        );
+        let hit = |q: &str| search(conn, &query(q)).unwrap();
+        for q in ["設定ミス", "原因", "dns"] {
+            assert_eq!(
+                hit(q),
+                [SearchHit {
+                    kind: SearchKind::Blocker,
+                    ref_id: blocker.id.to_string(),
+                    date: date("2026-11-02"),
+                    body: "本番に繋がらない".into(),
+                    resolution_note: Some("DNS の設定ミスが原因".into()),
+                }],
+                "{q}"
+            );
+        }
+        // 本文で一致しても、解消メモを返す
+        assert_eq!(
+            hit("繋がらない")[0].resolution_note.as_deref(),
+            Some("DNS の設定ミスが原因")
+        );
+        // 本文の末尾と解消メモの先頭にまたがる文字列には一致しない
+        assert!(hit("ないDNS").is_empty());
+        assert!(hit("いD").is_empty());
+        assert_index_consistent(&db);
+
+        // 未解消に戻すと、残っている解消メモは画面に出ないので、探さない
+        blocker.status = ItemStatus::Open;
+        blocker.completed_at = None;
+        item::update(conn, &blocker).unwrap();
+        assert!(hit("設定ミス").is_empty());
+        assert!(hit("原因").is_empty());
+        assert_eq!(hit("繋がらない")[0].resolution_note, None);
+        assert_index_consistent(&db);
+
+        // もう一度解消すると、また探す。解消メモを書き換えると、索引も変わる
+        blocker.status = ItemStatus::Resolved;
+        blocker.completed_at = Some(at(T0));
+        item::update(conn, &blocker).unwrap();
+        assert_eq!(hit("設定ミス").len(), 1);
+        blocker.resolution_note = Some("証明書の期限切れ".into());
+        item::update(conn, &blocker).unwrap();
+        assert!(hit("設定ミス").is_empty());
+        assert_eq!(hit("期限切れ").len(), 1);
+        assert_eq!(hit("期限").len(), 1);
+        assert_index_consistent(&db);
+
+        // 種類で絞ると、障害の解消メモは障害として出る
+        let todos = SearchQuery {
+            kinds: &[SearchKind::Todo],
+            ..query("期限切れ")
+        };
+        assert!(search(conn, &todos).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_3_indexes_resolution_notes_written_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yunagi.db");
+        let open_with = |migrations| {
+            let lock = DbLock::acquire(&DefaultDir::for_test(dir.path()), Duration::ZERO).unwrap();
+            Database::open_with_migrations(lock, &path, migrations).unwrap()
+        };
+        {
+            let db = open_with(&migration::MIGRATIONS[..2]);
+            add_resolved(&db, "2026-11-02", "番号2の障害", "番号2の解消メモ");
+            add(&db, "2026-11-02", ItemKind::Todo, "番号2の項目");
+            save(&db, TextDoc::Note, "2026-11-02", "番号2のノート");
+            save(&db, TextDoc::Reflection, "2026-11-01", "番号2の振り返り");
+            db.close().unwrap();
+        }
+        let db = open_with(migration::MIGRATIONS);
+        assert_eq!(
+            find(&db, &query("番号2の")),
+            [
+                "2026-11-02 todo 番号2の項目",
+                "2026-11-02 blocker 番号2の障害",
+                "2026-11-02 note 番号2のノート",
+                "2026-11-01 reflection 番号2の振り返り",
+            ]
+        );
+        assert_eq!(
+            find(&db, &query("解消メモ")),
+            ["2026-11-02 blocker 番号2の障害"]
+        );
+        assert_index_consistent(&db);
+    }
+
     #[test]
     fn filters_by_period_and_kind_and_limits_the_count() {
         let (db, _dir) = open();
@@ -740,6 +891,7 @@ mod tests {
     /// 5年分（1,800日）の模擬データでの検索の時間を測る（テスト計画書 5章。基準は p95 で1秒以内）。
     ///
     /// 量はデータモデル設計書 5章の見積もり（1日あたり TODO・障害 20件、ノート 10KB、振り返り 2KB）。
+    /// 障害（20件のうち5件）の半分は解消済みで、解消メモ（40 バイトほど）がある。
     /// データを作るのに時間がかかるので、普段のテストでは飛ばす。測るときは次のように走らせる：
     ///
     /// ```sh
@@ -872,6 +1024,12 @@ mod tests {
                     };
                     let mut it = new_item(d, kind, &rng.text(40));
                     it.sort_key = format!("a{i:02}");
+                    // 障害の半分は解消済みで、解消メモがある
+                    if i % 8 == 0 {
+                        it.status = ItemStatus::Resolved;
+                        it.resolution_note = Some(rng.text(40));
+                        it.completed_at = Some(at(T0));
+                    }
                     item::insert(conn, &it).unwrap();
                 }
                 text_doc::save(conn, TextDoc::Note, d, &rng.text(NOTE_BYTES), at(T0)).unwrap();

@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::backup::NO_PROGRESS;
 use rusqlite::{Connection, MAIN_DB, ffi};
 
-use super::{StorageError, db_copy};
+use super::{StorageError, db_copy, db_files};
 
 /// 1つのマイグレーション。
 pub(crate) struct Migration {
@@ -48,6 +48,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "create search index",
         sql: include_str!("migrations/0002_search_index.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "search resolution notes",
+        sql: include_str!("migrations/0003_search_resolution_note.sql"),
     },
 ];
 
@@ -184,37 +189,48 @@ fn apply(conn: &mut Connection, m: &Migration) -> rusqlite::Result<()> {
 ///
 /// 名前は `pre-migration-v<適用前の番号>-to-v<適用後の番号>-<UNIX 時刻（秒）>.db`。
 /// 書き終わる前に止まっても壊れたバックアップが残らないよう、一時ファイルに書いてから名前を変える。
-/// 前回に中断して残った一時ファイルは、ここで消す。
+/// 写したものの整合性を確かめ（[`db_copy::copy`]）、通らなければ [`StorageError::BackupCorrupted`]
+/// を返す（壊れたバックアップでは、失敗したときに戻せないので、マイグレーションを始めない）。
+/// 失敗したら、作りかけの一時ファイルとその横のファイルを消す。
+/// 前回に中断して残った一時ファイル（とその横のファイル）は、ここで消す（消せなければ残し、
+/// 一時ファイルには空いている名前を選ぶ）。
 fn create_backup(
     conn: &Connection,
     backup_dir: &Path,
     from: u32,
     to: u32,
 ) -> Result<PathBuf, StorageError> {
-    fs::create_dir_all(backup_dir)?;
-    remove_stale_temp_files(backup_dir)?;
+    fs::create_dir_all(backup_dir)
+        .map_err(|e| StorageError::io("create directory", backup_dir, e))?;
+    remove_stale_temp_files(backup_dir);
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let stem = format!("pre-migration-v{from}-to-v{to}-{secs}");
     let mut path = backup_dir.join(format!("{stem}.db"));
     let mut n = 1;
-    while path.exists() {
+    // 一時ファイル（とその横のファイル）の名前も空いているものを選ぶ（消せずに残ったものに書かない）
+    while path.symlink_metadata().is_ok() || db_files::any_exists(&path.with_extension("db.tmp")) {
         n += 1;
         path = backup_dir.join(format!("{stem}-{n}.db"));
     }
 
     let tmp = path.with_extension("db.tmp");
-    let result = (|| {
-        db_copy::copy(conn, &tmp)?;
-        fs::rename(&tmp, &path)?;
-        db_copy::sync_dir(backup_dir)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+    // 写すのに失敗したときは、db_copy::copy が作りかけのものを片付けている
+    db_copy::copy(conn, &tmp).map_err(|e| match e {
+        // 一時ファイルの名前ではなく、作ろうとしたバックアップの名前で知らせる
+        db_copy::CopyError::Corrupted { result, .. } => StorageError::BackupCorrupted {
+            path: path.clone(),
+            result,
+        },
+        e => e.into(),
+    })?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        db_files::remove_with_side_files(&tmp);
+        return Err(StorageError::io("rename", &tmp, e));
     }
-    result.map(|()| path)
+    db_copy::sync_dir(backup_dir).map_err(|e| StorageError::io("sync", backup_dir, e))?;
+    Ok(path)
 }
 
 /// バックアップの内容でデータベースを置き換える。
@@ -227,19 +243,11 @@ fn restore(conn: &mut Connection, backup: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// 書きかけのまま残ったバックアップの一時ファイル（`pre-migration-*.db.tmp`）を消す。
-fn remove_stale_temp_files(backup_dir: &Path) -> std::io::Result<()> {
-    for entry in fs::read_dir(backup_dir)? {
-        let path = entry?.path();
-        let is_temp = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("pre-migration-") && n.ends_with(".db.tmp"));
-        if is_temp {
-            fs::remove_file(&path)?;
-        }
-    }
-    Ok(())
+/// 書きかけのまま残ったバックアップの一時ファイル（`pre-migration-*.db.tmp`）と、SQLite が
+/// その横に作るファイル（`-journal` など）を消す（[`db_files::remove_stale_temp_files`]。
+/// 消せないものは残して続ける。マイグレーションを止めない）。
+fn remove_stale_temp_files(backup_dir: &Path) {
+    db_files::remove_stale_temp_files(backup_dir, |name| name.starts_with("pre-migration-"));
 }
 
 #[cfg(test)]
@@ -657,6 +665,80 @@ mod tests {
             .pragma_query_value(None, "journal_mode", |r| r.get(0))
             .unwrap();
         assert_eq!(mode, "delete");
+    }
+
+    /// 整合性の確認だけが通らないデータベース：ページは読めるが、索引が表と食い違っている
+    /// （索引の定義を書き換え、中身と合わなくする）。SQLite のオンラインバックアップはページを
+    /// そのまま写すので、写しも同じく確認が通らない。
+    fn break_index(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE INDEX memo_body ON memo (body);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_schema SET sql = 'CREATE INDEX memo_body ON memo (id)'
+                 WHERE name = 'memo_body';
+             PRAGMA writable_schema = OFF;",
+        )
+        .unwrap();
+        drop(conn);
+        let result: String = Connection::open(path)
+            .unwrap()
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_ne!(result, "ok");
+    }
+
+    #[test]
+    fn corrupted_backup_stops_the_migration_before_it_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        create_v1_with_rows(&path);
+        break_index(&path);
+        let before = snapshot(&Connection::open(&path).unwrap());
+
+        let err = open_with(&path, &[V1, V2])
+            .err()
+            .expect("the backup should be refused");
+        let StorageError::BackupCorrupted { path: backup, .. } = &err else {
+            panic!("unexpected error: {err:?}");
+        };
+        // 知らせるのは作ろうとしたバックアップの名前。作りかけのものは横のファイルごと消してある
+        let name = backup.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("pre-migration-v1-to-v2-"), "{name}");
+        assert!(name.ends_with(".db"), "{name}");
+        assert_eq!(backups(&dir), Vec::<PathBuf>::new());
+        // マイグレーションは始めていない
+        assert_eq!(snapshot(&Connection::open(&path).unwrap()), before);
+    }
+
+    #[test]
+    fn stale_temp_files_and_their_side_files_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = db_path(&dir);
+        create_v1_with_rows(&path);
+        let backups_dir = dir.path().join("backups");
+        fs::create_dir_all(&backups_dir).unwrap();
+        for name in [
+            "pre-migration-v1-to-v2-1.db.tmp",
+            "pre-migration-v1-to-v2-1.db.tmp-journal",
+            "pre-migration-v1-to-v2-1.db.tmp-wal",
+            "pre-migration-v1-to-v2-1.db.tmp-shm",
+            "pre-migration-v1-to-v2-1.db.tmp.old",
+            "mine.db.tmp-journal",
+        ] {
+            fs::write(backups_dir.join(name), b"left").unwrap();
+        }
+        drop(open_with(&path, &[V1, V2]).unwrap());
+        let mut left: Vec<String> = backups(&dir)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_owned())
+            .filter(|n| !n.starts_with("pre-migration-v1-to-v2-") || !n.ends_with(".db"))
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["mine.db.tmp-journal", "pre-migration-v1-to-v2-1.db.tmp.old"]
+        );
     }
 
     #[test]

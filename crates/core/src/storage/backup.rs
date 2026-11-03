@@ -23,9 +23,9 @@ use rusqlite::backup::Backup as SqliteBackup;
 use rusqlite::{Connection, OpenFlags};
 
 use super::data_dir::{self, DataDirError};
-use super::db_copy;
 use super::migration::{self, Migration};
 use super::{Database, StorageError};
+use super::{db_copy, db_files};
 use crate::domain::logical_date::LogicalDate;
 use crate::error::ErrorChain;
 
@@ -47,8 +47,6 @@ const DAILY_PREFIX: &str = "daily-";
 const PRE_MIGRATION_PREFIX: &str = "pre-migration-";
 const PRE_RESTORE_PREFIX: &str = "pre-restore-";
 const EXTENSION: &str = ".db";
-/// 書きかけのバックアップの名前の接尾辞（書き終えてから `.db` に名前を変える）。
-const TEMP_SUFFIX: &str = ".db.tmp";
 
 /// `backups/` にある1つのバックアップ。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,7 +282,10 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
     remove_stale_temp_files(dir);
     let mut name = format!("{stem}{EXTENSION}");
     let mut n = 1;
-    while dir.join(&name).symlink_metadata().is_ok() {
+    // 一時ファイル（とその横のファイル）の名前も空いているものを選ぶ（消せずに残ったものに書かない）
+    while dir.join(&name).symlink_metadata().is_ok()
+        || db_files::any_exists(&dir.join(format!("{name}.tmp")))
+    {
         n += 1;
         name = format!("{stem}-{n}{EXTENSION}");
     }
@@ -292,48 +293,24 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
     let backup = parse(&path).expect("backup names are built to be parsable");
 
     let tmp = dir.join(format!("{name}.tmp"));
-    let result = data_dir::copy_database(db_path, &tmp)
-        .map_err(BackupError::Copy)
-        .and_then(|()| fs::rename(&tmp, &path).map_err(|e| BackupError::io("rename", &tmp, e)));
-    if result.is_err() {
-        remove_with_side_files(&tmp);
-        return result.map(|()| backup);
+    // 写すのに失敗したときは、copy_database が作りかけのものを片付けている
+    data_dir::copy_database(db_path, &tmp).map_err(BackupError::Copy)?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        db_files::remove_with_side_files(&tmp);
+        return Err(BackupError::io("rename", &tmp, e));
     }
     let _ = db_copy::sync_dir(dir);
     Ok(backup)
 }
 
 /// 書きかけのまま残った定期・復元前のバックアップの一時ファイルを消す（SQLite が横に作る
-/// `-journal` などを含む）。マイグレーション前のものは `migration` モジュールが消す。
+/// `-journal` などを含む。[`db_files::remove_stale_temp_files`]）。マイグレーション前のものは
+/// `migration` モジュールが消す。
 fn remove_stale_temp_files(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        // `<バックアップの名前>.db.tmp` と、その横に SQLite が作る `-journal`・`-wal`・`-shm` だけ
-        let Some((stem, side)) = name.split_once(TEMP_SUFFIX) else {
-            continue;
-        };
-        let ours = matches!(side, "" | "-journal" | "-wal" | "-shm")
-            && parse(Path::new(&format!("{stem}{EXTENSION}"))).is_some_and(|b| {
-                matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore)
-            });
-        if ours {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-}
-
-/// ファイルと、SQLite がその横に作るファイルを消す（無ければ何もしない）。
-fn remove_with_side_files(path: &Path) {
-    let _ = fs::remove_file(path);
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let mut side = path.as_os_str().to_os_string();
-        side.push(suffix);
-        let _ = fs::remove_file(PathBuf::from(side));
-    }
+    db_files::remove_stale_temp_files(dir, |name| {
+        parse(Path::new(name))
+            .is_some_and(|b| matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore))
+    });
 }
 
 /// `dir` にあるバックアップの一覧。新しいものが先。
@@ -603,6 +580,7 @@ mod tests {
     use std::time::Duration;
 
     use super::super::DbLock;
+    use super::super::test_util::names;
     use super::*;
 
     fn day(d: i8) -> LogicalDate {
@@ -639,17 +617,6 @@ mod tests {
         })
         .ok()
         .map(|v| v.parse().unwrap())
-    }
-
-    fn names(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .map(|es| {
-                es.map(|e| e.unwrap().file_name().into_string().unwrap())
-                    .collect()
-            })
-            .unwrap_or_default();
-        names.sort();
-        names
     }
 
     /// 番号 `user_version` の空のデータベースを `path` に作る（バックアップの代わり）。
@@ -1106,12 +1073,7 @@ mod tests {
         }
         let backup = db.ensure_daily_backup(day(3)).unwrap().unwrap();
         // 2ページ目以降の中身を壊す（見出しは残すので、SQLite のファイルとしては開ける）
-        let mut bytes = fs::read(&backup.path).unwrap();
-        let page_size = usize::from(u16::from_be_bytes([bytes[16], bytes[17]]));
-        for b in &mut bytes[page_size + 8..] {
-            *b = 0xA5;
-        }
-        fs::write(&backup.path, &bytes).unwrap();
+        super::super::test_util::corrupt_pages(&backup.path);
         let err = assert_rejected(&env, &mut db, &backup.path);
         assert!(
             matches!(err, BackupError::Corrupted { .. } | BackupError::Sqlite(_)),

@@ -10,12 +10,15 @@ pub mod backup;
 pub mod cloud_sync;
 pub mod data_dir;
 mod db_copy;
+mod db_files;
 mod error;
 mod lock;
 mod migration;
 mod open;
 pub mod search;
 pub mod table;
+#[cfg(test)]
+mod test_util;
 mod ulid;
 
 use std::path::{Path, PathBuf};

@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::LockError;
 use crate::error::ErrorChain;
@@ -12,8 +12,13 @@ use crate::error::ErrorChain;
 pub enum StorageError {
     /// SQLite の操作が失敗した。
     Sqlite(rusqlite::Error),
-    /// ファイルの操作（バックアップ用フォルダの作成など）が失敗した。
-    Io(io::Error),
+    /// ファイルの操作（バックアップ用フォルダの作成など）が失敗した。`action` は何をしようとしたか、
+    /// `path` はその対象。
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        source: io::Error,
+    },
     /// `yunagi.lock` のロックが取れなかった（ほかのプロセスが使っているなど）。
     /// データベースには触れていない。
     Lock(LockError),
@@ -22,6 +27,10 @@ pub enum StorageError {
     /// データベースのスキーマの番号を、このアプリが知らない。ふつうは新しい版で作られたもの
     /// （番号が `supported` より大きい）。負の番号もここに入る。ファイルには触れていない。
     UnsupportedSchema { found: i64, supported: u32 },
+    /// マイグレーション前のバックアップ（`path` に作ろうとしたもの）の整合性の確認
+    /// （`integrity_check`）が通らなかった。作りかけのバックアップは消し、マイグレーションは
+    /// 始めていない（データベースは適用前のまま）。`result` は確認の結果。
+    BackupCorrupted { path: PathBuf, result: String },
     /// マイグレーションの適用に失敗し、バックアップに戻した。データは適用前のまま。
     /// 画面では旧版の再導入方法を案内する（ビルド・配布手順書 5章）。
     MigrationFailed {
@@ -46,7 +55,7 @@ impl fmt::Display for StorageError {
         // 原因のエラーの文は含めない（source() で返す。README「エラーの表示」）
         match self {
             Self::Sqlite(_) => write!(f, "database error"),
-            Self::Io(_) => write!(f, "file error"),
+            Self::Io { action, path, .. } => write!(f, "could not {action} {}", path.display()),
             // 包むだけなので、中身をそのまま見せる（透過）
             Self::Lock(e) => write!(f, "{e}"),
             Self::WalUnavailable { mode } => {
@@ -55,6 +64,11 @@ impl fmt::Display for StorageError {
             Self::UnsupportedSchema { found, supported } => write!(
                 f,
                 "database schema version {found} is not supported by this app (supports up to {supported})"
+            ),
+            Self::BackupCorrupted { path, result } => write!(
+                f,
+                "the backup {} made before the migration failed the integrity check ({result}), so the migration was not started",
+                path.display()
             ),
             Self::MigrationFailed {
                 version,
@@ -89,13 +103,15 @@ impl std::error::Error for StorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Sqlite(e) => Some(e),
-            Self::Io(e) => Some(e),
+            Self::Io { source, .. } => Some(source),
             // Display と同じく透過。中身の原因を返す
             Self::Lock(e) => e.source(),
             Self::MigrationFailed { source, .. } | Self::RestoreFailed { source, .. } => {
                 Some(source)
             }
-            Self::WalUnavailable { .. } | Self::UnsupportedSchema { .. } => None,
+            Self::WalUnavailable { .. }
+            | Self::UnsupportedSchema { .. }
+            | Self::BackupCorrupted { .. } => None,
         }
     }
 }
@@ -106,9 +122,14 @@ impl From<rusqlite::Error> for StorageError {
     }
 }
 
-impl From<io::Error> for StorageError {
-    fn from(e: io::Error) -> Self {
-        Self::Io(e)
+impl StorageError {
+    /// ファイルの操作の失敗。`action` は何をしようとしたか（`"create directory"` など）、`path` はその対象。
+    pub(crate) fn io(action: &'static str, path: &Path, source: io::Error) -> Self {
+        Self::Io {
+            action,
+            path: path.to_path_buf(),
+            source,
+        }
     }
 }
 
@@ -152,10 +173,19 @@ mod tests {
     #[test]
     fn storage_error_display_does_not_repeat_its_source() {
         check(
-            &StorageError::Io(io_err()),
-            "file error",
+            &StorageError::io("create directory", Path::new("/d/backups"), io_err()),
+            "could not create directory /d/backups",
             Some("permission denied"),
-            "file error: permission denied",
+            "could not create directory /d/backups: permission denied",
+        );
+        check(
+            &StorageError::BackupCorrupted {
+                path: "/d/backups/pre-migration-v1-to-v2-1.db".into(),
+                result: "*** in database main ***".into(),
+            },
+            "the backup /d/backups/pre-migration-v1-to-v2-1.db made before the migration failed the integrity check (*** in database main ***), so the migration was not started",
+            None,
+            "the backup /d/backups/pre-migration-v1-to-v2-1.db made before the migration failed the integrity check (*** in database main ***), so the migration was not started",
         );
         let sqlite = sqlite_err().to_string();
         check(
@@ -200,15 +230,15 @@ mod tests {
             version: 2,
             name: "add_notes",
             source: rusqlite::Error::InvalidQuery,
-            restore_error: Box::new(StorageError::Io(io_err())),
+            restore_error: Box::new(StorageError::io("read", Path::new("/b/pre-2.db"), io_err())),
             backup: "/b/pre-2.db".into(),
         };
         // 戻す失敗は source() で返さないので、その原因（permission denied）まで Display に書く
         check(
             &err,
-            "restoring from /b/pre-2.db failed (file error: permission denied); migration 2 (add_notes) failed",
+            "restoring from /b/pre-2.db failed (could not read /b/pre-2.db: permission denied); migration 2 (add_notes) failed",
             Some("Query is not read-only"),
-            "restoring from /b/pre-2.db failed (file error: permission denied); migration 2 (add_notes) failed: Query is not read-only",
+            "restoring from /b/pre-2.db failed (could not read /b/pre-2.db: permission denied); migration 2 (add_notes) failed: Query is not read-only",
         );
     }
 
@@ -276,14 +306,14 @@ mod tests {
         let lock = DbLock::acquire(&DefaultDir::for_test(dir.path()), Duration::ZERO).unwrap();
         let db = Database::create(lock).unwrap();
         let err = CloseError {
-            error: StorageError::Io(io_err()),
+            error: StorageError::io("sync", Path::new("/d/yunagi.db"), io_err()),
             db,
         };
         check(
             &err,
             "could not close the database",
-            Some("file error"),
-            "could not close the database: file error: permission denied",
+            Some("could not sync /d/yunagi.db"),
+            "could not close the database: could not sync /d/yunagi.db: permission denied",
         );
     }
 
@@ -309,6 +339,40 @@ mod tests {
             "invalid config file /d/config.json",
             Some(&json_text),
             &format!("invalid config file /d/config.json: {json_text}"),
+        );
+        check(
+            &DataDirError::CopyCorrupted {
+                path: "/d/yunagi.db".into(),
+                result: "row 3 missing from index".into(),
+            },
+            "the copy of the database /d/yunagi.db failed the integrity check: row 3 missing from index",
+            None,
+            "the copy of the database /d/yunagi.db failed the integrity check: row 3 missing from index",
+        );
+        check(
+            &DataDirError::NoDatabase("/d/yunagi.db".into()),
+            "no Yunagi database found at /d/yunagi.db",
+            None,
+            "no Yunagi database found at /d/yunagi.db",
+        );
+        check(
+            &DataDirError::Inspect {
+                path: "/d/yunagi.db".into(),
+                source: rusqlite::Error::InvalidQuery,
+            },
+            "could not read the database /d/yunagi.db",
+            Some("Query is not read-only"),
+            "could not read the database /d/yunagi.db: Query is not read-only",
+        );
+        check(
+            &DataDirError::UnsupportedSchema {
+                path: "/d/yunagi.db".into(),
+                found: 9,
+                supported: 3,
+            },
+            "the database /d/yunagi.db has schema version 9, which this app does not support (supports up to 3)",
+            None,
+            "the database /d/yunagi.db has schema version 9, which this app does not support (supports up to 3)",
         );
         let sqlite = sqlite_err().to_string();
         check(
