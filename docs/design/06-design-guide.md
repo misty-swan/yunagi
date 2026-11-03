@@ -62,7 +62,7 @@
 
 ## 4. 文字
 
-| 用途 | 書体（案） | サイズ | 太さ |
+| 用途 | 書体（案。ノートの等幅は下の「ノートの等幅」で決定） | サイズ | 太さ |
 | --- | --- | --- | --- |
 | 本文（項目・振り返り） | 欧文：Inter、和文：OS 標準（ヒラギノ角ゴ／游ゴシック／Noto Sans CJK） | 15px | 400 |
 | ノート | 同上。設定で等幅（UDEV Gothic HS。下の「ノートの等幅」）に切替可 | 15px | 400 |
@@ -93,11 +93,12 @@ Inter と UDEV Gothic HS はアプリに同梱する（どちらも SIL Open Fon
 | --- | --- |
 | 書体 | UDEV Gothic HS。JetBrains Mono の英数字を半角の幅に縮め、BIZ UDゴシックの和文と合わせたもの。HS は全角スペースを見えない形にした版 |
 | 版とファイル | v2.2.0 の `UDEVGothicHS-Regular.ttf`。公式の配布元（GitHub の `yuru7/udev-gothic` のリリース `UDEVGothic_HS_v2.2.0.zip`）に入っているもの。SHA-256 は `89fa22a7fe28aca7ab3cdf33812406589b2e28739bcdb051848913e4164a2339` |
-| 太さ | Regular（400）の1つだけ。ノートには太字・斜体の表示が無く、時刻付き見出しは等幅に切り替えても上の表の書体（本文と同じ）で表示する |
+| 太さ | Regular（400）の1つだけ。等幅のときは、時刻付き見出しを除くノートのどの行（`#` の見出し・`**` などの強調・コードの囲みも）も太さ 400 の直立で表示し、太字・斜体にしない（ブラウザが作る擬似の太字・斜体で字形が崩れ、桁がずれないように）。時刻付き見出しは等幅に切り替えても上の表の書体（本文と同じ）で表示する |
 | 大きさ | 3.87 MB（3,874,168 バイト）。アプリに埋め込むときに Tauri が圧縮するため、配布物は約 2.2 MB 増える |
 | 字幅 | 半角 0.5em・全角 1.0em。矢印・罫線など、幅の決まっていない記号は半角 |
 | 加工 | しない。公式の TTF をそのまま入れ、WOFF2 への変換や文字を減らす加工はしない（下の「予約フォント名」） |
-| 指定 | `font-family: "UDEV Gothic HS", monospace`。このフォントに無い文字（絵文字など）は OS のフォントで表示され、その文字だけ幅がそろわないことがある |
+| 指定 | `font-family` は UDEV Gothic HS、本文の和文の書体（上の表。ヒラギノ角ゴ／游ゴシック／Noto Sans CJK）、`monospace` の順に並べる。このフォントに無い文字（絵文字、JIS 第3・第4水準の一部の漢字など）は本文の和文の書体で表示され、その文字だけ幅がそろわないことがある。和文の無いことが多い `monospace`（英語版 Windows の Courier New など）だけに頼ると、和文が豆腐（四角）になるため |
+| 読み込み | フォントはアプリの中のファイルで、ネットワークからは読まない。`@font-face` は `font-display: block` とし、`note_font` が `mono` のときは起動時に、本文と同じから等幅へ切り替えたときはその場で読み込む。代わりの書体で一度描いてから描き直すと、行の位置やカーソルがずれて見えるため |
 
 選ばなかったもの：
 
@@ -107,7 +108,7 @@ Inter と UDEV Gothic HS はアプリに同梱する（どちらも SIL Open Fon
 
 予約フォント名：UDEV Gothic のライセンスは「UDEV Gothic」を予約フォント名にしている。手を加えた版はこの名前で配れず、形式の変換もふつうは手を加えたことになる（OFL FAQ 2.2）。このため公式のファイルを加工せずに入れる。変換や文字の削減が要るようになったら、OFL に従って別の名前を付ける。
 
-許諾の表記：UDEV Gothic の著作権表示（Copyright (c) 2022 Yuko OTAWARA）と OFL の本文に加えて、元になった JetBrains Mono（Copyright 2020 The JetBrains Mono Project Authors）と BIZ UDゴシック（Copyright 2022 The BIZ UDGothic Project Authors）の著作権表示と OFL の本文を含める。配布元のリポジトリの `LICENSE`、`source/LICENSE_JetBrainsMono`、`source/LICENSE_BIZUDGothic` を、同じ版のものでフォントのファイルと同じ場所に置き、サードパーティライセンス表記に加える（サードパーティライセンス表記の方針 2章）。OFL はフォントだけを売ることを禁じるが、ソフトウェアに入れて配ることは認めている（有料のサポーターライセンスとも両立する）。
+許諾の表記：UDEV Gothic の著作権表示（Copyright (c) 2022 Yuko OTAWARA）と OFL の本文に加えて、元になった JetBrains Mono（Copyright 2020 The JetBrains Mono Project Authors）と BIZ UDゴシック（Copyright 2022 The BIZ UDGothic Project Authors）の著作権表示と OFL の本文を含める。フォントは JavaScript の依存のパッケージ（npm）ではなく、ファイルとしてリポジトリに置く（Inter も同じ）。配布元のリポジトリの `LICENSE`、`source/LICENSE_JetBrainsMono`、`source/LICENSE_BIZUDGothic` を、同じ版のものでフォントのファイルと同じ場所に置き、サードパーティライセンス表記に加える（サードパーティライセンス表記の方針 2章）。OFL はフォントだけを売ることを禁じるが、ソフトウェアに入れて配ることは認めている（有料のサポーターライセンスとも両立する）。
 
 ## 5. 余白とレイアウト
 
