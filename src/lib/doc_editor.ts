@@ -10,7 +10,7 @@
 //   読み終えるまでは入力を受け付けない（読む前の入力を失わないため）。
 
 import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
-import { Annotation, EditorState, Transaction, type Extension } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { EditorView, keymap, type KeyBinding, type ViewUpdate } from "@codemirror/view";
 import { DocSaver, type SaveStatus } from "./autosave.svelte";
 import type { LogicalDate, Snapshot, TextDoc } from "./bindings";
@@ -26,7 +26,9 @@ export interface TextDocEditorOptions {
   presence: EditorPresence;
   onActivity: () => void;
   /** エディタの見た目と、部品が受け持つキー（標準のキーより先に試す）。状態を作るたびに呼ぶ。 */
-  extensions: () => { extensions: Extension[]; keys: readonly KeyBinding[]; label: string };
+  extensions: () => { extensions: Extension[]; keys: readonly KeyBinding[] };
+  /** 読み上げ用の名前（言語を変えたら `relabel` で付け直す）。 */
+  label: () => string;
 }
 
 /** 本文 `cur` を `next` にする、変わった所だけの置き換え（前後の同じ部分を除く）。 */
@@ -63,8 +65,11 @@ export class TextDocEditor {
   readonly #remote = Annotation.define<boolean>();
   /** 変換が終わるまで待っている最新。 */
   #deferred: Snapshot | null = null;
-  /** 読み込んでいる日（読み終える前に別の日へ移ったら、古い結果を捨てる）。 */
-  #loading: LogicalDate | null = null;
+  /** 読み込みの番号（読み終える前に別の日へ移るか、同じ日を開き直したら、古い結果を捨てる）。 */
+  #loading = 0;
+  /** `refresh` で知らされた、日ごとの最新の版（読んでいる間に知らされた版を、読み終えてから確かめる）。 */
+  #latestRev: { date: LogicalDate; rev: number } | null = null;
+  readonly #label = new Compartment();
 
   constructor(o: TextDocEditorOptions) {
     this.#o = o;
@@ -78,10 +83,33 @@ export class TextDocEditor {
 
   /** 使うのをやめる。表示している日の保存は片付ける（保存し終えるまで再試行を続ける）。 */
   destroy() {
-    this.#loading = null;
+    this.#loading++;
     this.#closeSaver();
     this.view?.destroy();
     this.view = null;
+    // 片付けでは focusChanged が届かないので、ここで入力中を終える
+    this.#o.presence.focused = false;
+    this.#o.presence.cursorLines = [];
+    this.#o.onActivity();
+  }
+
+  /** 読み上げ用の名前を付け直す（言語を変えたとき）。 */
+  relabel() {
+    this.view?.dispatch({ effects: this.#label.reconfigure(this.#labelExt()) });
+  }
+
+  #labelExt(): Extension {
+    return EditorView.contentAttributes.of({ "aria-label": this.#o.label(), spellcheck: "false" });
+  }
+
+  /** 状態を置き換える（setState では更新を聞けないので、フォーカスとカーソル行をここで読み直す）。 */
+  #setState(state: EditorState) {
+    const v = this.view;
+    if (v === null) return;
+    v.setState(state);
+    const p = this.#o.presence;
+    p.focused = v.hasFocus;
+    p.cursorLines = cursorLines(v.state);
   }
 
   /** `editable` が偽なら入力を受け付けない（その日の本文を読み終えるまで）。 */
@@ -96,7 +124,7 @@ export class TextDocEditor {
         keymap.of([...own.keys, ...historyKeymap, ...standardKeymap]),
         EditorView.lineWrapping,
         ...own.extensions,
-        EditorView.contentAttributes.of({ "aria-label": own.label, spellcheck: "false" }),
+        this.#label.of(this.#labelExt()),
         EditorView.updateListener.of((u) => this.#onUpdate(u)),
         EditorView.domEventHandlers({
           compositionstart: () => {
@@ -167,15 +195,14 @@ export class TextDocEditor {
   /** 日 `d` の本文を読み、エディタをその本文で始める（前の日の保存は片付ける）。 */
   async open(d: LogicalDate) {
     const p = this.#o.presence;
-    this.#loading = d;
+    const n = ++this.#loading;
     this.#deferred = null;
     this.#closeSaver();
-    this.view?.setState(this.#stateOf("", false));
     // 読み終えるまでは前の日のカーソル行や見出しを残さない
-    p.cursorLines = [];
+    this.#setState(this.#stateOf("", false));
     this.#o.onActivity();
     let snap: Snapshot | null = null;
-    while (snap === null && this.#loading === d) {
+    while (snap === null && this.#loading === n) {
       try {
         snap = await core.getTextDoc(this.#o.doc, d);
       } catch {
@@ -183,24 +210,26 @@ export class TextDocEditor {
         await new Promise((r) => setTimeout(r, RETRY_MS));
       }
     }
-    const v = this.view;
-    if (snap === null || this.#loading !== d || v === null) return;
-    v.setState(this.#stateOf(snap.body, true));
+    if (snap === null || this.#loading !== n || this.view === null) return;
+    this.#setState(this.#stateOf(snap.body, true));
     p.text = () => this.view?.state.doc.toString() ?? "";
     p.saver = new DocSaver(this.#o.save, this.#o.doc, d, snap, {
       text: () => this.view?.state.doc.toString() ?? "",
       replace: (t) => this.#replace(t),
     });
-    p.cursorLines = cursorLines(v.state);
     this.#o.onActivity();
+    // 読んでいる間に、もっと新しい版が知らされていたら読み直す
+    const latest = this.#latestRev;
+    if (latest !== null && latest.date === d) this.refresh(d, latest.rev);
   }
 
   /**
    * コアの版が `rev` に進んだ（ボードを読み込み直したとき）：最新を読み直して取り込む。日 `d` を
    * 開いていないときと、最後に保存した（取り込んだ）版より新しくないときは何もしない（項目だけが
-   * 変わったときに、本文を読み直さないため）。
+   * 変わったときに、本文を読み直さないため）。まだ読んでいる途中なら、読み終えてから確かめる。
    */
   refresh(d: LogicalDate, rev: number) {
+    this.#latestRev = { date: d, rev };
     const s = this.#o.presence.saver;
     if (s === null || s.date !== d || rev <= s.saved.rev) return;
     void core

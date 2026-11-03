@@ -212,6 +212,11 @@ test("ノートモードではノートのエディタに移り、整理モー�
   await until(() => $(".note-ed .cm-content")?.getAttribute("contenteditable") === "true");
   await until(() => $(".ref-ed .cm-content")?.getAttribute("contenteditable") === "true");
   const ref = $(".ref-ed .cm-content")!;
+  // 整理モードで何にもフォーカスしていなければ、戻ったときは隠したノートからフォーカスを外す
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect(document.activeElement).toBe($(".note-ed .cm-content"));
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect(document.activeElement).not.toBe($(".note-ed .cm-content"));
   ref.focus();
   press({ key: "j", code: "KeyJ", ctrlKey: true });
   expect($(".content > .mode:not([hidden]) .note-ed")).not.toBeNull();

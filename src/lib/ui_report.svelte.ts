@@ -103,7 +103,7 @@ export interface ItemsEditing {
 
 /**
  * 画面全体の入力中の状態（項目・振り返り・ノート）をまとめ、変わるたびに知らせる。アプリに1つだけ作り、
- * 整理モードとノートモードの部品が `items`・`presences` に自分の分を入れる。
+ * 整理モードの部品が `items`（項目）と `reflection`（振り返り）に、ノートモードの部品が `note` に自分の分を入れる。
  */
 export class InputTracker {
   /** アプリが前面にあるか。 */

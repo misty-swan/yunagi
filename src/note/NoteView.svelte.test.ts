@@ -1,5 +1,5 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SaveStatus } from "../lib/autosave.svelte";
@@ -35,16 +35,22 @@ afterEach(async () => {
 interface Core {
   calls: { cmd: string; args: Record<string, unknown> }[];
   note: { body: string; rev: number };
+  /** あれば、ノートを読む応答をこれが解決するまで待たせる。 */
+  gate: Promise<void> | null;
 }
 
 function mockCore(body: string): Core {
-  const c: Core = { calls: [], note: { body, rev: body === "" ? 0 : 1 } };
-  mockIPC((cmd, args) => {
+  const c: Core = { calls: [], note: { body, rev: body === "" ? 0 : 1 }, gate: null };
+  mockIPC(async (cmd, args) => {
     const a = args as Record<string, unknown>;
     c.calls.push({ cmd, args: a });
     switch (cmd) {
-      case "get_text_doc":
-        return a.doc === "note" ? { ...c.note } : { body: "", rev: 0 };
+      case "get_text_doc": {
+        if (a.doc !== "note") return { body: "", rev: 0 };
+        const snap = { ...c.note };
+        if (c.gate !== null) await c.gate;
+        return snap;
+      }
       case "save_text_doc":
         if (a.baseRev !== c.note.rev) return { result: "stale", latest: { ...c.note } };
         c.note = { body: a.body as string, rev: c.note.rev + 1 };
@@ -71,19 +77,21 @@ const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim(
 interface Started {
   core: Core;
   view: () => EditorView;
-  props: { rev: number; visible: boolean };
+  props: { rev: number; visible: boolean; date: string };
 }
 
 async function start(body: string, opts: { font?: FontLoader; visible?: boolean } = {}): Promise<Started> {
   const core = mockCore(body);
   const save = new SaveStatus();
   tracker = new InputTracker(save, undefined, true);
-  const props = $state({ rev: core.note.rev, visible: opts.visible ?? true });
+  const props = $state({ rev: core.note.rev, visible: opts.visible ?? true, date: TODAY });
   let view: EditorView | null = null;
   app = mount(NoteView, {
     target: document.body,
     props: {
-      date: TODAY,
+      get date() {
+        return props.date;
+      },
       save,
       presence: tracker.note,
       get rev() {
@@ -250,4 +258,54 @@ test("等幅を読み込めないときは本文の書体のまま出し、待�
   // 後から読み込み終えたら、そのとき等幅に切り替える
   resolve(true);
   await until(() => q(".note")?.dataset.font === "mono");
+});
+
+test("見出しの挿入は1回の取り消しで戻り、続けて打った件名とまとめない。押し続けても重ねて入れない", async () => {
+  const { view } = await start("");
+  const content = q(".note-ed .cm-content")!;
+  content.focus();
+  press(H);
+  view().dispatch({ changes: { from: view().state.doc.length, insert: "定例" }, userEvent: "input.type" });
+  press({ ...H, repeat: true });
+  expect(view().state.doc.toString()).toBe("## 14:05 定例");
+  press({ key: "z", code: "KeyZ", keyCode: 90, ctrlKey: true }, content);
+  expect(view().state.doc.toString()).toBe("## 14:05 ");
+  press({ key: "z", code: "KeyZ", keyCode: 90, ctrlKey: true }, content);
+  expect(view().state.doc.toString()).toBe("");
+});
+
+test("ほかの入力欄にフォーカスがあるときは、Mod+Shift+H を受けない", async () => {
+  const { view } = await start("");
+  const input = document.createElement("input");
+  document.body.append(input);
+  input.focus();
+  press(H, input);
+  expect(view().state.doc.toString()).toBe("");
+  expect(document.activeElement).toBe(input);
+});
+
+test("日を移ってすぐ戻っても、古い読み込みが入力を消さない。読んでいる間に進んだ版は読み終えてから取り込む", async () => {
+  const { core, view, props } = await start("a");
+  let open!: () => void;
+  core.gate = new Promise<void>((r) => (open = r));
+  props.date = "2026-11-04";
+  flushSync();
+  props.date = TODAY;
+  flushSync();
+  // 読んでいる間に、エージェントが書いた（ボードの版が進んだ）
+  core.note = { body: "a\nb", rev: 2 };
+  props.rev = 2;
+  flushSync();
+  core.gate = null;
+  open();
+  await until(() => view().state.doc.toString() === "a\nb" && view().state.facet(EditorView.editable));
+  expect(core.note.body).toBe("a\nb");
+});
+
+test("言語を変えると、エディタの読み上げ用の名前を付け直す", async () => {
+  await start("a");
+  expect(q(".note-ed .cm-content")?.getAttribute("aria-label")).toBe("ノート");
+  prefs.lang = "en";
+  flushSync();
+  expect(q(".note-ed .cm-content")?.getAttribute("aria-label")).toBe("Note");
 });

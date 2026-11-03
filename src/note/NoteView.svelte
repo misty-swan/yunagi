@@ -11,6 +11,7 @@
   // - 設定のノートの書体が等幅なら、同梱の等幅の書体を読み込み終えてから当てる（src/lib/fonts.svelte.ts）。
   //   起動時は、読み込み終えるまで（上限 FONT_WAIT_MS）ノートの文字を出さない。
   // - 保存・取り込み・入力中の状態・日の移動は、振り返りと共通（src/lib/doc_editor.ts）。
+  import { isolateHistory } from "@codemirror/commands";
   import { RangeSetBuilder, StateField, type EditorState, type Transaction } from "@codemirror/state";
   import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
   import { onMount, tick, untrack } from "svelte";
@@ -20,7 +21,7 @@
   import { FONT_WAIT_MS, monoFont, type FontLoader } from "../lib/fonts.svelte";
   import { t } from "../lib/i18n";
   import { noteActionOf } from "../lib/keys";
-  import { continueList, insertTimeHeading, timeHeadingOf, type Edit } from "../lib/note";
+  import { continueList, insertTimeHeading, timeHeadingOf, type Edit, type TimeHeading } from "../lib/note";
   import { prefs, type NoteFont } from "../lib/prefs.svelte";
   import type { EditorPresence } from "../lib/ui_report.svelte";
 
@@ -61,14 +62,9 @@
 
   // ---- 時刻付き見出しと Outline ----
 
-  interface Heading {
+  interface Heading extends TimeHeading {
     /** 行の番号（1 始まり）。 */
     line: number;
-    time: string;
-    title: string;
-    /** 時刻の始まりと終わり（行の先頭から）。 */
-    timeFrom: number;
-    timeTo: number;
   }
 
   /** 本文の時刻付き見出し（上から順）。 */
@@ -80,7 +76,7 @@
       // 見出しは「## 」で始まる行だけなので、先に安く絞る
       if (!line.text.startsWith("## ")) continue;
       const h = timeHeadingOf(line.text);
-      if (h !== null) out.push({ line: n, time: h.time, title: h.title, timeFrom: h.timeFrom, timeTo: h.timeTo });
+      if (h !== null) out.push({ ...h, line: n });
     }
     return out;
   }
@@ -109,10 +105,7 @@
 
   const sameHeads = (a: readonly Heading[], b: readonly Heading[]) =>
     a.length === b.length &&
-    a.every((h, i) => {
-      const o = b[i];
-      return h.line === o.line && h.time === o.time && h.title === o.title && h.timeFrom === o.timeFrom && h.timeTo === o.timeTo;
-    });
+    a.every((h, i) => (Object.keys(h) as (keyof Heading)[]).every((k) => h[k] === b[i][k]));
 
   /**
    * 書き換え `tr` で見出しが変わりうるか。行の数が変わらず、書き換えた行が前も後も「## 」で始まらなければ、
@@ -174,12 +167,14 @@
 
   // ---- 編集 ----
 
-  function apply(v: EditorView, e: Edit) {
+  /** 書き換えを入れる。`isolate` なら、前後の入力と分けて1回の取り消しにする。 */
+  function apply(v: EditorView, e: Edit, userEvent: string, isolate = false) {
     v.dispatch({
       changes: { from: e.from, to: e.to, insert: e.insert },
       selection: { anchor: e.caret },
       scrollIntoView: true,
-      userEvent: "input",
+      userEvent,
+      annotations: isolate ? isolateHistory.of("full") : [],
     });
   }
 
@@ -187,7 +182,8 @@
   function timeHeading(v: EditorView): boolean {
     if (!v.state.facet(EditorView.editable)) return false;
     const line = v.state.doc.lineAt(v.state.selection.main.head);
-    apply(v, insertTimeHeading({ from: line.from, text: line.text }, now()));
+    // 見出しだけを1回の取り消しにする（続けて打つ件名とまとめない。操作仕様書 2章）
+    apply(v, insertTimeHeading({ from: line.from, text: line.text }, now()), "input.timeHeading", true);
     return true;
   }
 
@@ -197,7 +193,7 @@
     const line = v.state.doc.lineAt(sel.main.head);
     const e = continueList({ from: line.from, text: line.text }, sel.main.head - line.from);
     if (e === null) return false;
-    apply(v, e);
+    apply(v, e, "input");
     return true;
   }
 
@@ -214,8 +210,14 @@
     extensions: () => ({
       extensions: [outlineField],
       keys: [{ key: "Enter", run: enter }],
-      label: t().noteLabel,
     }),
+    label: () => t().noteLabel,
+  });
+
+  // 言語を変えたら、読み上げ用の名前を付け直す
+  $effect(() => {
+    void t();
+    untrack(() => editor.relabel());
   });
 
   /** Outline の見出しへ移る（カーソルをその行の終わりに置き、エディタに戻る）。 */
@@ -227,10 +229,19 @@
     v.focus();
   }
 
+  /** ほかの入力欄（上部のバーの検索欄・パレット・設定など）にフォーカスがあるか。 */
+  function typingElsewhere(): boolean {
+    const a = document.activeElement;
+    if (!(a instanceof HTMLElement) || view?.dom.contains(a)) return false;
+    return a.isContentEditable || a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement;
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (!visible || e.defaultPrevented || view === null) return;
-    if (noteActionOf(e, mac) !== "timeHeading") return;
+    if (noteActionOf(e, mac) !== "timeHeading" || typingElsewhere()) return;
     e.preventDefault();
+    // 押し続けたときの繰り返しでは、見出しを重ねて入れない
+    if (e.repeat) return;
     if (!view.hasFocus) view.focus();
     timeHeading(view);
   }

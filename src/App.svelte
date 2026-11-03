@@ -74,6 +74,15 @@
       else if (boardFocus instanceof HTMLElement && boardFocus.isConnected) boardFocus.focus();
     });
   });
+  // 整理モードに戻るときは、隠す前にノートからフォーカスを外す（戻す先が無くても、隠れたエディタに
+  // 打ち込まないため。隠した後では外せないことがある）
+  $effect.pre(() => {
+    if (shell.mode !== "board") return;
+    untrack(() => {
+      const a = document.activeElement;
+      if (a instanceof HTMLElement && noteView?.dom.contains(a)) a.blur();
+    });
+  });
 
   // 検索パレット・設定・変更履歴・ふりかえりは、それぞれの画面の課題で開くようにする
   function onCommand(_c: ShellCommand) {}

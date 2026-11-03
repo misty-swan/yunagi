@@ -16,7 +16,13 @@ export interface TimeHeading {
   timeTo: number;
 }
 
-const TIME_HEADING = /^## (\d{1,2}):(\d{2})(?=$|\s)/u;
+/**
+ * 空白：コアの判定（Rust の `char::is_whitespace`。Unicode の White_Space）と同じ文字。JavaScript の `\s` は
+ * U+FEFF を含み U+0085 を含まないので使わない。
+ */
+const WS = "\\t-\\r \\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000";
+const TIME_HEADING = new RegExp(`^## (\\d{1,2}):(\\d{2})(?=$|[${WS}])`, "u");
+const EDGE_WS = new RegExp(`^[${WS}]+|[${WS}]+$`, "gu");
 
 /** 1行が時刻付き見出しなら、その中身。そうでなければ `null`。 */
 export function timeHeadingOf(line: string): TimeHeading | null {
@@ -24,7 +30,7 @@ export function timeHeadingOf(line: string): TimeHeading | null {
   if (m === null) return null;
   if (Number(m[1]) > 23 || Number(m[2]) > 59) return null;
   const timeTo = m[0].length;
-  return { time: line.slice(3, timeTo), title: line.slice(timeTo).trim(), timeFrom: 3, timeTo };
+  return { time: line.slice(3, timeTo), title: line.slice(timeTo).replace(EDGE_WS, ""), timeFrom: 3, timeTo };
 }
 
 /** 時刻 `now` の見出しの行の始め（`## HH:MM `。続けて件名を書けるよう、空白で終える）。 */

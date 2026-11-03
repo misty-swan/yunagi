@@ -86,8 +86,14 @@
     extensions: () => ({
       extensions: [headingPlugin],
       keys: [{ key: "Mod-Shift-r", run: insertTemplate, preventDefault: true }],
-      label: t().reflectionLabel,
     }),
+    label: () => t().reflectionLabel,
+  });
+
+  // 言語を変えたら、読み上げ用の名前を付け直す
+  $effect(() => {
+    void t();
+    untrack(() => editor.relabel());
   });
 
   onMount(() => {

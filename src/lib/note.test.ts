@@ -6,6 +6,9 @@ test("時刻付き見出しの判定はコアと同じ形（## の後に H:MM �
   expect(timeHeadingOf("## 9:30")).toEqual({ time: "9:30", title: "", timeFrom: 3, timeTo: 7 });
   expect(timeHeadingOf("## 23:59　振り返り")?.title).toBe("振り返り");
   expect(timeHeadingOf("## 10:00 ")?.title).toBe("");
+  // 空白はコア（Rust の char::is_whitespace）と同じ：U+0085 は空白、U+FEFF は空白でない
+  expect(timeHeadingOf("## 10:00\u0085件名\u0085")?.title).toBe("件名");
+  expect(timeHeadingOf("## 10:00\uFEFF件名")).toBeNull();
   for (const no of ["## 良かったこと", "### 10:00", "##10:00", "## 24:00", "## 10:60", "## 10:0", "## 100:00", "## 10:00定例", " ## 10:00"]) {
     expect(timeHeadingOf(no)).toBeNull();
   }
