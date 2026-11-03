@@ -651,18 +651,15 @@ impl DataDirError {
 
 impl fmt::Display for DataDirError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 原因のエラーの文は含めない（source() で返す。README「エラーの表示」）
         match self {
             Self::NoDefaultDir { var } => write!(
                 f,
                 "could not determine the default directory: environment variable {var} is not set to an absolute path"
             ),
-            Self::Io {
-                action,
-                path,
-                source,
-            } => write!(f, "could not {action} {}: {source}", path.display()),
-            Self::InvalidConfig { path, source } => {
-                write!(f, "invalid config file {}: {source}", path.display())
+            Self::Io { action, path, .. } => write!(f, "could not {action} {}", path.display()),
+            Self::InvalidConfig { path, .. } => {
+                write!(f, "invalid config file {}", path.display())
             }
             Self::NotAbsolute(path) => {
                 write!(
@@ -699,7 +696,7 @@ impl fmt::Display for DataDirError {
                 "the new data directory already has backups: {}",
                 path.display()
             ),
-            Self::Sqlite(e) => write!(f, "database error while copying: {e}"),
+            Self::Sqlite(_) => write!(f, "database error while copying"),
             Self::CopyCorrupted { result } => {
                 write!(
                     f,

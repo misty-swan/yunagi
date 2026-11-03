@@ -5,6 +5,7 @@
 //! このクレートを使う。
 
 pub mod domain;
+pub mod error;
 pub mod storage;
 
 /// コアの版。GUI と `yunagi` が同じコアを使っていることの確認にも使う。
