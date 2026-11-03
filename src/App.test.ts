@@ -316,3 +316,61 @@ test("読んでいる途中に続けて押しても、1日ずつ進む", async (
   press({ key: "]", code: "BracketRight", ctrlKey: true });
   await until(() => $("main.content")?.dataset.date === "2026-11-05");
 });
+
+test("項目の「← NOTE」で、送り元の日のノートモードへ移り、送り元の行にカーソルを置く", async () => {
+  const id = "01JC0000000000000000000000";
+  const source = { date: "2026-11-02", line: 2, itemId: id };
+  mockCore();
+  // 今日のボードの TODO は、11.02 のノートの 2行目から送ったもの
+  mockIPC(
+    (cmd, args) => {
+      const a = args as { date: string; doc?: string };
+      switch (cmd) {
+        case "startup_status":
+          return { state: "ready" };
+        case "today":
+          return TODAY;
+        case "get_board": {
+          const b = emptyBoard(a.date);
+          if (a.date !== TODAY) return b;
+          const item = {
+            id,
+            date: TODAY,
+            kind: "todo",
+            text: "送った",
+            status: "open",
+            closeReason: null,
+            sortKey: "a0",
+            carryCount: 1,
+            carriedFromId: null,
+            splitFromId: null,
+            resolutionNote: null,
+            origin: "note",
+            agentClientId: null,
+            externalRefId: null,
+            completedAt: null,
+            createdAt: 0,
+            updatedAt: 0,
+            deletedAt: null,
+          };
+          return { ...b, todos: [{ item, carriedTo: null, agentName: null, unseen: false, noteSource: source }] };
+        }
+        case "get_text_doc":
+          return a.doc === "note" && a.date === "2026-11-02" ? { body: "前\n- 送った", rev: 1 } : { body: "", rev: 0 };
+        case "note_marks":
+          return [];
+        case "get_overview":
+          return { counts: counts({}), recent: [{ date: TODAY, counts: counts({}) }], unseenChanges: 0 };
+      }
+      return null;
+    },
+    { shouldMockEvents: true },
+  );
+  app = mount(App, { target: document.body });
+  await until(() => $(".r-todo .from-note") !== null);
+  $(".r-todo .from-note")!.click();
+  await until(() => $("main.content")?.dataset.mode === "note" && $("main.content")?.dataset.date === "2026-11-02");
+  await until(() => document.activeElement?.closest(".note-ed") !== null);
+  const line = document.querySelectorAll(".note-ed .cm-line")[1];
+  expect(line?.textContent).toBe("- 送った");
+});

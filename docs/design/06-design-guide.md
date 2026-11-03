@@ -159,7 +159,8 @@ Inter は v4.1 の `web/InterVariable.woff2` を入れる（公式の配布元 G
 | 持ち越し回数 | 行末に、線で描いた ↻ と数字を `--text-muted` で。設定「操作」の持ち越し見直しの回数（既定3）以上は `--warn`（見直しの選択肢が出る回数とそろえる） |
 | エージェント由来 | 本文の後ろに「◆ Claude Code」のようにエージェント名を `--agent` で |
 | エージェントによる未確認の変更 | 項目の行頭の余白に小さな菱形。上部のバーに「◆ 件数」 |
-| ノートの送信済み行 | 行末の外側に「→ TODO」「→ BLOCKER」を `--sea` の小さな英字で |
+| ノートの送信済み行 | 行末の外側に「→ TODO」「→ BLOCKER」を `--sea` の小さな英字で（10.5px・太さ 600・字間 0.14em。本文の書体の Inter） |
+| ノートから送った項目 | 行末に「← NOTE」を、送信済み行の印と同じ `--sea` の小さな英字で（押すと送り元の行へ。画面設計書 3章） |
 | 凪（残りが 0 件） | 凪メーターの波が平らな線になり、「NAGI」と完了数だけを出す。サイドバーの Recent では、その日の波が平らな夕陽色の線になる |
 | 保存中 | 上部のバーの右端に小さな点。保存済みでは消える |
 | 保存失敗 | 上部のバーの右端に `--warn` で「保存できていません」を常時表示（成功するまで消さない） |
@@ -172,7 +173,7 @@ Inter は v4.1 の `web/InterVariable.woff2` を入れる（公式の配布元 G
 - ラベル（領域見出し、ナビ、凪メーター、キーの案内、件数、日付の表示、パレットのグループ名と種類）は、日本語 UI でも英語で書く。
 - 文（状態の説明、確認、操作ボタン、空の状態、エラー、コマンド名）は各言語で書く。例：「今日やることを書く（Enter）」「保存できていません」「選んだものを持ち越す」。
 - TODO が空の日の文言：今日は「今日やることを書く（Enter）」、今日以外は「やることを書く（Enter）」。英語は Write what to do today (Enter) ／ Write what to do (Enter)（画面設計書 3章「空の状態」）。
-- 英字ラベルの語：Today / Archive / Inbox / Agents / Settings / Recent / Board / Note / TODO / Blockers / Reflection / left / open / Done / Carried / NAGI / Day end / Outline / Sent / This week / Daily notes / GOOD / STUCK / Open / Saved locally / New version
+- 英字ラベルの語：Today / Archive / Inbox / Agents / Settings / Recent / Board / Note / TODO / Blockers / Reflection / left / open / Done / Carried / NAGI / Day end / Outline / Sent / This week / Daily notes / GOOD / STUCK / Open / Saved locally / New version / To TODO / To Blockers / → TODO / → BLOCKER / ← NOTE
 - 画面の主な用語は次の対応表を正本とする（英語は案。利用者ガイドの表記もこれに揃える）。「整理モード＝Board mode」「ノートモード＝Note mode」は、画面の切り替えでは短く Board / Note と表示する。
 
 | 日本語 | English |

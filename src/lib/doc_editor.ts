@@ -8,10 +8,12 @@
 //   変わるたびに `onActivity` を呼ぶ（画面全体の `InputTracker` が知らせ直す）。
 // - 日を移ったら、前の日の保存は片付け（保存し終えるまで再試行を続ける）、その日の本文を読み直す。
 //   読み終えるまでは入力を受け付けない（読む前の入力を失わないため）。
+// - 行の区切りは LF だけで、CR は行の文字として残し、制御文字の印で見せる。ほかのアプリから貼り付けた
+//   文の改行は LF にそろえる（操作仕様書 2章「ノートの編集」）。
 
 import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
 import { Annotation, Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
-import { EditorView, keymap, type KeyBinding, type ViewUpdate } from "@codemirror/view";
+import { EditorView, highlightSpecialChars, keymap, type KeyBinding, type ViewUpdate } from "@codemirror/view";
 import { DocSaver, type SaveStatus } from "./autosave.svelte";
 import type { LogicalDate, Snapshot, TextDoc } from "./bindings";
 import { core } from "./core";
@@ -29,6 +31,8 @@ export interface TextDocEditorOptions {
   extensions: () => { extensions: Extension[]; keys: readonly KeyBinding[] };
   /** 読み上げ用の名前（言語を変えたら `relabel` で付け直す）。 */
   label: () => string;
+  /** その日の本文を読み終え、入力を受け付け始めたとき（`open` の終わり）。 */
+  onLoaded?: (d: LogicalDate) => void;
 }
 
 /** 本文 `cur` を `next` にする、変わった所だけの置き換え（前後の同じ部分を除く）。 */
@@ -69,7 +73,13 @@ export class TextDocEditor {
   #loading = 0;
   /** `refresh` で知らされた、日ごとの最新の版（読んでいる間に知らされた版を、読み終えてから確かめる）。 */
   #latestRev: { date: LogicalDate; rev: number } | null = null;
+  /** `refresh` で読み直している途中か（続けて知らされても、読み直しは一度に1つ）。 */
+  #pulling = false;
+  /** `refresh` で読み直した最新の版（保存の待ちのため、まだ取り込んでいなくても読み直さない）。 */
+  #pulled: { saver: DocSaver; rev: number } | null = null;
   readonly #label = new Compartment();
+  /** 最後にこのエディタから写した（ドラッグで動かした）文。 */
+  #copied: string | null = null;
 
   constructor(o: TextDocEditorOptions) {
     this.#o = o;
@@ -122,8 +132,13 @@ export class TextDocEditor {
         // 行の区切りは LF だけ（コアと同じ数え方。CR は行の文字のまま残し、保存で書き換えない。
         // データモデル設計書 3章 note「行」）
         EditorState.lineSeparator.of("\n"),
-        // 貼り付けた文字の改行（CRLF・CR）は LF にそろえる（ほかのアプリから写した文に CR を持ち込まない）
-        EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
+        // 貼り付けた・落とした文字の改行（CRLF・CR）は LF にそろえる（ほかのアプリから写した文に CR を
+        // 持ち込まない）。ただし、直前にこのエディタから写した・動かした文と同じなら、そのまま入れる
+        // （本文に元からある CR を、エディタの中の写しや移動で LF に変えて行を分けないため）
+        EditorView.clipboardOutputFilter.of((text) => (this.#copied = text)),
+        EditorView.clipboardInputFilter.of((text) => (text === this.#copied ? text : text.replace(/\r\n?/g, "\n"))),
+        // CR などの見えない制御文字は、印にして見せる（消したいときに見つけられるように）
+        highlightSpecialChars(),
         EditorView.editable.of(editable),
         history(),
         keymap.of([...own.keys, ...historyKeymap, ...standardKeymap]),
@@ -223,6 +238,7 @@ export class TextDocEditor {
       replace: (t) => this.#replace(t),
     });
     this.#o.onActivity();
+    this.#o.onLoaded?.(d);
     // 読んでいる間に、もっと新しい版が知らされていたら読み直す
     const latest = this.#latestRev;
     if (latest !== null && latest.date === d) this.refresh(d, latest.rev);
@@ -232,16 +248,43 @@ export class TextDocEditor {
    * コアの版が `rev` に進んだ（ボードを読み込み直したとき）：最新を読み直して取り込む。日 `d` を
    * 開いていないときと、最後に保存した（取り込んだ）版より新しくないときは何もしない（項目だけが
    * 変わったときに、本文を読み直さないため）。まだ読んでいる途中なら、読み終えてから確かめる。
+   * 読み直しに失敗したら、版が変わらなくても間を空けて読み直す（次に版が進むまで、エージェントの
+   * 変更を取り込めないままにしないため。アーキテクチャ設計書 4.1「ノート・振り返りの読み直し」）。
    */
   refresh(d: LogicalDate, rev: number) {
     this.#latestRev = { date: d, rev };
-    const s = this.#o.presence.saver;
-    if (s === null || s.date !== d || rev <= s.saved.rev) return;
-    void core
-      .getTextDoc(this.#o.doc, d)
-      .then((latest) => {
-        if (this.#o.presence.saver === s) this.#absorb(latest);
-      })
-      .catch(() => {});
+    void this.#pull();
+  }
+
+  /**
+   * 知らされた最新の版（`#latestRev`）まで読み直す。読み直している途中なら、それが読み終えてから
+   * 確かめ直す（その間に別の日へ移って知らされた版も、知らされた日で読み直す）。
+   */
+  async #pull() {
+    if (this.#pulling) return;
+    this.#pulling = true;
+    try {
+      for (;;) {
+        const s = this.#o.presence.saver;
+        const latest = this.#latestRev;
+        if (this.view === null || s === null || latest === null || s.date !== latest.date) return;
+        const d = latest.date;
+        const pulled = this.#pulled?.saver === s ? this.#pulled.rev : 0;
+        if (latest.rev <= Math.max(s.saved.rev, pulled)) return;
+        try {
+          const snap = await core.getTextDoc(this.#o.doc, d);
+          if (this.#o.presence.saver !== s) continue;
+          this.#pulled = { saver: s, rev: snap.rev };
+          this.#absorb(snap);
+          // 知らされた版より古い本文が返ったら（ふつうは起きない）、間を空けて確かめ直す
+          if (snap.rev < latest.rev) await new Promise((r) => setTimeout(r, RETRY_MS));
+        } catch {
+          // 読めなければ間を空けて読み直す
+          await new Promise((r) => setTimeout(r, RETRY_MS));
+        }
+      }
+    } finally {
+      this.#pulling = false;
+    }
   }
 }

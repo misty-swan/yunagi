@@ -161,7 +161,30 @@ agentName: string | null,
 /**
  * エージェントによる未確認の変更がある（行頭の菱形）。
  */
-unseen: boolean, };
+unseen: boolean, 
+/**
+ * ノートから送った項目なら、送り元の行（持ち越し・分割の元へさかのぼる）。画面は行末の
+ * 「← NOTE」からその行へ移る（画面設計書 3章「各領域の表示」）。
+ */
+noteSource: NoteSource | null, };
+
+/**
+ * 項目の送り元の行（データモデル設計書 3章 note_send）。
+ */
+export type NoteSource = { 
+/**
+ * 送り元のノートの日。
+ */
+date: LogicalDate, 
+/**
+ * 保存済みの本文での、送り元の行（1始まり）。
+ */
+line: number, 
+/**
+ * 送った記録の送り先の項目（持ち越し・分割で作った項目では、元の項目）。画面は、エディタの
+ * 本文の送信済みの印（`note_marks`）からこの項目の行を探し、無ければ `line` を使う。
+ */
+itemId: Id, };
 
 /**
  * ノートの時刻付き見出し（`## 10:00 定例`）。
@@ -275,6 +298,55 @@ export type Snapshot = { body: string, rev: number, };
  * 画面からのノート・振り返りの保存の結果（アーキテクチャ設計書 4.1「保存の行き違いを防ぐ」）。
  */
 export type TextSave = { "result": "saved", rev: number, updated: boolean, } | { "result": "stale", body: string, rev: number, };
+
+/**
+ * 送信済みの印を付けるノートの行（`note_marks`。同じ行に2つ付くこともある）。
+ */
+export type NoteMark = { 
+/**
+ * 行の番号（1始まり。渡した本文で数える）。
+ */
+line: number, 
+/**
+ * 送り先の種類（「→ TODO」「→ BLOCKER」）。
+ */
+kind: ItemKind, 
+/**
+ * 送り先の項目。
+ */
+itemId: Id, };
+
+/**
+ * 送らなかった行の理由（データモデル設計書 3章 note_send「送らない行」）。
+ */
+export type SkipReason = "heading" | "no_text" | "in_code" | "already_sent";
+
+/**
+ * 送った1行。
+ */
+export type SentLine = { line: number, 
+/**
+ * 作った項目。
+ */
+item: Item, };
+
+/**
+ * 送らなかった1行。
+ */
+export type SkippedLine = { line: number, reason: SkipReason, };
+
+/**
+ * 行送り（`send_note_lines`）の結果。
+ */
+export type SendResult = { "result": "sent", rev: number, 
+/**
+ * 送った行（上から順）。
+ */
+sent: Array<SentLine>, 
+/**
+ * 送らなかった行（上から順）。
+ */
+skipped: Array<SkippedLine>, } | { "result": "stale", body: string, rev: number, };
 
 /**
  * 画面が知らせる、入力中の状態（アーキテクチャ設計書 4.1）。変わるたびに全体を知らせ直す。

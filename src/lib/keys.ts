@@ -98,17 +98,23 @@ export function shellActionOf(e: KeyLike, mac: boolean): ShellAction | null {
   return fallback !== undefined && !e.shiftKey ? fallback : null;
 }
 
-/** ノートモードの部品が受け持つ操作（行送りは、その課題で足す）。 */
-export type NoteAction = "timeHeading";
+/** ノートモードの部品が受け持つ操作：時刻付き見出しの挿入と、TODO・障害への行送り。 */
+export type NoteAction = "timeHeading" | "toTodo" | "toBlocker";
+
+/** ノートモードの操作のキー（Mod+Shift と文字のキー。文字のキーなので位置で判定する）。 */
+const NOTE_KEYS = new Map<string, NoteAction>([
+  ["KeyH", "timeHeading"],
+  ["KeyT", "toTodo"],
+  ["KeyB", "toBlocker"],
+]);
 
 /**
- * キーの押下が、ノートモードの操作に当たるか（Mod+Shift+H。文字のキーなので位置で判定する）。
- * 当たらなければ `null`。
+ * キーの押下が、ノートモードの操作に当たるか（Mod+Shift+H・T・B。操作仕様書 2章）。当たらなければ `null`。
  */
 export function noteActionOf(e: KeyLike, mac: boolean): NoteAction | null {
   if (e.isComposing || e.keyCode === 229) return null;
   const mod = mac ? e.metaKey : e.ctrlKey;
   const other = mac ? e.ctrlKey : e.metaKey;
   if (!mod || other || e.altKey || !e.shiftKey) return null;
-  return e.code === "KeyH" ? "timeHeading" : null;
+  return NOTE_KEYS.get(e.code) ?? null;
 }

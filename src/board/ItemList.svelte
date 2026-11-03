@@ -2,7 +2,7 @@
   // TODO・障害の領域（画面設計書 3章「各領域の表示」「空の状態」）：英字の見出しと件数（「6 left」は
   // `--accent-strong`、「3 open」は `--warn`）、項目の一覧。TODO が空なら「今日やることを書く（Enter）」
   // （今日以外は「やることを書く（Enter）」）だけを出す。障害が空なら、押すと足せる空の1行を置く。
-  import type { CarriedTo, ItemKind } from "../lib/bindings";
+  import type { CarriedTo, ItemKind, NoteSource } from "../lib/bindings";
   import type { BoardModel, FocusTarget } from "../lib/board.svelte";
   import { t } from "../lib/i18n";
   import ItemRow from "./ItemRow.svelte";
@@ -16,6 +16,7 @@
     focusReq,
     onFocus,
     onOpenCarried,
+    onOpenNoteSource,
     onActivity,
     region = $bindable(null),
   }: {
@@ -27,6 +28,7 @@
     focusReq: (FocusTarget & { n: number }) | null;
     onFocus: (target: FocusTarget | null) => void;
     onOpenCarried: (to: CarriedTo) => void;
+    onOpenNoteSource: (source: NoteSource) => void;
     onActivity: () => void;
     region?: HTMLElement | null;
   } = $props();
@@ -145,6 +147,7 @@
             onNeighbor={neighbor}
             onRemoving={removing}
             {onOpenCarried}
+            {onOpenNoteSource}
             {onActivity}
           />
         {/each}

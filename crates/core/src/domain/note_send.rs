@@ -4,6 +4,7 @@
 //! - [`send`]：画面の行送り（Mod+Shift+T・Mod+Shift+B）。1行ごとに項目と note_send を1件ずつ作る。
 //! - [`marks`]：本文の各行を note_send の指紋と照合して、送信済みの印を付ける行を求める。
 //! - [`source_line`]：項目がどのノートの行から来たかを、持ち越し・分割の元へさかのぼって求める。
+//!   [`source_refs`] は、ボードの項目の分をまとめて求める（画面のボードの「← NOTE」）。
 //! - [`request_context`]：依頼文の書き出し（A-06）で使う、送り元の行の見出しの区間の行と、
 //!   そこから送った未解消の障害。
 //!
@@ -127,19 +128,33 @@ fn line_keys(lines: &[&str]) -> Vec<LineKey> {
         .collect()
 }
 
+/// [`assign_in`] の、引くための表をその場で作るもの（テストで使う）。
+#[cfg(test)]
+fn assign(sends: &[&NoteSend], keys: &[LineKey]) -> Vec<Option<usize>> {
+    assign_in(sends, keys, &line_index(keys))
+}
+
+/// 本文のハッシュごとの、その行（0始まり）。[`assign_in`] の候補を引くのに使う。
+type LineIndex<'a> = HashMap<&'a str, Vec<usize>>;
+
+fn line_index(keys: &[LineKey]) -> LineIndex<'_> {
+    let mut by_text: LineIndex<'_> = HashMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        by_text.entry(key.text.as_str()).or_default().push(i);
+    }
+    by_text
+}
+
 /// 送った記録 `sends` のそれぞれが、各行の [`LineKey`] が `keys` の本文のどの行（1始まり）に
-/// 印を付けるか（付けなければ `None`）。
+/// 印を付けるか（付けなければ `None`）。`by_text` は `keys` から [`line_index`] で作った表（同じ本文で
+/// 何度も照合するとき（[`source_refs`]）に、作り直さないため）。
 ///
 /// 本文のハッシュが一致する行だけが候補。はじめに、記録と候補の行の組を、前後の行の一致する数の
 /// 多い順（同じなら記録の順、行の上の順）に見て、記録にも行にもまだ相手が無ければ組にする（同じ
 /// 本文の行を2つ送ったとき、2つの印が1つの行に重なって、もう1つの行が印の無いまま送り直せる
 /// ことが無いようにするため）。候補の行より記録が多くて相手の無い記録は、前後の行の一致する数の
 /// 多い行（同じなら上の行）に、ほかの記録と重ねて付ける。
-fn assign(sends: &[&NoteSend], keys: &[LineKey]) -> Vec<Option<usize>> {
-    let mut by_text: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, key) in keys.iter().enumerate() {
-        by_text.entry(key.text.as_str()).or_default().push(i);
-    }
+fn assign_in(sends: &[&NoteSend], keys: &[LineKey], by_text: &LineIndex<'_>) -> Vec<Option<usize>> {
     // 記録ごとの候補の行と、前後の行の一致する数
     let candidates: Vec<Vec<(u8, usize)>> = sends
         .iter()
@@ -191,6 +206,8 @@ pub enum SkipReason {
     Heading,
     /// リストの印などを除くと本文が無い（空の行、`- ` だけの行、区切り線、コードの囲みの行など）。
     NoText,
+    /// コードの囲み（`` ``` ``・`~~~`）の中の行（コードやログの行を項目にしない）。
+    InCode,
     /// すでに送信済みの印が付いている（同じ行から2つ目の項目を作らない）。印を付けている記録の
     /// 送り先の項目。
     AlreadySent { item_id: Ulid },
@@ -219,10 +236,10 @@ fn strip_marker<'a>(rest: &'a str, marker: &str) -> Option<&'a str> {
         .then_some(after)
 }
 
-/// 区切り線（`-`・`*`・`_` のどれか1種を3つ以上と空白だけの行）か、コードの囲み（`` ``` `` か
-/// `~~~` で始まる行）か。本文の無い、書式だけの行。行頭の空白は除いてから見る。
+/// 区切り線（`-`・`*`・`_` のどれか1種を3つ以上と空白だけの行）か、コードの囲みの行（[`fence_of`]）か。
+/// 本文の無い、書式だけの行。行頭の空白は除いてから見る。
 fn is_markup(rest: &str) -> bool {
-    if rest.starts_with("```") || rest.starts_with("~~~") {
+    if fence_of(rest).is_some() {
         return true;
     }
     ['-', '*', '_'].iter().any(|&mark| {
@@ -243,18 +260,12 @@ fn item_text(line: &str) -> Result<String, SkipReason> {
     if is_markup(rest) {
         return Err(SkipReason::NoText);
     }
-    let ordered = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-    if let Some(after) = ["-", "*", "+"]
-        .iter()
-        .find_map(|m| strip_marker(rest, m))
-        .or_else(|| {
-            (1..=9).contains(&ordered).then_some(())?;
-            [".", ")"]
-                .iter()
-                .find_map(|m| strip_marker(&rest[ordered..], m))
-        })
-    {
+    if let Some(after) = list_body(rest) {
         rest = after.trim_start();
+        // リストの項目の中のコードの囲み（`- ```` など）も、書式だけの行
+        if fence_of(rest).is_some() {
+            return Err(SkipReason::NoText);
+        }
         if let Some(after) = ["[ ]", "[x]", "[X]"]
             .iter()
             .find_map(|m| strip_marker(rest, m))
@@ -263,6 +274,71 @@ fn item_text(line: &str) -> Result<String, SkipReason> {
         }
     }
     item::one_line_text(rest).map_err(|_| SkipReason::NoText)
+}
+
+/// 行頭の空白を除いた `rest` が、リストの印（`-`・`*`・`+`・`1.`・`1)`。後に空白か行末が続くもの）で
+/// 始まれば、その後ろ。
+fn list_body(rest: &str) -> Option<&str> {
+    let ordered = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    ["-", "*", "+"]
+        .iter()
+        .find_map(|m| strip_marker(rest, m))
+        .or_else(|| {
+            (1..=9).contains(&ordered).then_some(())?;
+            [".", ")"]
+                .iter()
+                .find_map(|m| strip_marker(&rest[ordered..], m))
+        })
+}
+
+/// 行が、コードの囲みを開く・閉じる行なら、その印の文字・数と、印の後ろ（[`fence_of`]）。リストの
+/// 項目の中の囲み（`- ```` など。リストの印の後ろの囲み）も含める。
+fn fence_line(line: &str) -> Option<(char, usize, &str)> {
+    let rest = line.trim_start();
+    let rest = if fence_of(rest).is_some() {
+        rest
+    } else {
+        list_body(rest)?.trim_start()
+    };
+    let (mark, len) = fence_of(rest)?;
+    Some((mark, len, &rest[len..]))
+}
+
+/// コードの囲みを開く・閉じる行の印（`` ` `` か `~` を3つ以上。行頭の空白は除いてから見る）。
+/// `` ` `` の印の後ろに `` ` `` がある行（`` ```ls``` を実行 `` のような、行の中のコード）は囲みでは
+/// ない（CommonMark と同じ）。囲みの行でなければ `None`。
+fn fence_of(line: &str) -> Option<(char, usize)> {
+    let rest = line.trim_start();
+    let mark = rest.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let len = rest.len() - rest.trim_start_matches(mark).len();
+    if mark == '`' && rest[len..].contains('`') {
+        return None;
+    }
+    (len >= 3).then_some((mark, len))
+}
+
+/// 各行が、コードの囲みの中（開く行と閉じる行の間）にあるか（1行目から順）。囲みは、開いた印と
+/// 同じ文字を同じ数以上並べ、後に空白だけが続く行で閉じる。閉じていない囲みは本文の最後まで続く
+/// （CommonMark と同じ。行頭の空白は数を問わない）。囲みを開く・閉じる行は中に含めない。
+fn code_lines(lines: &[&str]) -> Vec<bool> {
+    let mut open: Option<(char, usize)> = None;
+    lines
+        .iter()
+        .map(|line| match (open, fence_line(line)) {
+            (None, Some((m, l, _))) => {
+                open = Some((m, l));
+                false
+            }
+            (Some((mark, len)), Some((m, l, after)))
+                if m == mark && l >= len && after.chars().all(char::is_whitespace) =>
+            {
+                open = None;
+                false
+            }
+            (Some(_), _) => true,
+            (None, None) => false,
+        })
+        .collect()
 }
 
 // ---- 行送り ----
@@ -398,7 +474,8 @@ pub struct SendLines<'a> {
 ///   保存と項目の作成を1つのトランザクションで行う。
 /// - 項目はノートと同じ日の末尾に、上の行から順に作る（`origin = note`）。本文は、行から行頭の空白・
 ///   リストの印・チェック欄を除いたもの。各行に note_send を1件作り、行の指紋（モジュールの説明）を入れる。
-/// - 見出しの行、区切り線・コードの囲みの行、本文が残らない行、すでに送信済みの印が付いた行は送らずに、`skipped` に理由を返す。
+/// - 見出しの行、区切り線・コードの囲みの行、コードの囲みの中の行、本文が残らない行、すでに送信済みの
+///   印が付いた行は送らずに、`skipped` に理由を返す。
 ///   1行も送らなくても、本文は保存する。
 /// - 行番号の誤り（0、範囲が空、本文に無い行）は [`SendError::InvalidArgument`] で、何も書かない。
 pub fn send(
@@ -442,11 +519,13 @@ pub fn send(
             .into_iter()
             .map(|m| (m.line, m.item_id))
             .collect();
+        let in_code = code_lines(&texts);
         let mut to_send = Vec::new();
         let mut skipped = Vec::new();
         for line in first..=last {
             let text = match already.get(&line) {
                 Some(&item_id) => Err(SkipReason::AlreadySent { item_id }),
+                None if in_code[line - 1] => Err(SkipReason::InCode),
                 None => item_text(texts[line - 1]),
             };
             match text {
@@ -515,35 +594,64 @@ fn marks_for(
     keys: &[LineKey],
     extra: Option<(&NoteSend, &Item)>,
 ) -> Result<Vec<Mark>, StorageError> {
-    let mut live: HashMap<Ulid, Item> = item_table::list_by_date(conn, date)?
-        .into_iter()
-        .map(|i| (i.id, i))
-        .collect();
-    let mut sends: Vec<NoteSend> = note_send_table::list_by_date(conn, date)?
-        .into_iter()
-        .filter(|s| live.contains_key(&s.item_id))
-        .collect();
-    if let Some((send, item)) = extra
-        && !sends.iter().any(|s| s.id == send.id)
-    {
-        live.insert(item.id, item.clone());
-        sends.push(send.clone());
+    Ok(DaySends::load(conn, date)?.marks(keys, extra))
+}
+
+/// その日の、送り先の項目が削除されていない記録と、その項目（印を求めるもと）。
+struct DaySends {
+    live: HashMap<Ulid, Item>,
+    sends: Vec<NoteSend>,
+}
+
+impl DaySends {
+    fn load(conn: &Connection, date: LogicalDate) -> Result<Self, StorageError> {
+        let live: HashMap<Ulid, Item> = item_table::list_by_date(conn, date)?
+            .into_iter()
+            .map(|i| (i.id, i))
+            .collect();
+        let sends = note_send_table::list_by_date(conn, date)?
+            .into_iter()
+            .filter(|s| live.contains_key(&s.item_id))
+            .collect();
+        Ok(Self { live, sends })
     }
-    let refs: Vec<&NoteSend> = sends.iter().collect();
-    let mut marks: Vec<Mark> = assign(&refs, keys)
-        .into_iter()
-        .zip(&sends)
-        .filter_map(|(line, send)| {
-            Some(Mark {
-                line: line?,
-                kind: live[&send.item_id].kind,
-                item_id: send.item_id,
-                send_id: send.id,
+
+    /// 本文の各行の `keys` で求めた印（行の順）。`extra` は [`marks_for`] と同じ。
+    fn marks(&self, keys: &[LineKey], extra: Option<(&NoteSend, &Item)>) -> Vec<Mark> {
+        self.marks_in(keys, &line_index(keys), extra)
+    }
+
+    /// [`DaySends::marks`] の、引くための表を受け取るもの（[`assign_in`]）。
+    fn marks_in(
+        &self,
+        keys: &[LineKey],
+        by_text: &LineIndex<'_>,
+        extra: Option<(&NoteSend, &Item)>,
+    ) -> Vec<Mark> {
+        let mut sends: Vec<&NoteSend> = self.sends.iter().collect();
+        let extra = extra.filter(|(send, _)| !self.sends.iter().any(|s| s.id == send.id));
+        if let Some((send, _)) = extra {
+            sends.push(send);
+        }
+        let kind_of = |send: &NoteSend| match extra {
+            Some((s, item)) if s.id == send.id => item.kind,
+            _ => self.live[&send.item_id].kind,
+        };
+        let mut marks: Vec<Mark> = assign_in(&sends, keys, by_text)
+            .into_iter()
+            .zip(&sends)
+            .filter_map(|(line, send)| {
+                Some(Mark {
+                    line: line?,
+                    kind: kind_of(send),
+                    item_id: send.item_id,
+                    send_id: send.id,
+                })
             })
-        })
-        .collect();
-    marks.sort_by_key(|m| (m.line, m.send_id));
-    Ok(marks)
+            .collect();
+        marks.sort_by_key(|m| (m.line, m.send_id));
+        marks
+    }
 }
 
 // ---- 項目から送り元の行へ ----
@@ -578,31 +686,146 @@ fn source_with_marks(
     conn: &Connection,
     item_id: Ulid,
 ) -> Result<Option<(SourceLine, Vec<Mark>)>, StorageError> {
+    let Some((send, item)) = first_send(conn, item_id)? else {
+        return Ok(None);
+    };
+    let body = text_doc::get(conn, TextDoc::Note, send.date)?.body;
+    let lines: Vec<&str> = note_body::lines(&body).collect();
+    let marked = marks_for(conn, send.date, &line_keys(&lines), Some((&send, &item)))?;
+    let Some(line) = marked.iter().find(|m| m.send_id == send.id).map(|m| m.line) else {
+        return Ok(None);
+    };
+    Ok(Some((SourceLine { line, send, body }, marked)))
+}
+
+/// 項目 `item_id` から `carried_from_id`・`split_from_id` で元の項目へさかのぼり、最初に見つかった
+/// 送った記録と、その送り先の項目（削除されていてもよい）。無ければ `None`。
+fn first_send(conn: &Connection, item_id: Ulid) -> Result<Option<(NoteSend, Item)>, StorageError> {
+    match item_table::get(conn, item_id)? {
+        Some(item) => first_send_from(conn, item),
+        None => Ok(None),
+    }
+}
+
+/// [`first_send`] の、読んだ項目 `item` から始めるもの。
+fn first_send_from(
+    conn: &Connection,
+    mut item: Item,
+) -> Result<Option<(NoteSend, Item)>, StorageError> {
     let mut visited = HashSet::new();
-    let mut current = item_id;
     loop {
         // 壊れたデータで元をたどる輪ができても止まるように
-        if !visited.insert(current) {
+        if !visited.insert(item.id) {
             return Ok(None);
         }
-        let Some(item) = item_table::get(conn, current)? else {
+        // 送った記録があるのは、行送りで作った（origin = note の）項目だけ
+        if item.origin == item::Origin::Note
+            && let Some(send) = note_send_table::list_by_item(conn, item.id)?
+                .into_iter()
+                .next()
+        {
+            return Ok(Some((send, item)));
+        }
+        let Some(from) = item.carried_from_id.or(item.split_from_id) else {
             return Ok(None);
         };
-        let sends = note_send_table::list_by_item(conn, current)?;
-        if let Some(send) = sends.into_iter().next() {
+        let Some(next) = item_table::get(conn, from)? else {
+            return Ok(None);
+        };
+        item = next;
+    }
+}
+
+/// 項目の送り元の行の場所（画面のボードから送り元の行へ移るため。画面設計書 3章「各領域の表示」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceRef {
+    /// 送り元のノートの日。
+    pub date: LogicalDate,
+    /// いまの本文で、送り元の行（1始まり）。
+    pub line: usize,
+    /// 見つかった記録の送り先の項目（持ち越し・分割で作った項目では、さかのぼった先の元の項目）。
+    /// 画面は、エディタの本文（まだ保存していない入力を含む）の印からこの項目の行を探す。
+    pub item_id: Ulid,
+}
+
+/// 項目 `items` のそれぞれの送り元の行（[`source_line`] と同じ求め方。ノートから来ていない
+/// 項目は入れない）。ボードを読むたびに求めるので、行送りで作った項目でも、持ち越し・分割で作った
+/// 項目でもないものは読まずに飛ばし、同じ日のノートと記録は1度だけ読んで照合する。
+pub fn source_refs<'a>(
+    conn: &Connection,
+    items: impl IntoIterator<Item = &'a Item>,
+) -> Result<HashMap<Ulid, SourceRef>, StorageError> {
+    // はじめに、項目ごとの見つかった記録と、記録の日ごとの本文の行と記録を読む
+    let mut found = Vec::new();
+    let mut notes: HashMap<LogicalDate, (Vec<LineKey>, DaySends)> = HashMap::new();
+    for item in items {
+        if item.origin != item::Origin::Note
+            && item.carried_from_id.is_none()
+            && item.split_from_id.is_none()
+        {
+            continue;
+        }
+        let Some((send, sent_to)) = first_send_from(conn, item.clone())? else {
+            continue;
+        };
+        if let std::collections::hash_map::Entry::Vacant(e) = notes.entry(send.date) {
             let body = text_doc::get(conn, TextDoc::Note, send.date)?.body;
             let lines: Vec<&str> = note_body::lines(&body).collect();
-            let marked = marks_for(conn, send.date, &line_keys(&lines), Some((&send, &item)))?;
-            let Some(line) = marked.iter().find(|m| m.send_id == send.id).map(|m| m.line) else {
-                return Ok(None);
-            };
-            return Ok(Some((SourceLine { line, send, body }, marked)));
+            e.insert((line_keys(&lines), DaySends::load(conn, send.date)?));
         }
-        match item.carried_from_id.or(item.split_from_id) {
-            Some(from) => current = from,
-            None => return Ok(None),
+        found.push((item.id, send, sent_to));
+    }
+    // 日ごとに、引くための表と、送り先の項目が削除されていない記録の印を1回だけ作る
+    struct Indexed<'a> {
+        keys: &'a [LineKey],
+        day: &'a DaySends,
+        index: LineIndex<'a>,
+        marks: Vec<Mark>,
+    }
+    let indexed: HashMap<LogicalDate, Indexed<'_>> = notes
+        .iter()
+        .map(|(&date, (keys, day))| {
+            let index = line_index(keys);
+            let marks = day.marks_in(keys, &index, None);
+            let entry = Indexed {
+                keys,
+                day,
+                index,
+                marks,
+            };
+            (date, entry)
+        })
+        .collect();
+    let mut out = HashMap::new();
+    for (id, send, sent_to) in found {
+        let Indexed {
+            keys,
+            day,
+            index,
+            marks,
+        } = &indexed[&send.date];
+        let line = match marks.iter().find(|m| m.send_id == send.id) {
+            Some(m) => Some(m.line),
+            // 送り先の項目が削除された記録は、ほかの記録の後に照合する（source_with_marks と同じ）
+            None if sent_to.deleted_at.is_some() => day
+                .marks_in(keys, index, Some((&send, &sent_to)))
+                .iter()
+                .find(|m| m.send_id == send.id)
+                .map(|m| m.line),
+            None => None,
+        };
+        if let Some(line) = line {
+            out.insert(
+                id,
+                SourceRef {
+                    date: send.date,
+                    line,
+                    item_id: send.item_id,
+                },
+            );
         }
     }
+    Ok(out)
 }
 
 /// 依頼文の書き出し（A-06。MCP・CLI 仕様書 5章）で使う、ノートの文脈。
@@ -1475,5 +1698,181 @@ mod tests {
         let ids: Vec<Ulid> = context.blockers.iter().map(|b| b.id).collect();
         assert_eq!(ids, [waiting.id]);
         assert_eq!(context.blockers[0].date, date("2026-11-03"));
+    }
+
+    // ---- コードの囲み ----
+
+    #[test]
+    fn lines_inside_code_fences_are_found() {
+        let lines = [
+            "前",             // 1
+            "```rust",        // 2 開く
+            "# コメント",     // 3 中
+            "- 中の行",       // 4 中
+            "~~~",            // 5 中（別の印では閉じない）
+            "``",             // 6 中（短い印では閉じない）
+            "```` ",          // 7 閉じる（長い印と空白は閉じる）
+            "後",             // 8
+            "  ~~~~",         // 9 開く（字下げした行も囲み）
+            "```",            // 10 中
+            "~~~ 後ろに文字", // 11 中（後ろに文字のある印では閉じない）
+            "最後",           // 12 中（閉じていない囲みは最後まで）
+        ];
+        // リストの項目の中の囲みも開く・閉じる
+        assert_eq!(
+            code_lines(&["- ```", "$ make test", "  - ```  ", "後"]),
+            [false, true, false, false]
+        );
+        assert_eq!(item_text("- ```"), Err(SkipReason::NoText));
+        assert_eq!(item_text("1. ~~~sh"), Err(SkipReason::NoText));
+        // 行の中のコード（印の後ろに ` がある行）は囲みを開かない
+        assert_eq!(code_lines(&["```ls``` を実行", "後"]), [false, false]);
+        assert_eq!(item_text("```ls``` を実行").unwrap(), "```ls``` を実行");
+        let inside: Vec<usize> = code_lines(&lines)
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| c.then_some(i + 1))
+            .collect();
+        assert_eq!(inside, [3, 4, 5, 6, 10, 11, 12]);
+    }
+
+    #[test]
+    fn lines_inside_a_code_fence_are_not_sent() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let body = "- 前\n```\n$ make test\n- 中\n```\n- 後";
+        let sent = send_ok(conn, "2026-11-03", body, 1..=6, ItemKind::Blocker);
+        let lines: Vec<usize> = sent.sent.iter().map(|s| s.line).collect();
+        assert_eq!(lines, [1, 6]);
+        assert_eq!(
+            sent.skipped,
+            [
+                SkippedLine {
+                    line: 2,
+                    reason: SkipReason::NoText
+                },
+                SkippedLine {
+                    line: 3,
+                    reason: SkipReason::InCode
+                },
+                SkippedLine {
+                    line: 4,
+                    reason: SkipReason::InCode
+                },
+                SkippedLine {
+                    line: 5,
+                    reason: SkipReason::NoText
+                },
+            ]
+        );
+    }
+
+    // ---- ボードの送り元の行 ----
+
+    #[test]
+    fn source_refs_agree_with_source_line() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let body = "## 10:00 定例\n- 持ち越す行\n- 消す行\n- 残す行";
+        let (original, done) = send_and_carry(conn, body, 2, None);
+        let carried = done.created[0].clone();
+        // 11.03 のノートからも送る（同じ日の記録が2件。1件は送り先を消す）
+        let today = "- 今日の行\n- 消す行";
+        let sent = send_ok(conn, "2026-11-03", today, 1..=2, ItemKind::Todo);
+        let (kept, removed) = (sent.sent[0].item.clone(), sent.sent[1].item.clone());
+        delete(conn, removed.id, at(T2)).unwrap();
+        delete(conn, original.id, at(T2)).unwrap();
+        let other = add(
+            conn,
+            date("2026-11-03"),
+            ItemKind::Todo,
+            "手で足した",
+            Position::Last,
+            &tokyo(),
+            at(T1),
+        )
+        .unwrap();
+
+        let ids = [carried.id, kept.id, removed.id, other.id, Ulid::generate()];
+        let items: Vec<Item> = ids
+            .iter()
+            .filter_map(|&id| item_table::get(conn, id).unwrap())
+            .collect();
+        let refs = source_refs(conn, &items).unwrap();
+        for id in ids {
+            let expected = source_line(conn, id).unwrap().map(|s| SourceRef {
+                date: s.send.date,
+                line: s.line,
+                item_id: s.send.item_id,
+            });
+            assert_eq!(refs.get(&id).copied(), expected, "{id}");
+        }
+        assert_eq!(
+            refs[&carried.id],
+            SourceRef {
+                date: date("2026-11-02"),
+                line: 2,
+                item_id: original.id
+            }
+        );
+        assert_eq!(refs[&kept.id].line, 1);
+        assert_eq!(refs.len(), 3);
+    }
+
+    /// 行送りと、ボードの送り元の行を求める時間を測る（`send` はその日の項目を2回読む。データモデル
+    /// 設計書 6章の未決事項で見直したもの）。見積もりの上限に近い日（ノート 10KB の4倍、項目 80 件の
+    /// うち 40 件をノートから送った日）で、1回の行送りとボードの送り元の行の p95 を出す。
+    /// `cargo test --release -p yunagi-core note_send::tests::send_timing -- --ignored --nocapture`
+    #[test]
+    #[ignore = "時間を測るだけ（手で走らせる）"]
+    fn send_timing() {
+        const RUNS: usize = 100;
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = "2026-11-03";
+        let mut lines: Vec<String> = Vec::new();
+        for h in 0..40 {
+            lines.push(format!("## {:02}:00 打ち合わせ {h}", 8 + h % 12));
+            for k in 0..20 {
+                lines.push(format!("- 議題 {h}-{k} について、API の応答を確かめる"));
+            }
+        }
+        let mut body = lines.join("\n");
+        println!("note: {} bytes, {} lines", body.len(), lines.len());
+        for i in 0..40 {
+            add(
+                conn,
+                date(d),
+                ItemKind::Todo,
+                &format!("手で足した {i}"),
+                Position::Last,
+                &tokyo(),
+                at(T0),
+            )
+            .unwrap();
+        }
+        let mut send_times = Vec::new();
+        for i in 0..RUNS {
+            // 送るたびに行を1つ足して送る（同じ行は送り直せないため）
+            body.push_str(&format!("\n- 送る行 {i}"));
+            let line = note_body::lines(&body).count();
+            let t = std::time::Instant::now();
+            send_ok(conn, d, &body, line..=line, ItemKind::Todo);
+            send_times.push(t.elapsed());
+        }
+        let mut board_times = Vec::new();
+        for _ in 0..RUNS {
+            let t = std::time::Instant::now();
+            super::super::board::get_screen_board(conn, date(d)).unwrap();
+            board_times.push(t.elapsed());
+        }
+        for (label, mut times) in [("send", send_times), ("get_screen_board", board_times)] {
+            times.sort();
+            println!(
+                "{label:<18} median={:>8.2?}  p95={:>8.2?}",
+                times[RUNS / 2],
+                times[(RUNS * 95).div_ceil(100) - 1]
+            );
+        }
     }
 }

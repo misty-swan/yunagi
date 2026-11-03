@@ -12,12 +12,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::{board, export, item, text_doc};
+use yunagi_core::domain::{board, export, item, note_send, text_doc};
 
-use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
+use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
 use crate::types::{
     BackupEntry, Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome,
-    Overview, Position, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    NoteMark, Overview, Position, SendResult, Snapshot, SplitResult, Startup, TextDoc, TextSave,
+    UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -253,6 +254,87 @@ pub async fn save_text_doc(
                 }),
                 Err(e) => Err(CommandError::from(e)),
             }
+        })
+    })
+    .await
+}
+
+/// 行送りの結果と、データを変えたか（本文を書いたか、項目を作ったか）。
+struct SendOutcome {
+    result: SendResult,
+    changed: bool,
+}
+
+impl Changes for SendOutcome {
+    fn changed(&self) -> bool {
+        self.changed
+    }
+
+    fn committed(&self) -> bool {
+        matches!(self.result, SendResult::Sent { .. })
+    }
+}
+
+/// ノートの `from` 行目から `to` 行目まで（1始まり。両端を含む）を、1行ごとに `kind` の項目として
+/// 送る（Mod+Shift+T・Mod+Shift+B。操作仕様書 2章）。`body` はエディタの本文で、`baseRev` はその
+/// もとにした版。コアは本文を保存し、同じトランザクションで項目と送った記録を作る。版が古ければ
+/// 何も書かずに最新を返す（`SendResult::Stale`。画面は取り込んでから送り直す）。行の番号の誤りは
+/// `invalid_argument`（`note_line`）。
+///
+/// エディタの本文の保存を兼ねるので、ノートの保存と同じく保存として数える（アーキテクチャ設計書 4.1
+/// 「保存に失敗している間」）：書けたら保存の失敗中を終え、保存先の問題で失敗したら始める（行送りは
+/// 送り直さないが、本文はふだんの自動保存が内容を持ったまま再試行する）。
+#[tauri::command]
+pub async fn send_note_lines(
+    core: Core<'_>,
+    date: Date,
+    body: String,
+    base_rev: i64,
+    from: usize,
+    to: usize,
+    kind: ItemKind,
+) -> Result<SendResult, CommandError> {
+    blocking(&core, move |core| {
+        core.screen_write(ScreenWrite::Save, |conn| {
+            let request = note_send::SendLines {
+                date: date.0,
+                body: &body,
+                base_rev,
+                lines: from..=to,
+                kind: kind.into(),
+            };
+            match note_send::send(conn, &request, &system_tz(), now()) {
+                Ok(sent) => Ok(SendOutcome {
+                    changed: !sent.sent.is_empty() || sent.rev != base_rev,
+                    result: sent.into(),
+                }),
+                Err(note_send::SendError::Stale { latest }) => Ok(SendOutcome {
+                    result: SendResult::Stale {
+                        body: latest.body,
+                        rev: latest.rev,
+                    },
+                    changed: false,
+                }),
+                Err(e) => Err(CommandError::from(e)),
+            }
+        })
+        .map(|o| o.result)
+    })
+    .await
+}
+
+/// その日のノートの本文 `body`（エディタの本文。まだ保存していない入力を含んでよい）で、送信済みの
+/// 印を付ける行（行の順。データモデル設計書 3章 note_send の照合）。
+#[tauri::command]
+pub async fn note_marks(
+    core: Core<'_>,
+    date: Date,
+    body: String,
+) -> Result<Vec<NoteMark>, CommandError> {
+    blocking(&core, move |core| {
+        core.read(|conn| {
+            note_send::marks(conn, date.0, &body)
+                .map(|marks| marks.into_iter().map(NoteMark::from).collect())
         })
     })
     .await

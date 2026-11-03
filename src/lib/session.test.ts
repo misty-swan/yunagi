@@ -42,6 +42,7 @@ function board(date: string, text: string): Board {
         carriedTo: null,
         agentName: null,
         unseen: false,
+        noteSource: null,
       },
     ],
     blockers: [],

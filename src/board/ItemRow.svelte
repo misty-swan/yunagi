@@ -5,7 +5,7 @@
   // 解消メモ（解消済みの障害の下の行に「→ メモ」）、行末に持ち越し先（「→ 11.03」）・取りやめた理由・
   // 持ち越し回数。持ち越し済みの項目と取りやめた TODO は、本文を入力できない（入力しようとしたら知らせる）。
   import CarryIcon from "../shell/CarryIcon.svelte";
-  import type { CarriedTo } from "../lib/bindings";
+  import type { CarriedTo, NoteSource } from "../lib/bindings";
   import { lockOf, showsMemo, type BoardModel, type FocusTarget, type Row } from "../lib/board.svelte";
   import { boardActionOf } from "../lib/board_keys";
   import { monthDay, shortDate } from "../lib/dates";
@@ -22,6 +22,7 @@
     onNeighbor,
     onRemoving,
     onOpenCarried,
+    onOpenNoteSource,
     onActivity,
   }: {
     row: Row;
@@ -38,6 +39,8 @@
     /** この行を消す前に、フォーカスを隣の行（`dir` の向き。無ければ反対の隣）へ移す。 */
     onRemoving: (key: string, dir: -1 | 1) => void;
     onOpenCarried: (to: CarriedTo) => void;
+    /** 「← NOTE」：送り元のノートの行へ移る。 */
+    onOpenNoteSource: (source: NoteSource) => void;
     /** 入力・フォーカスが変わった（入力中の状態を知らせ直す）。 */
     onActivity: () => void;
   } = $props();
@@ -316,6 +319,20 @@
       </button>
     {/if}
   </span>
+  {#if row.noteSource !== null}
+    {@const source = row.noteSource}
+    <button
+      type="button"
+      class="from-note"
+      tabindex="-1"
+      aria-label={m.openNoteSource}
+      title={m.openNoteSource}
+      onmousedown={(e) => e.preventDefault()}
+      onclick={() => onOpenNoteSource(source)}
+    >
+      {m.labels.fromNote}
+    </button>
+  {/if}
   {#if row.status === "dropped" && row.closeReason !== null}
     <span class="cstate">{m.closeReason[row.closeReason]}</span>
   {/if}
@@ -519,5 +536,25 @@
 
   .carried-to:hover {
     color: var(--text);
+  }
+
+  /* 送り元のノートの行への印（ノートの「→ TODO」と対の、--sea の小さな英字。デザインガイド 6章） */
+  .from-note {
+    flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    font-family: var(--font);
+    font-size: calc(10.5 * var(--u));
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    color: var(--sea);
+    line-height: calc(var(--fs-body) * var(--lh-body));
+    white-space: nowrap;
+  }
+
+  .from-note:hover {
+    text-decoration: underline;
   }
 </style>

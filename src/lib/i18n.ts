@@ -40,6 +40,10 @@ const labels = {
   },
   /** ノートの右の、時刻付き見出しの一覧（画面設計書 4章）。 */
   outline: "Outline",
+  /** Outline の下の、TODO・障害へ送った行数（画面設計書 4章）。 */
+  sent: "Sent",
+  /** 項目の行末の、送り元のノートの行への印（画面設計書 3章「各領域の表示」）。 */
+  fromNote: "← NOTE",
   /** 整理モードの領域の見出し（画面設計書 3章「各領域の表示」）。 */
   region: { todo: "TODO", blockers: "BLOCKERS", reflection: "REFLECTION" },
   /** 領域の見出しの右の件数（`6 left`・`3 open`）。 */
@@ -193,6 +197,16 @@ export interface Messages {
   reflectionLabel: string;
   /** ノートのエディタの読み上げ用の名前。 */
   noteLabel: string;
+  /** 項目の「← NOTE」の読み上げ。選ぶと、送り元のノートの行へ移る。 */
+  openNoteSource: string;
+  /** 行送りで、送れる行が無かったとき（見出し・空の行・コードの囲みの中など。操作仕様書 2章）。 */
+  sendNothing: string;
+  /** 行送りで、どの行もすでに送信済みだったとき。 */
+  sendAlreadySent: string;
+  /** 行送りに失敗したとき（本文はふだんの自動保存で送る）。 */
+  sendFailed: string;
+  /** ノートの行の右クリックのメニュー（操作仕様書 5章）。 */
+  lineMenu: { label: string; toTodo: string; toBlocker: string };
   /** 定期バックアップを作れなかったとき（`backup-failed`。画面設計書 3章「上部のバー」）。 */
   backupFailed: string;
   startup: StartupMessages;
@@ -433,6 +447,11 @@ const ja: Messages = {
   reflectionTemplate: ["## 良かったこと", "- ", "", "## 詰まったこと", "- ", "", "## 明日の一手", "- "],
   reflectionLabel: "振り返り",
   noteLabel: "ノート",
+  openNoteSource: "ノートの送り元の行へ移る",
+  sendNothing: "送れる行がありません",
+  sendAlreadySent: "送信済みの行です",
+  sendFailed: "行を送れませんでした",
+  lineMenu: { label: "行の操作", toTodo: "TODO へ送る", toBlocker: "障害へ送る" },
   backupFailed: "今日のバックアップを作れませんでした。自動で作り直します",
   startup: jaStartup,
 };
@@ -479,6 +498,11 @@ const en: Messages = {
   reflectionTemplate: ["## Went well", "- ", "", "## Got stuck", "- ", "", "## Next step for tomorrow", "- "],
   reflectionLabel: "Reflection",
   noteLabel: "Note",
+  openNoteSource: "Go to the line in the note it was sent from",
+  sendNothing: "No lines to send",
+  sendAlreadySent: "Already sent",
+  sendFailed: "Couldn't send the lines",
+  lineMenu: { label: "Line actions", toTodo: "Send to TODO", toBlocker: "Send to Blockers" },
   backupFailed: "Today's backup couldn't be made. It will be retried automatically",
   startup: enStartup,
 };

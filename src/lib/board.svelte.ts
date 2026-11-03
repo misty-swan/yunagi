@@ -25,6 +25,7 @@ import type {
   ItemStatus,
   LogicalDate,
   Millis,
+  NoteSource,
   Origin,
   Position,
 } from "./bindings";
@@ -57,6 +58,8 @@ export interface Row {
   agentName: string | null;
   /** エージェントによる未確認の変更がある。 */
   unseen: boolean;
+  /** ノートから送った項目の、送り元の行（無ければ `null`）。 */
+  noteSource: NoteSource | null;
 }
 
 /** 本文や状態を変えられない理由（操作仕様書 2章）。 */
@@ -126,6 +129,7 @@ function rowOf(bi: BoardItem): Row {
     origin: i.origin,
     agentName: bi.agentName,
     unseen: bi.unseen,
+    noteSource: bi.noteSource,
   };
 }
 
@@ -413,6 +417,7 @@ export class BoardModel {
       origin: "human",
       agentName: null,
       unseen: false,
+      noteSource: null,
     };
   }
 

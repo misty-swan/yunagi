@@ -44,13 +44,14 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 16] = [
+    let tests: [(&str, Test); 17] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
         ),
         ("item_commands", item_commands),
         ("text_doc_commands", text_doc_commands),
+        ("note_send_commands", note_send_commands),
         ("overview_counts", overview_counts),
         (
             "export_markdown_writes_one_file_per_day",
@@ -504,6 +505,85 @@ fn text_doc_commands(_: &Path) {
     assert_eq!(board["note"]["length"], 14);
     assert_eq!(board["note"]["headings"][0]["text"], "10:00 定例");
     assert_eq!(board["note"]["headings"][0]["line"], 1);
+}
+
+/// 行送り：本文を保存して項目を作り、印と送り元の行を返す（データモデル設計書 3章 note_send）。
+fn note_send_commands(_: &Path) {
+    let h = Harness::opened();
+    // データベースはテストの間で共有するので、ほかのテストと違う日を使う
+    let date = "2030-03-02";
+    let body = "## 10:00 定例\n- レート制限を調べる\n- 権限待ち\n```\nログ\n```";
+    h.drain();
+    let sent = h.ok(
+        "send_note_lines",
+        json!({ "date": date, "body": body, "baseRev": 0, "from": 1, "to": 5, "kind": "todo" }),
+    );
+    assert_eq!(sent["result"], "sent");
+    assert_eq!(sent["rev"], 1);
+    let lines: Vec<u64> = sent["sent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, [2, 3]);
+    assert_eq!(sent["sent"][0]["item"]["text"], "レート制限を調べる");
+    assert_eq!(sent["sent"][0]["item"]["origin"], "note");
+    assert_eq!(
+        sent["skipped"],
+        json!([
+            { "line": 1, "reason": "heading" },
+            { "line": 4, "reason": "no_text" },
+            { "line": 5, "reason": "in_code" },
+        ])
+    );
+    assert_eq!(h.next_event(), changed_by("screen"));
+    let first = sent["sent"][0]["item"]["id"].clone();
+
+    // 送った行は送り直さない（本文も同じなので何も変えない）
+    let again = h.ok(
+        "send_note_lines",
+        json!({ "date": date, "body": body, "baseRev": 1, "from": 2, "to": 2, "kind": "blocker" }),
+    );
+    assert_eq!(
+        again,
+        json!({ "result": "sent", "rev": 1, "sent": [], "skipped": [{ "line": 2, "reason": "already_sent" }] })
+    );
+    h.assert_no_event();
+
+    // 印は、エディタの本文（まだ保存していない行を含む）で照合する
+    let edited = format!("上に足した\n{body}");
+    assert_eq!(
+        h.ok("note_marks", json!({ "date": date, "body": edited })),
+        json!([
+            { "line": 3, "kind": "todo", "itemId": first },
+            { "line": 4, "kind": "todo", "itemId": sent["sent"][1]["item"]["id"] },
+        ])
+    );
+
+    // ボードの項目に、送り元の行を添える
+    let board = h.ok("get_board", json!({ "date": date }));
+    assert_eq!(
+        board["todos"][0]["noteSource"],
+        json!({ "date": date, "line": 2, "itemId": first })
+    );
+
+    // もとにした版が古い・行の番号の誤り
+    assert_eq!(
+        h.ok(
+            "send_note_lines",
+            json!({ "date": date, "body": "別", "baseRev": 0, "from": 1, "to": 1, "kind": "todo" }),
+        ),
+        json!({ "result": "stale", "body": body, "rev": 1 })
+    );
+    assert_eq!(
+        h.err(
+            "send_note_lines",
+            json!({ "date": date, "body": body, "baseRev": 1, "from": 0, "to": 1, "kind": "todo" }),
+        ),
+        json!({ "kind": "invalid_argument", "reason": "note_line" })
+    );
+    h.assert_no_event();
 }
 
 /// 画面の骨組みの件数（`get_overview`）：表示している日の件数、今日から始まる Recent、

@@ -83,3 +83,38 @@ test("エディタの行番号を、もとの本文の行番号に置き換え�
   expect(baseLinesOf(base, "a\nd", [2])).toEqual([4]);
   expect(baseLinesOf(base, base, [4, 1, 1])).toEqual([1, 4]);
 });
+
+test("diffLines の変更をもとに当てると相手の本文になり、残した行は最長共通部分列の長さになる", () => {
+  // 決まった種の擬似乱数（失敗したときに同じ入力で確かめ直せるように）
+  let seed = 7;
+  const rand = (n: number) => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % n;
+  };
+  const lcs = (a: string[], b: string[]) => {
+    const t = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--)
+      for (let j = b.length - 1; j >= 0; j--) t[i][j] = a[i] === b[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    return t[0][0];
+  };
+  for (let round = 0; round < 300; round++) {
+    const base = Array.from({ length: rand(30) }, () => "abcde"[rand(5)]);
+    const other = base.slice();
+    for (let e = rand(8); e > 0; e--) {
+      const at = rand(other.length + 1);
+      if (rand(2) === 0) other.splice(at, 1);
+      else other.splice(at, 0, "abcdef"[rand(6)]);
+    }
+    const hunks = diffLines(base, other);
+    const out: string[] = [];
+    let i = 0;
+    for (const h of hunks) {
+      out.push(...base.slice(i, h.start), ...h.lines);
+      i = h.end;
+    }
+    out.push(...base.slice(i));
+    expect(out).toEqual(other);
+    const kept = base.length - hunks.reduce((s, h) => s + (h.end - h.start), 0);
+    expect(kept).toBe(lcs(base, other));
+  }
+});

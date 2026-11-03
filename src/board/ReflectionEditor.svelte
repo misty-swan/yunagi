@@ -11,6 +11,7 @@
   import type { LogicalDate } from "../lib/bindings";
   import { TextDocEditor } from "../lib/doc_editor";
   import { t } from "../lib/i18n";
+  import { blank } from "../lib/note";
   import type { EditorPresence } from "../lib/ui_report.svelte";
 
   let {
@@ -69,7 +70,7 @@
     const lines = t().reflectionTemplate;
     const head = v.state.selection.main.head;
     const line = v.state.doc.lineAt(head);
-    const empty = line.text.trim() === "";
+    const empty = blank(line.text);
     const insert = (empty ? "" : "\n") + lines.join("\n");
     const from = empty ? line.from : line.to;
     const caret = from + (empty ? 0 : 1) + lines[0].length + 1 + lines[1].length;
