@@ -215,6 +215,19 @@ pub fn set_seen_at(conn: &Connection, id: Ulid, at: Timestamp) -> Result<bool, S
     Ok(n == 1)
 }
 
+/// エージェントによる未確認の変更の数：`actor = agent` で、`seen_at` が NULL の記録（データモデル設計書
+/// 3章 change_log。上部のバーの「◆ 件数」とサイドバーの Agents の件数）。
+pub fn count_unseen_by_agents(conn: &Connection) -> Result<u64, StorageError> {
+    let n: i64 = query_row(
+        conn,
+        "SELECT COUNT(*) FROM change_log WHERE actor = ?1 AND seen_at IS NULL",
+        [Actor::Agent],
+        |r| r.get(0),
+    )?;
+    // COUNT(*) は 0 以上
+    Ok(n.unsigned_abs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +318,34 @@ mod tests {
         assert_eq!(saved.seen_at, Some(at("2026-11-03T03:00:00Z")));
         assert!(!set_reverted_at(conn, Ulid::generate(), at("2026-11-03T02:00:00Z")).unwrap());
         assert!(!set_seen_at(conn, Ulid::generate(), at("2026-11-03T02:00:00Z")).unwrap());
+    }
+
+    #[test]
+    fn counts_unseen_changes_by_agents_only() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        assert_eq!(count_unseen_by_agents(conn).unwrap(), 0);
+        let seen = log(item(10));
+        let unseen = log(item(11));
+        // 人の記録（取り消しの操作）は、確認していなくても数えない
+        let by_human = ChangeLog {
+            actor: Actor::Human,
+            agent_client_id: None,
+            operation: "agent.revert".into(),
+            revert_of_id: Some(seen.id),
+            ..log(item(10))
+        };
+        for l in [
+            &seen,
+            &unseen,
+            &log(Target::Note(date("2026-11-03"))),
+            &by_human,
+        ] {
+            insert(conn, l).unwrap();
+        }
+        assert_eq!(count_unseen_by_agents(conn).unwrap(), 3);
+        set_seen_at(conn, seen.id, at("2026-11-03T03:00:00Z")).unwrap();
+        assert_eq!(count_unseen_by_agents(conn).unwrap(), 2);
     }
 
     #[test]

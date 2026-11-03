@@ -1,0 +1,85 @@
+/*
+  画面全体の土台（docs/design/06-design-guide.md 4章・5章）。色は tokens.css の変数だけを使う。
+  - --u は「本文 15px のときの 1px」。文字サイズの設定（13〜19px。--fs-setting）に比例して全体を拡縮する
+  - アニメーションは付けない（色と形がその場で切り替わるだけ。06 2章）
+*/
+
+:root {
+  --fs-setting: 15;
+  --u: calc(1px * var(--fs-setting) / 15);
+  --fs-body: calc(15 * var(--u));
+  --fs-label: calc(11 * var(--u));
+  --fs-meta: calc(12 * var(--u));
+  --fs-small: calc(13 * var(--u));
+  --lh-body: 1.65;
+  --pad: calc(28 * var(--u));
+  --side-w: calc(240 * var(--u));
+  --top-h: calc(60 * var(--u));
+  --radius: calc(10 * var(--u));
+  /* 影は重ねて表示するパネルとポップオーバーだけに付ける（06 5章） */
+  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.18);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
+  /* 欧文は同梱の Inter（@fontsource-variable/inter）、和文は OS 標準 */
+  --font: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Noto Sans CJK JP", "Noto Sans JP",
+    sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 400 var(--fs-body) / var(--lh-body) var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+::selection {
+  background: var(--sel);
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 英字ラベル（領域見出し、Recent など。大文字、字間 0.24em） */
+.label {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+kbd {
+  font: inherit;
+  font-size: calc(11 * var(--u));
+  font-weight: 600;
+  color: var(--text-muted);
+}

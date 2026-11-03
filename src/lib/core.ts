@@ -17,6 +17,7 @@ import {
   type ItemKind,
   type ItemOutcome,
   type LogicalDate,
+  type Overview,
   type Position,
   type Snapshot,
   type SplitResult,
@@ -75,6 +76,8 @@ export const core = {
   /** 今日の論理日付。 */
   today: () => call<LogicalDate>("today"),
   getBoard: (date: LogicalDate) => call<Board>("get_board", { date }),
+  /** 画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数。`date` は表示している日。 */
+  getOverview: (date: LogicalDate) => call<Overview>("get_overview", { date }),
   addItem: (date: LogicalDate, kind: ItemKind, text: string, position: Position) =>
     call<Item>("add_item", { date, kind, text, position }),
   /**

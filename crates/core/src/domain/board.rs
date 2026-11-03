@@ -5,6 +5,7 @@
 //!   日ごと・週ごとに求める。凪メーター・サイドバー・ふりかえりで使う。
 //! - [`get_board`]・[`open_board`]：その日のボード（MCP の `get_board`・`open_board`。画面の表示にも使う）。
 //! - [`recent_days`]：サイドバーの Recent に並べる日。
+//! - [`overview`]：画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数。
 //!
 //! どれも読むだけで、day の行も作らない。
 
@@ -17,6 +18,7 @@ use super::day;
 use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
+use crate::storage::table::change_log;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
 use crate::storage::{StorageError, in_read_transaction};
@@ -291,6 +293,47 @@ pub fn recent_days(
     let mut days = day::days_with_items_or_note(conn, today, before)?;
     days.insert(0, today);
     Ok(days)
+}
+
+// ---- 画面の骨組みの件数 ----
+
+/// 画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数（画面設計書 3章「画面の骨組み」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overview {
+    /// 表示している日の件数（凪メーター）。
+    pub counts: Counts,
+    /// サイドバーの Recent の日（[`recent_days`]。先頭は今日）と、その日の件数。
+    pub recent: Vec<(LogicalDate, Counts)>,
+    /// エージェントによる未確認の変更の数（上部のバーとサイドバーの Agents）。
+    pub unseen_changes: u64,
+}
+
+/// 表示している日 `date` と今日 `today` の、画面の骨組みに出す件数。どれも同じ時点の内容を読む。
+pub fn overview(
+    conn: &Connection,
+    date: LogicalDate,
+    today: LogicalDate,
+) -> Result<Overview, StorageError> {
+    in_read_transaction(conn, || {
+        let days = recent_days(conn, today, RECENT_DAYS)?;
+        // Recent の日は今日から古い順に並ぶので、最後の日から今日までをまとめて数える
+        let oldest = days.last().copied().unwrap_or(today);
+        let by_day = counts_between(conn, oldest, today)?;
+        let recent = days
+            .into_iter()
+            .map(|d| (d, by_day.get(&d).copied().unwrap_or_default()))
+            .collect();
+        let viewed = if (oldest..=today).contains(&date) {
+            by_day.get(&date).copied().unwrap_or_default()
+        } else {
+            counts(conn, date)?
+        };
+        Ok(Overview {
+            counts: viewed,
+            recent,
+            unseen_changes: change_log::count_unseen_by_agents(conn)?,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -712,5 +755,66 @@ mod tests {
         assert_eq!(days.len(), RECENT_DAYS);
         assert_eq!(days[1], date("2026-10-20"));
         assert_eq!(days[6], date("2026-10-15"));
+    }
+
+    #[test]
+    fn overview_counts_the_viewed_day_recent_days_and_unseen_changes() {
+        use crate::storage::Ulid;
+        use crate::storage::table::agent_client::CLI_ID;
+        use crate::storage::table::change_log::{Actor, ChangeLog, Target, insert};
+
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let done = todo(conn, "2026-11-03", "終えた");
+        set_status(conn, &done, ItemStatus::Done);
+        todo(conn, "2026-11-03", "残り");
+        blocker(conn, "2026-11-03", "詰まり");
+        todo(conn, "2026-10-28", "前の日");
+        // Recent より前の日と、Recent に入らない先の日
+        todo(conn, "2026-09-01", "ずっと前");
+        todo(conn, "2026-11-05", "先の日");
+        for d in 10..=17 {
+            todo(conn, &format!("2026-10-{d:02}"), "項目");
+        }
+        insert(
+            conn,
+            &ChangeLog {
+                id: Ulid::generate(),
+                actor: Actor::Agent,
+                agent_client_id: Some(CLI_ID),
+                operation: "todo.add".into(),
+                target: Target::Item(done.id),
+                before: None,
+                after: Some(r#"{"text":"x"}"#.into()),
+                created_at: now(),
+                reverted_at: None,
+                revert_of_id: None,
+                seen_at: None,
+            },
+        )
+        .unwrap();
+
+        let today = date("2026-11-03");
+        let o = overview(conn, today, today).unwrap();
+        let expected = Counts {
+            todos: 2,
+            done: 1,
+            left_todos: 1,
+            left_blockers: 1,
+            ..Counts::default()
+        };
+        assert_eq!(o.counts, expected);
+        assert_eq!(o.unseen_changes, 1);
+        let days: Vec<_> = o.recent.iter().map(|(d, _)| *d).collect();
+        assert_eq!(days, recent_days(conn, today, RECENT_DAYS).unwrap());
+        assert_eq!(o.recent[0], (today, expected));
+        assert_eq!(o.recent[1].1.left_todos, 1);
+
+        // Recent に入らない日を見ていても、その日を数える
+        for (d, todos) in [("2026-09-01", 1), ("2026-11-05", 1), ("2026-11-20", 0)] {
+            let o = overview(conn, date(d), today).unwrap();
+            assert_eq!(o.counts.todos, todos, "{d}");
+            assert_eq!(o.recent[0], (today, expected));
+        }
     }
 }

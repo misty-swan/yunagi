@@ -449,6 +449,87 @@ impl From<board::Board> for Board {
     }
 }
 
+/// 件数（データモデル設計書 3章 item「件数の数え方」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Counts {
+    /// TODO 数（取りやめた TODO を除く）。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub todos: u64,
+    /// 完了した TODO。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub done: u64,
+    /// 残りのうち、未完了の TODO。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub left_todos: u64,
+    /// 残りのうち、未解消の障害。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub left_blockers: u64,
+    /// 解消した障害。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub resolved: u64,
+    /// 前の日から持ち越してきた項目。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub carried: u64,
+}
+
+impl From<board::Counts> for Counts {
+    fn from(c: board::Counts) -> Self {
+        Self {
+            todos: c.todos,
+            done: c.done,
+            left_todos: c.left_todos,
+            left_blockers: c.left_blockers,
+            resolved: c.resolved,
+            carried: c.carried,
+        }
+    }
+}
+
+/// サイドバーの Recent の1日。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct RecentDay {
+    pub date: Date,
+    pub counts: Counts,
+}
+
+/// 画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数（画面設計書 3章「画面の骨組み」）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Overview {
+    /// 今日の論理日付（Recent の先頭）。
+    pub today: Date,
+    /// 表示している日の件数（凪メーター）。
+    pub counts: Counts,
+    /// サイドバーの Recent（先頭は今日。新しい順に最大7日）。
+    pub recent: Vec<RecentDay>,
+    /// エージェントによる未確認の変更の数。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub unseen_changes: u64,
+}
+
+impl Overview {
+    pub fn new(today: LogicalDate, o: board::Overview) -> Self {
+        Self {
+            today: Date(today),
+            counts: o.counts.into(),
+            recent: o
+                .recent
+                .into_iter()
+                .map(|(date, counts)| RecentDay {
+                    date: Date(date),
+                    counts: counts.into(),
+                })
+                .collect(),
+            unseen_changes: o.unseen_changes,
+        }
+    }
+}
+
 // ---- ノート・振り返り ----
 
 /// ある時点の本文と版の番号（まだ書いていない日は空の本文と版 0）。
