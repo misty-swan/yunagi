@@ -1,0 +1,304 @@
+<script lang="ts">
+  // 整理モードの本文（画面設計書 3章「レイアウト」「各領域の表示」「空の状態」）：TODO・障害・振り返りの
+  // 3領域を、設定のレイアウト（A. 2段・B. 3列・C. 縦積み）で並べる。ウィンドウ幅が 900px 未満なら、
+  // 設定にかかわらず C にする（設定は変えない）。
+  //
+  // 受け持つキー（操作仕様書 2章「整理」）：Mod+1 / 2 / 3 で領域を移る。一覧の中のキーは ItemRow、
+  // 振り返りのキーは ReflectionEditor。入力中の状態は、変わるたびに `report_ui_state` で知らせる
+  // （docs/design/01-architecture.md 4.1）。
+  import type { EditorView } from "@codemirror/view";
+  import { untrack } from "svelte";
+  import { ItemSaves, type ItemSaveEvents, type SaveStatus } from "../lib/autosave.svelte";
+  import type { CarriedTo, Id, ItemKind, LogicalDate } from "../lib/bindings";
+  import { BoardModel, CARRY_REVIEW_DEFAULT, type BoardNotice, type FocusTarget } from "../lib/board.svelte";
+  import { boardActionOf } from "../lib/board_keys";
+  import { shortDate } from "../lib/dates";
+  import { t } from "../lib/i18n";
+  import type { Notice } from "../lib/notice.svelte";
+  import { prefs, type Layout } from "../lib/prefs.svelte";
+  import type { Session } from "../lib/session.svelte";
+  import { EditorPresence, UiReporter } from "../lib/ui_report.svelte";
+  import ItemList from "./ItemList.svelte";
+  import ReflectionEditor from "./ReflectionEditor.svelte";
+
+  let {
+    session,
+    save,
+    notice,
+    narrow,
+    mac,
+  }: {
+    session: Session;
+    save: SaveStatus;
+    notice: Notice;
+    /** ウィンドウ幅が 900px 未満か。 */
+    narrow: boolean;
+    mac: boolean;
+  } = $props();
+
+  const m = $derived(t());
+
+  function noticeText(n: BoardNotice): string {
+    const msg = t();
+    switch (n.kind) {
+      case "carried":
+        return msg.carriedNotice(shortDate(n.date));
+      case "dropped":
+        return msg.droppedNotice;
+      case "restore_source_changed":
+        return msg.restoreSourceChanged;
+      case "restore_source_carried":
+        return msg.restoreSourceCarried(shortDate(n.date));
+      case "rejected":
+        return msg.saveRejected;
+    }
+  }
+
+  // 保存の状態（save）は、アプリの間ずっと同じものを渡される
+  const events: ItemSaveEvents = {};
+  // svelte-ignore state_referenced_locally
+  const items = new ItemSaves(save, events);
+  const model = new BoardModel({
+    items,
+    reload: () => session.reload(),
+    notify: (n) => notice.show(noticeText(n)),
+  });
+  events.saved = (key, item) => model.saved(key, item);
+  events.rejected = (key, e) => model.rejected(key, e);
+  const presence = new EditorPresence();
+
+  // 読み込んだボードを出す。日を移ったら、保存を待っていない項目の待ち行列を片付ける
+  $effect(() => {
+    const b = session.board;
+    if (b === null) return;
+    untrack(() => {
+      if (model.date !== null && model.date !== b.date) items.prune();
+      model.load(b);
+    });
+  });
+
+  const layout = $derived<Layout>(narrow ? "C" : prefs.layout);
+  const isToday = $derived(model.date !== null && model.date === session.today);
+
+  // ---- フォーカス ----
+
+  let focusReq = $state<(FocusTarget & { n: number }) | null>(null);
+  let seq = 0;
+  function requestFocus(target: FocusTarget | null) {
+    if (target !== null) focusReq = { ...target, n: ++seq };
+  }
+
+  let todoRegion = $state<HTMLElement | null>(null);
+  let blockerRegion = $state<HTMLElement | null>(null);
+  let editor = $state<EditorView | null>(null);
+  /** 領域ごとに、最後に選んでいた行（Mod+1 / 2 で戻る先）。 */
+  const lastIn: Record<ItemKind, string | null> = { todo: null, blocker: null };
+  $effect(() => {
+    const f = model.focus;
+    if (f === null) return;
+    const row = untrack(() => model.row(f.key));
+    if (row !== undefined) lastIn[row.kind] = row.key;
+  });
+
+  function focusRegion(kind: ItemKind | "reflection") {
+    if (kind === "reflection") {
+      editor?.focus();
+      return;
+    }
+    const rows = model.list(kind);
+    const row = rows.find((r) => r.key === lastIn[kind]) ?? rows.find((r) => r.status === "open") ?? rows[0];
+    if (row === undefined) (kind === "todo" ? todoRegion : blockerRegion)?.focus();
+    else requestFocus({ key: row.key, field: "text", offset: "end" });
+  }
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.defaultPrevented) return;
+    const a = boardActionOf(e, mac);
+    if (a === "regionTodo" || a === "regionBlocker" || a === "regionReflection") {
+      e.preventDefault();
+      focusRegion(a === "regionTodo" ? "todo" : a === "regionBlocker" ? "blocker" : "reflection");
+    }
+  }
+
+  // 持ち越し先の印：その日を開いて、その項目を選ぶ
+  let pendingSelect: { date: LogicalDate; id: Id } | null = null;
+  function openCarried(to: CarriedTo) {
+    pendingSelect = { date: to.date, id: to.id };
+    session.show(to.date);
+  }
+  $effect(() => {
+    const d = model.date;
+    void model.todos;
+    void model.blockers;
+    untrack(() => {
+      const p = pendingSelect;
+      if (p === null || d !== p.date) return;
+      const row = model.todos.find((r) => r.id === p.id) ?? model.blockers.find((r) => r.id === p.id);
+      if (row === undefined) return;
+      pendingSelect = null;
+      requestFocus({ key: row.key, field: "text", offset: "end" });
+    });
+  });
+
+  // ---- 入力中の状態 ----
+
+  let active = $state(typeof document === "undefined" ? true : document.hasFocus());
+  const reporter = new UiReporter(() => ({
+    editingItems: model.editingItems(Date.now(), active),
+    editors: presence.editors(Date.now(), active),
+  }));
+  let expiry: ReturnType<typeof setTimeout> | undefined;
+  function activity() {
+    reporter.update();
+    // 入力中でなくなる時刻に、知らせ直す
+    clearTimeout(expiry);
+    const until = [model.editingUntil(), presence.editingUntil()].filter((x): x is number => x !== null);
+    if (until.length > 0) expiry = setTimeout(activity, Math.max(0, Math.min(...until) - Date.now()) + 1);
+  }
+  // 保存し終えたら（まだ保存していない欄が減ったら）知らせ直す
+  $effect(() => {
+    void save.saving;
+    void save.failing;
+    untrack(activity);
+  });
+  $effect(() => () => clearTimeout(expiry));
+
+  // アプリが前面から外れたら、まだ保存していない入力をすぐ送り、入力中を終える
+  function onWindowBlur() {
+    active = false;
+    void save.flushAll();
+    activity();
+  }
+  function onWindowFocus() {
+    active = true;
+    activity();
+  }
+</script>
+
+<svelte:window onblur={onWindowBlur} onfocus={onWindowFocus} />
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="board" data-layout={layout} data-date={model.date ?? ""} onkeydown={onKeydown}>
+  {#if model.date !== null}
+    <ItemList
+      kind="todo"
+      {model}
+      {mac}
+      {isToday}
+      reviewAt={CARRY_REVIEW_DEFAULT}
+      {focusReq}
+      onFocus={requestFocus}
+      onOpenCarried={openCarried}
+      onActivity={activity}
+      bind:region={todoRegion}
+    />
+    <ItemList
+      kind="blocker"
+      {model}
+      {mac}
+      {isToday}
+      reviewAt={CARRY_REVIEW_DEFAULT}
+      {focusReq}
+      onFocus={requestFocus}
+      onOpenCarried={openCarried}
+      onActivity={activity}
+      bind:region={blockerRegion}
+    />
+    <section class="region r-ref" data-region="reflection" aria-label={m.reflectionLabel}>
+      <div class="rh"><h2 class="label">{m.labels.region.reflection}</h2></div>
+      <div class="scroll">
+        <ReflectionEditor
+          date={model.date}
+          {save}
+          {presence}
+          refresh={session.board}
+          onActivity={activity}
+          bind:view={editor}
+        />
+      </div>
+    </section>
+  {/if}
+</div>
+
+<style>
+  .board {
+    position: relative;
+    height: 100%;
+    display: grid;
+    column-gap: calc(56 * var(--u));
+    row-gap: calc(24 * var(--u));
+    padding: calc(24 * var(--u)) var(--pad) calc(8 * var(--u));
+  }
+
+  /* A. 2段：左に TODO（全高）、右上に障害（内容の高さ）、右下に振り返り（残り）。列は 1.15 : 1 */
+  .board[data-layout="A"] {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "todo blk" "todo ref";
+  }
+
+  /* B. 3列 */
+  .board[data-layout="B"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "todo blk ref";
+  }
+
+  /* C. 縦積み：本文ごと縦に流す */
+  .board[data-layout="C"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "todo" "blk" "ref";
+    align-content: start;
+    overflow: auto;
+  }
+
+  .board :global(.r-todo) {
+    grid-area: todo;
+  }
+
+  .board :global(.r-blk) {
+    grid-area: blk;
+  }
+
+  .r-ref {
+    grid-area: ref;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+
+  /* 領域の区切りは振り返りの上の罫線だけ（A）。縦積みは障害と振り返りの上 */
+  .board[data-layout="A"] .r-ref,
+  .board[data-layout="C"] .r-ref,
+  .board[data-layout="C"] :global(.r-blk) {
+    border-top: 1px solid var(--rule);
+    padding-top: calc(18 * var(--u));
+  }
+
+  .board[data-layout="C"] :global(.scroll) {
+    overflow: visible;
+  }
+
+  .rh {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin: 0 0 calc(8 * var(--u));
+    flex: none;
+  }
+
+  .rh h2 {
+    margin: 0;
+  }
+
+  .scroll {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule) transparent;
+  }
+</style>

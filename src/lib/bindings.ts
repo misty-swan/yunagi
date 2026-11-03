@@ -152,7 +152,16 @@ export type CarriedTo = { id: Id, date: LogicalDate, };
 /**
  * ボードの項目の1件：項目と、持ち越し先（持ち越し済みでなければ `null`）。
  */
-export type BoardItem = { item: Item, carriedTo: CarriedTo | null, };
+export type BoardItem = { item: Item, carriedTo: CarriedTo | null, 
+/**
+ * エージェントが作った項目なら、作ったエージェントの識別子（`claude-code` など。agent_client の
+ * `name`）。画面は本文の後ろに名前を添える（画面設計書 3章「各領域の表示」）。
+ */
+agentName: string | null, 
+/**
+ * エージェントによる未確認の変更がある（行頭の菱形）。
+ */
+unseen: boolean, };
 
 /**
  * ノートの時刻付き見出し（`## 10:00 定例`）。

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { diffLines, mergeText, unsavedLines } from "./text_merge";
+import { baseLinesOf, diffLines, mergeText, unsavedLines } from "./text_merge";
 
 const join = (...lines: string[]) => lines.join("\n");
 
@@ -71,4 +71,15 @@ test("unsavedLines は、もとの本文で数えた、書き換え・削除し�
   // 足しただけの行は知らせない
   expect(unsavedLines(base, join("a", "x", "b", "c", "d"))).toEqual([]);
   expect(unsavedLines(base, join("x", "a", "b", "c", "D", "y"))).toEqual([4]);
+});
+
+test("エディタの行番号を、もとの本文の行番号に置き換える", () => {
+  const base = "a\nb\nc\nd";
+  // 変えていない行はそのまま、前に足した行の分だけずれる
+  expect(baseLinesOf(base, "x\na\nb\nc\nd", [1, 2, 5])).toEqual([1, 4]);
+  // 書き換えた行は、書き換える前の行（まとまりの全部）
+  expect(baseLinesOf(base, "a\nB1\nB2\nc\nd", [3])).toEqual([2]);
+  // 削除の後ろの行
+  expect(baseLinesOf(base, "a\nd", [2])).toEqual([4]);
+  expect(baseLinesOf(base, base, [4, 1, 1])).toEqual([1, 4]);
 });

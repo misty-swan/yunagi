@@ -495,3 +495,92 @@ test("閉じた後は、渡されたエディタに触れない", async () => {
   expect(calls.at(-1)!.args).toMatchObject({ date: DATE });
   expect(calls.at(-1)!.args.body).not.toBe("11-04 の本文");
 });
+
+const ID2 = "01JC0000000000000000000001";
+
+test("行の分割は、失敗したら2行を持ったまま再試行し、送る時点の本文で分ける", async () => {
+  let fail = true;
+  const calls = mockCore((cmd, args) => {
+    if (cmd === "split_item") {
+      if (fail) throw { kind: "storage", detail: "x" };
+      return {
+        original: item(args.first as string),
+        created: { ...item(args.second as string), id: ID2 },
+      };
+    }
+    return { updated: true, item: item(String((args.fields as { text?: string }).text)) };
+  });
+  const status = new SaveStatus();
+  const saved: [string, string][] = [];
+  const items = new ItemSaves(status, { saved: (key, it) => saved.push([key, it.text]) });
+  items.split(ID, "tmp-1", { date: DATE, kind: "todo" }, "設計を", "読む");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(status.failing).toBe(true);
+  // 再試行を待つ間の入力（元の行・新しい行とも）は、次の分割にまとめる
+  items.editText(ID, "設計書を");
+  items.editText("tmp-1", "読み直す");
+  expect(items.unsaved(ID).has("text")).toBe(true);
+  expect(items.unsavedFields()).toEqual([{ itemId: ID, field: "text" }]);
+  // 元の項目の削除などは、分割を送り終えるまで行わない
+  const op = vi.fn(async () => "deleted");
+  expect((await items.run(ID, op).catch((e) => e)).error.kind).toBe("storage");
+  expect(op).not.toHaveBeenCalled();
+  fail = false;
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[1]);
+  expect(status.failing).toBe(false);
+  const splits = calls.filter((c) => c.cmd === "split_item").map((c) => c.args);
+  expect(splits.at(-1)).toEqual({ id: ID, first: "設計書を", second: "読み直す" });
+  expect(calls.some((c) => c.cmd === "save_item")).toBe(false);
+  expect(saved).toEqual([
+    [ID, "設計書を"],
+    ["tmp-1", "読み直す"],
+  ]);
+  expect(items.idOf("tmp-1")).toBe(ID2);
+  expect(items.unsaved(ID).size).toBe(0);
+});
+
+test("分割で作る行を何も書かずにやめたら、元の行の本文は元の項目の保存として送る", async () => {
+  const calls = mockCore((_cmd, args) => ({ updated: true, item: item(String((args.fields as { text?: string }).text)) }));
+  const status = new SaveStatus();
+  const items = new ItemSaves(status);
+  // 新しい行が空のときは、分割を送らない
+  items.split(ID, "tmp-1", { date: DATE, kind: "todo" }, "設計を", "");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(calls).toEqual([]);
+  expect(items.discard("tmp-1")).toBe(true);
+  await items.flush(ID);
+  expect(calls.map((c) => [c.cmd, c.args])).toEqual([["save_item", { id: ID, fields: { text: "設計を" } }]]);
+});
+
+test("分割の元の行が空なら、元の項目は変えずに、新しい行をそのすぐ後に作る", async () => {
+  const calls = mockCore(() => ({ ...item("読む"), id: ID2 }));
+  const items = new ItemSaves(new SaveStatus());
+  items.split(ID, "tmp-1", { date: DATE, kind: "blocker" }, " ", "読む");
+  await items.flush("tmp-1");
+  expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+    ["add_item", { date: DATE, kind: "blocker", text: "読む", position: { at: "after", id: ID } }],
+  ]);
+});
+
+test("分割を送っている間の元の行の入力は、分割の後に元の項目の保存として送る", async () => {
+  let release: () => void = () => {};
+  const calls = mockCore(async (cmd, args) => {
+    if (cmd === "split_item") {
+      await new Promise<void>((r) => (release = r));
+      return { original: item(args.first as string), created: { ...item(args.second as string), id: ID2 } };
+    }
+    return { updated: true, item: item(String((args.fields as { text?: string }).text)) };
+  });
+  const items = new ItemSaves(new SaveStatus());
+  items.split(ID, "tmp-1", { date: DATE, kind: "todo" }, "a", "b");
+  await vi.advanceTimersByTimeAsync(0);
+  items.editText(ID, "ab");
+  // 作り始めた行はやめられない
+  expect(items.discard("tmp-1")).toBe(false);
+  release();
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+    ["split_item", { id: ID, first: "a", second: "b" }],
+    ["save_item", { id: ID, fields: { text: "ab" } }],
+  ]);
+});

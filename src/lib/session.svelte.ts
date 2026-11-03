@@ -32,6 +32,8 @@ export interface Session {
   readonly error: CallError | null;
   /** 日 `date` を表示する（読み終わると `date`・`board`・`overview` が変わる）。 */
   show(date: LogicalDate): void;
+  /** 表示している日を読み込み直す（保存を捨てた後など）。 */
+  reload(): void;
   /** 聞くのをやめる（やめ終わると解決する）。 */
   stop(): Promise<void>;
 }
@@ -180,6 +182,9 @@ export function startSession(): Session {
     show(next: LogicalDate) {
       if (startup?.state === "ready") void load(next);
       else target = next;
+    },
+    reload() {
+      if (startup?.state === "ready") void load(target);
     },
     async stop() {
       stopped = true;

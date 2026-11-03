@@ -40,6 +40,8 @@ function board(date: string, text: string): Board {
           deletedAt: null,
         },
         carriedTo: null,
+        agentName: null,
+        unseen: false,
       },
     ],
     blockers: [],

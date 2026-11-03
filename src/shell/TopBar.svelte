@@ -1,7 +1,7 @@
 <script lang="ts">
   // 上部のバー（画面設計書 3章「上部のバー」）。高さ 60px。
   // 左から「（サイドバーを閉じているときだけロゴ）」「‹ 日付 ›」「Today」「Board / Note」、
-  // 右端に「検索欄」「◆ 未確認の変更」「保存状態」。
+  // 右端に「短時間の知らせ」「検索欄」「◆ 未確認の変更」「保存状態」。
   import type { SaveStatus } from "../lib/autosave.svelte";
   import type { LogicalDate } from "../lib/bindings";
   import { monthDay, weekday } from "../lib/dates";
@@ -17,6 +17,7 @@
     mode,
     showLogo,
     unseen,
+    notice = null,
     save,
     mac,
     onPrev,
@@ -30,6 +31,8 @@
     mode: Mode;
     showLogo: boolean;
     unseen: number;
+    /** 短時間だけ出す知らせ（持ち越し済みの項目を変えようとしたときなど）。無ければ `null`。 */
+    notice?: string | null;
     save: SaveStatus;
     mac: boolean;
     onPrev: () => void;
@@ -146,6 +149,8 @@
   </div>
 
   <div class="fill"></div>
+
+  <span class="notice" role="status">{notice ?? ""}</span>
 
   <button type="button" class="search" onclick={() => onCommand("palette")}>
     <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -330,6 +335,20 @@
   .fill {
     flex: 1;
     min-width: 0;
+  }
+
+  .notice {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-meta);
+    color: var(--text-muted);
+  }
+
+  .notice:empty {
+    display: none;
   }
 
   .search {

@@ -179,3 +179,31 @@ export function unsavedLines(base: string, editor: string): number[] {
     Array.from({ length: h.end - h.start }, (_, k) => h.start + k + 1),
   );
 }
+
+/**
+ * エディタ `editor` の行番号 `lines`（1 始まり）を、もと `base` の行番号に置き換える（守る行の
+ * 「カーソル行」を、最後に保存した本文で数えて知らせるため。docs/design/01-architecture.md 4.1）。
+ * 変えていない行はもとの同じ行に、書き換えた行は書き換える前の行（まとまりの全部）にする。足した
+ * だけの行は、エージェントが指定できないので含めない。結果は昇順で重ならない。
+ */
+export function baseLinesOf(base: string, editor: string, lines: readonly number[]): number[] {
+  const hunks = diffLines(splitLines(base), splitLines(editor));
+  const out = new Set<number>();
+  for (const line of lines) {
+    // エディタの 0 始まりの行 i を、変更の前から順にたどってもとの行にする
+    const i = line - 1;
+    let shift = 0;
+    let mapped: number[] | null = null;
+    for (const h of hunks) {
+      const from = h.start + shift;
+      if (i < from) break;
+      if (i < from + h.lines.length) {
+        mapped = Array.from({ length: h.end - h.start }, (_, k) => h.start + k);
+        break;
+      }
+      shift += h.lines.length - (h.end - h.start);
+    }
+    for (const b of mapped ?? [i - shift]) out.add(b + 1);
+  }
+  return [...out].sort((a, b) => a - b);
+}
