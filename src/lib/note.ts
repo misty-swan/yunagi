@@ -58,7 +58,8 @@ export function insertTimeHeading(line: { from: number; text: string }, now: Dat
 const LIST_ITEM = /^(\s*)- /;
 
 /**
- * 「- 」で始まる行の Enter：次の行も同じ字下げの「- 」で始める。中身のない「- 」の行では「- 」を消す。
+ * 「- 」で始まる行の Enter：次の行も同じ字下げの「- 」で始める。中身のない「- 」の行では「- 」だけを
+ * 消し、字下げは残す（字下げの無い行は空の行になる）。
  * カーソル（`at`。行の始まりからの文字の数）が「- 」より前にあるときと、リストの行でないときは `null`
  * （ふつうの Enter）。
  */
@@ -66,7 +67,8 @@ export function continueList(line: { from: number; text: string }, at: number): 
   const m = LIST_ITEM.exec(line.text);
   if (m === null || at < m[0].length) return null;
   if (line.text.trim() === "-") {
-    return { from: line.from, to: line.from + line.text.length, insert: "", caret: line.from };
+    const indent = m[1].length;
+    return { from: line.from + indent, to: line.from + line.text.length, insert: "", caret: line.from + indent };
   }
   const insert = `\n${m[1]}- `;
   return { from: line.from + at, to: line.from + at, insert, caret: line.from + at + insert.length };

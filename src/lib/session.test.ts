@@ -47,6 +47,8 @@ function board(date: string, text: string): Board {
     blockers: [],
     reflection: "",
     note: { headings: [], length: 0 },
+    reflectionRev: 0,
+    noteRev: 0,
   };
 }
 

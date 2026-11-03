@@ -25,7 +25,8 @@ test("「- 」の行の Enter は次の行も「- 」で始め、中身のない
   // 字下げはそろえる。行の途中なら、そこで分ける
   expect(continueList({ from: 10, text: "  - ab" }, 5)).toEqual({ from: 15, to: 15, insert: "\n  - ", caret: 20 });
   expect(continueList({ from: 3, text: "- " }, 2)).toEqual({ from: 3, to: 5, insert: "", caret: 3 });
-  expect(continueList({ from: 3, text: "  - " }, 4)).toEqual({ from: 3, to: 7, insert: "", caret: 3 });
+  // 字下げは残す
+  expect(continueList({ from: 3, text: "  - " }, 4)).toEqual({ from: 5, to: 7, insert: "", caret: 5 });
   // 「- 」より前のカーソルと、リストでない行はふつうの Enter
   expect(continueList({ from: 0, text: "- 買う" }, 1)).toBeNull();
   expect(continueList({ from: 0, text: "-買う" }, 3)).toBeNull();

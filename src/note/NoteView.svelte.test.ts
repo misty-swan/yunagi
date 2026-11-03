@@ -71,14 +71,14 @@ const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim(
 interface Started {
   core: Core;
   view: () => EditorView;
-  props: { refresh: number; visible: boolean };
+  props: { rev: number; visible: boolean };
 }
 
 async function start(body: string, opts: { font?: FontLoader; visible?: boolean } = {}): Promise<Started> {
   const core = mockCore(body);
   const save = new SaveStatus();
   tracker = new InputTracker(save, undefined, true);
-  const props = $state({ refresh: 0, visible: opts.visible ?? true });
+  const props = $state({ rev: core.note.rev, visible: opts.visible ?? true });
   let view: EditorView | null = null;
   app = mount(NoteView, {
     target: document.body,
@@ -86,8 +86,8 @@ async function start(body: string, opts: { font?: FontLoader; visible?: boolean 
       date: TODAY,
       save,
       presence: tracker.note,
-      get refresh() {
-        return props.refresh;
+      get rev() {
+        return props.rev;
       },
       onActivity: tracker.activity,
       get visible() {
@@ -131,6 +131,15 @@ test("その日のノートを出し、時刻付き見出しを時刻と件名�
   flushSync();
   expect(qa(".note-ed .cm-line")[1].classList.contains("cm-th-cur")).toBe(true);
   expect(text(q(".outline button.cur"))).toBe("10:00 定例");
+  // 本文の行を打っても、見出しが変わらなければ Outline は描き直さない
+  const first = qa(".outline button")[0];
+  view().dispatch({ changes: { from: view().state.doc.line(3).to, insert: "追加" } });
+  flushSync();
+  expect(qa(".outline button")[0]).toBe(first);
+  // 見出しの行を書き換えると、一覧も変わる
+  view().dispatch({ changes: { from: view().state.doc.line(2).to, insert: "会" } });
+  flushSync();
+  expect(qa(".outline button").map(text)).toEqual(["10:00 定例会", "13:30"]);
   // Outline の見出しを選ぶと、その見出しの行の終わりへ移る
   qa(".outline button")[1].click();
   flushSync();
@@ -188,7 +197,12 @@ test("エージェントの追記を取り込んでも、入力中の行とカ�
   );
   // エージェントが末尾に追記した
   core.note = { body: "a\nbXY\n## 15:00 追記", rev: 3 };
-  props.refresh++;
+  // 版が進んでいなければ読み直さない
+  const reads = core.calls.filter((c) => c.cmd === "get_text_doc").length;
+  props.rev = 2;
+  flushSync();
+  expect(core.calls.filter((c) => c.cmd === "get_text_doc").length).toBe(reads);
+  props.rev = 3;
   await until(() => view().state.doc.toString() === "a\nbXYZ\n## 15:00 追記");
   expect(view().state.selection.main.head).toBe(6);
   await until(() => core.note.body === "a\nbXYZ\n## 15:00 追記");

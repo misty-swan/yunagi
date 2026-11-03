@@ -204,7 +204,16 @@ blockers: Array<BoardItem>,
 /**
  * 振り返りの本文。まだ書いていない日は空。
  */
-reflection: string, note: NoteOutline, };
+reflection: string, note: NoteOutline, 
+/**
+ * 振り返りの版（`get_text_doc` の `rev`。まだ書いていない日は 0）。画面は、これが進んだときだけ
+ * 振り返りの本文を読み直して取り込む。
+ */
+reflectionRev: number, 
+/**
+ * ノートの版（同上）。
+ */
+noteRev: number, };
 
 /**
  * 件数（データモデル設計書 3章 item「件数の数え方」）。

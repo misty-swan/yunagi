@@ -210,27 +210,40 @@ pub struct OpenBoard {
 ///
 /// 項目・持ち越し先・振り返り・ノートは、同じ時点の内容を読む（途中でほかの接続が書いても食い違わない）。
 pub fn get_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageError> {
-    in_read_transaction(conn, || read_board(conn, date))
+    in_read_transaction(conn, || read_board(conn, date).map(|(b, _)| b))
 }
 
-fn read_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageError> {
+/// ボードと、振り返り・ノートの版（[`TextDocRevs`]）を読む。
+fn read_board(conn: &Connection, date: LogicalDate) -> Result<(Board, TextDocRevs), StorageError> {
     let (todos, blockers) = board_items(conn, date, |_| true)?;
-    let reflection = text_doc::get(conn, TextDoc::Reflection, date)?
-        .map(|row| row.body)
-        .unwrap_or_default();
-    let note = text_doc::get(conn, TextDoc::Note, date)?
+    let reflection = text_doc::get(conn, TextDoc::Reflection, date)?;
+    let note = text_doc::get(conn, TextDoc::Note, date)?;
+    let revs = TextDocRevs {
+        reflection: reflection.as_ref().map_or(0, |row| row.rev),
+        note: note.as_ref().map_or(0, |row| row.rev),
+    };
+    let note = note
         .map(|row| NoteOutline {
             headings: note_body::headings(&row.body),
             length: row.body.chars().count(),
         })
         .unwrap_or_default();
-    Ok(Board {
+    let board = Board {
         date,
         todos,
         blockers,
-        reflection,
+        reflection: reflection.map(|row| row.body).unwrap_or_default(),
         note,
-    })
+    };
+    Ok((board, revs))
+}
+
+/// 振り返り・ノートの版の番号（まだ書いていない日は 0。`get_text_doc` の `rev` と同じ）。画面は、
+/// ボードを読み直したときに、この版が進んだエディタだけ本文を読み直す。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextDocRevs {
+    pub reflection: i64,
+    pub note: i64,
 }
 
 /// 画面のボード：ボードと、項目の行に添える印（画面設計書 3章「各領域の表示」）。
@@ -241,12 +254,14 @@ pub struct ScreenBoard {
     pub agent_names: HashMap<Ulid, String>,
     /// エージェントによる未確認の変更がある項目の id（行頭の菱形。データモデル設計書 3章 change_log）。
     pub unseen: HashSet<Ulid>,
+    /// 振り返り・ノートの版。
+    pub revs: TextDocRevs,
 }
 
 /// 画面に出すその日のボード（[`get_board`] と、項目の行の印）。どれも同じ時点の内容を読む。
 pub fn get_screen_board(conn: &Connection, date: LogicalDate) -> Result<ScreenBoard, StorageError> {
     in_read_transaction(conn, || {
-        let board = read_board(conn, date)?;
+        let (board, revs) = read_board(conn, date)?;
         let clients: HashMap<Ulid, String> = agent_client::list(conn)?
             .into_iter()
             .map(|c| (c.id, c.name))
@@ -265,6 +280,7 @@ pub fn get_screen_board(conn: &Connection, date: LogicalDate) -> Result<ScreenBo
             board,
             agent_names,
             unseen,
+            revs,
         })
     })
 }
@@ -839,6 +855,19 @@ mod tests {
         );
         assert_eq!(b.unseen, HashSet::from([by_agent.id]));
         assert!(!b.unseen.contains(&mine.id));
+        // まだ書いていない日の版は 0。書くたびに、その本文の版だけが進む
+        assert_eq!(b.revs, TextDocRevs::default());
+        write(conn, TextDoc::Note, "2026-11-03", "## 10:00 定例");
+        write(conn, TextDoc::Note, "2026-11-03", "## 10:00 定例\nメモ");
+        write(conn, TextDoc::Reflection, "2026-11-03", "## 良かったこと");
+        let b = get_screen_board(conn, date("2026-11-03")).unwrap();
+        assert_eq!(
+            b.revs,
+            TextDocRevs {
+                reflection: 1,
+                note: 2
+            }
+        );
     }
 
     #[test]

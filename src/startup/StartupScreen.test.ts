@@ -77,7 +77,7 @@ function mockCore(startup: Startup, handle: Handler = () => undefined) {
         case "today":
           return TODAY;
         case "get_board":
-          return { date: a.date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 } };
+          return { date: a.date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 }, reflectionRev: 0, noteRev: 0 };
         case "get_text_doc":
           return { body: "", rev: 0 };
         case "report_ui_state":

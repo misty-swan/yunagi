@@ -42,7 +42,7 @@ function counts(c: Partial<Counts>): Counts {
 }
 
 function emptyBoard(date: string): Board {
-  return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 } };
+  return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 }, reflectionRev: 0, noteRev: 0 };
 }
 
 /** 模擬のコア（今日は 11-03 Tue。TODO 9 件のうち完了 3、障害 3 件は未解消、持ち越し 4）。 */
@@ -217,6 +217,16 @@ test("ノートモードではノートのエディタに移り、整理モー�
   expect($(".content > .mode:not([hidden]) .note-ed")).not.toBeNull();
   expect(document.activeElement).toBe($(".note-ed .cm-content"));
   press({ key: "j", code: "KeyJ", ctrlKey: true });
+  expect(document.activeElement).toBe(ref);
+  // マウスで Board / Note を切り替えても（ボタンにフォーカスが移っても）、戻ると振り返りに戻る
+  const seg = () => [...document.querySelectorAll<HTMLElement>(".seg button")];
+  seg()[1].focus();
+  seg()[1].click();
+  flushSync();
+  expect(document.activeElement).toBe($(".note-ed .cm-content"));
+  seg()[0].focus();
+  seg()[0].click();
+  flushSync();
   expect(document.activeElement).toBe(ref);
   // ノートと振り返りの両方に書いてから、どちらの守る行も1回の知らせに入る
   ref.querySelector(".cm-line")!.textContent = "ふりかえり";

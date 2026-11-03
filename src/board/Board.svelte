@@ -186,7 +186,7 @@
           date={model.date}
           {save}
           presence={tracker.reflection}
-          refresh={session.board}
+          rev={session.board?.reflectionRev ?? 0}
           onActivity={activity}
           bind:view={editor}
         />

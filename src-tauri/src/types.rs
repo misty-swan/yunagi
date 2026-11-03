@@ -426,6 +426,13 @@ pub struct Board {
     /// 振り返りの本文。まだ書いていない日は空。
     pub reflection: String,
     pub note: NoteOutline,
+    /// 振り返りの版（`get_text_doc` の `rev`。まだ書いていない日は 0）。画面は、これが進んだときだけ
+    /// 振り返りの本文を読み直して取り込む。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub reflection_rev: i64,
+    /// ノートの版（同上）。
+    #[cfg_attr(test, ts(type = "number"))]
+    pub note_rev: i64,
 }
 
 impl From<board::ScreenBoard> for Board {
@@ -434,6 +441,7 @@ impl From<board::ScreenBoard> for Board {
             board: b,
             mut agent_names,
             unseen,
+            revs,
         } = sb;
         let mut items = |list: Vec<board::BoardItem>| {
             list.into_iter()
@@ -457,6 +465,8 @@ impl From<board::ScreenBoard> for Board {
                 headings: b.note.headings.into_iter().map(Into::into).collect(),
                 length: b.note.length,
             },
+            reflection_rev: revs.reflection,
+            note_rev: revs.note,
         }
     }
 }

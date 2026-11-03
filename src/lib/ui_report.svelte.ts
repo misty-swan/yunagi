@@ -124,13 +124,6 @@ export class InputTracker {
     active = typeof document === "undefined" || document.hasFocus(),
   ) {
     this.active = active;
-    this.#unwatch = $effect.root(() => {
-      $effect(() => {
-        void save.saving;
-        void save.failing;
-        untrack(this.activity);
-      });
-    });
     this.#reporter = new UiReporter(() => {
       const now = Date.now();
       return {
@@ -138,6 +131,14 @@ export class InputTracker {
         editors: [...this.reflection.editors(now, this.active), ...this.note.editors(now, this.active)],
       };
     }, send);
+    // 送る部品を作ってから見張り始める
+    this.#unwatch = $effect.root(() => {
+      $effect(() => {
+        void save.saving;
+        void save.failing;
+        untrack(this.activity);
+      });
+    });
   }
 
   /** 入力・フォーカス・保存の状態などが変わった：知らせ直し、入力中でなくなる時刻にもう一度知らせ直す。 */

@@ -61,21 +61,10 @@
   // ---- モードを移るときのフォーカス ----
 
   let noteView = $state<EditorView | null>(null);
-  let boardEl = $state<HTMLElement | null>(null);
-  /** 整理モードで最後にフォーカスのあった所（ノートモードから戻るときに戻す）。 */
+  /** 整理モードで最後にフォーカスのあった所（ノートモードから戻るときに戻す）。マウスでモードを移る
+   *  ときはボタンにフォーカスが移るので、移る時点ではなく、整理モードの中のフォーカスを追い続ける。 */
   let boardFocus: Element | null = null;
   let lastMode = shell.mode;
-  // 隠す前に、整理モードのフォーカスを覚える
-  $effect.pre(() => {
-    const mode = shell.mode;
-    untrack(() => {
-      if (mode === "note" && lastMode === "board") {
-        const a = document.activeElement;
-        boardFocus = a !== null && boardEl?.contains(a) ? a : null;
-      }
-    });
-  });
-  // 出した後に、フォーカスを移す
   $effect(() => {
     const mode = shell.mode;
     untrack(() => {
@@ -101,7 +90,7 @@
       data-mode={shell.mode}
       data-date={session.date ?? ""}
     >
-      <div class="mode" hidden={shell.mode !== "board"} bind:this={boardEl}>
+      <div class="mode" hidden={shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
         <Board {session} {save} {notice} narrow={shell.narrow} {mac} {tracker} />
       </div>
       <div class="mode" hidden={shell.mode !== "note"}>
@@ -109,7 +98,7 @@
           date={session.board?.date ?? null}
           {save}
           presence={tracker.note}
-          refresh={session.board}
+          rev={session.board?.noteRev ?? 0}
           onActivity={tracker.activity}
           visible={shell.mode === "note"}
           narrow={shell.narrow}

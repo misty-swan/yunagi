@@ -171,6 +171,9 @@ export class TextDocEditor {
     this.#deferred = null;
     this.#closeSaver();
     this.view?.setState(this.#stateOf("", false));
+    // 読み終えるまでは前の日のカーソル行や見出しを残さない
+    p.cursorLines = [];
+    this.#o.onActivity();
     let snap: Snapshot | null = null;
     while (snap === null && this.#loading === d) {
       try {
@@ -192,10 +195,14 @@ export class TextDocEditor {
     this.#o.onActivity();
   }
 
-  /** コアの最新を読み直して取り込む（ボードを読み込み直したとき）。日 `d` を開いていなければ何もしない。 */
-  refresh(d: LogicalDate) {
+  /**
+   * コアの版が `rev` に進んだ（ボードを読み込み直したとき）：最新を読み直して取り込む。日 `d` を
+   * 開いていないときと、最後に保存した（取り込んだ）版より新しくないときは何もしない（項目だけが
+   * 変わったときに、本文を読み直さないため）。
+   */
+  refresh(d: LogicalDate, rev: number) {
     const s = this.#o.presence.saver;
-    if (s === null || s.date !== d) return;
+    if (s === null || s.date !== d || rev <= s.saved.rev) return;
     void core
       .getTextDoc(this.#o.doc, d)
       .then((latest) => {

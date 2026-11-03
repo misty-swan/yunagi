@@ -73,7 +73,7 @@ const bi = (i: Item, over: Partial<BoardItem> = {}): BoardItem => ({
 });
 
 function emptyBoard(date: string): BoardData {
-  return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 } };
+  return { date, todos: [], blockers: [], reflection: "", note: { headings: [], length: 0 }, reflectionRev: 0, noteRev: 0 };
 }
 
 interface Opts {

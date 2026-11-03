@@ -48,7 +48,7 @@ function bi(i: Item, over: Partial<BoardItem> = {}): BoardItem {
 }
 
 function board(todos: BoardItem[], blockers: BoardItem[] = [], date = DATE): Board {
-  return { date, todos, blockers, reflection: "", note: { headings: [], length: 0 } };
+  return { date, todos, blockers, reflection: "", note: { headings: [], length: 0 }, reflectionRev: 0, noteRev: 0 };
 }
 
 interface Call {

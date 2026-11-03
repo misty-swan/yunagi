@@ -11,7 +11,7 @@
   // - 設定のノートの書体が等幅なら、同梱の等幅の書体を読み込み終えてから当てる（src/lib/fonts.svelte.ts）。
   //   起動時は、読み込み終えるまで（上限 FONT_WAIT_MS）ノートの文字を出さない。
   // - 保存・取り込み・入力中の状態・日の移動は、振り返りと共通（src/lib/doc_editor.ts）。
-  import { RangeSetBuilder, StateField, type EditorState } from "@codemirror/state";
+  import { RangeSetBuilder, StateField, type EditorState, type Transaction } from "@codemirror/state";
   import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
   import { onMount, tick, untrack } from "svelte";
   import type { SaveStatus } from "../lib/autosave.svelte";
@@ -28,7 +28,7 @@
     date,
     save,
     presence,
-    refresh,
+    rev,
     onActivity,
     visible,
     narrow,
@@ -41,8 +41,8 @@
     date: LogicalDate | null;
     save: SaveStatus;
     presence: EditorPresence;
-    /** 変わるたびに、コアの最新を読み直して取り込む（ボードを読み込み直したとき）。 */
-    refresh: unknown;
+    /** ボードを読んだときのノートの版（進んだら、コアの最新を読み直して取り込む）。 */
+    rev: number;
     onActivity: () => void;
     /** ノートモードか（キーを受け持つか）。 */
     visible: boolean;
@@ -64,10 +64,11 @@
   interface Heading {
     /** 行の番号（1 始まり）。 */
     line: number;
-    /** 行の終わりの位置（Outline から移るときのカーソルの位置）。 */
-    end: number;
     time: string;
     title: string;
+    /** 時刻の始まりと終わり（行の先頭から）。 */
+    timeFrom: number;
+    timeTo: number;
   }
 
   /** 本文の時刻付き見出し（上から順）。 */
@@ -79,7 +80,7 @@
       // 見出しは「## 」で始まる行だけなので、先に安く絞る
       if (!line.text.startsWith("## ")) continue;
       const h = timeHeadingOf(line.text);
-      if (h !== null) out.push({ line: n, end: line.to, time: h.time, title: h.title });
+      if (h !== null) out.push({ line: n, time: h.time, title: h.title, timeFrom: h.timeFrom, timeTo: h.timeTo });
     }
     return out;
   }
@@ -106,25 +107,57 @@
     deco: DecorationSet;
   }
 
-  function outlineOf(state: EditorState, prev: Outline | null, docChanged: boolean): Outline {
-    const heads = prev !== null && !docChanged ? prev.heads : headingsOf(state);
+  const sameHeads = (a: readonly Heading[], b: readonly Heading[]) =>
+    a.length === b.length &&
+    a.every((h, i) => {
+      const o = b[i];
+      return h.line === o.line && h.time === o.time && h.title === o.title && h.timeFrom === o.timeFrom && h.timeTo === o.timeTo;
+    });
+
+  /**
+   * 書き換え `tr` で見出しが変わりうるか。行の数が変わらず、書き換えた行が前も後も「## 」で始まらなければ、
+   * 見出しの一覧は前のまま（本文の行を打っている間に、本文全体を読み直さないため）。
+   */
+  function touchesHeadings(tr: Transaction): boolean {
+    const before = tr.startState.doc;
+    const after = tr.state.doc;
+    if (before.lines !== after.lines) return true;
+    const heading = (doc: typeof before, from: number, to: number) => {
+      for (let n = doc.lineAt(from).number; n <= doc.lineAt(to).number; n++) {
+        if (doc.line(n).text.startsWith("## ")) return true;
+      }
+      return false;
+    };
+    let touched = false;
+    tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      touched ||= heading(before, fromA, toA) || heading(after, fromB, toB);
+    });
+    return touched;
+  }
+
+  function outlineOf(state: EditorState, prev: Outline | null, tr: Transaction | null): Outline {
+    let heads = prev?.heads ?? [];
+    if (prev === null || (tr !== null && tr.docChanged && touchesHeadings(tr))) {
+      const next = headingsOf(state);
+      // 同じなら前の一覧を使う（Outline を描き直さないため）
+      heads = prev !== null && sameHeads(next, prev.heads) ? prev.heads : next;
+    }
     const cur = currentOf(state, heads);
-    if (prev !== null && !docChanged && prev.cur === cur) return prev;
+    if (prev !== null && !tr?.docChanged && prev.cur === cur) return prev;
     const b = new RangeSetBuilder<Decoration>();
     for (const h of heads) {
-      const line = state.doc.line(h.line);
-      const th = timeHeadingOf(line.text)!;
-      b.add(line.from, line.from, h.line === cur ? headLineCur : headLine);
-      b.add(line.from, line.from + th.timeFrom, mdMark);
-      b.add(line.from + th.timeFrom, line.from + th.timeTo, timeMark);
+      const from = state.doc.line(h.line).from;
+      b.add(from, from, h.line === cur ? headLineCur : headLine);
+      b.add(from, from + h.timeFrom, mdMark);
+      b.add(from + h.timeFrom, from + h.timeTo, timeMark);
     }
     return { heads, cur, deco: b.finish() };
   }
 
   /** 見出しの一覧と飾り。本文かカーソルが変わったときだけ求め直す。 */
   const outlineField = StateField.define<Outline>({
-    create: (state) => outlineOf(state, null, true),
-    update: (value, tr) => (tr.docChanged || tr.selection ? outlineOf(tr.state, value, tr.docChanged) : value),
+    create: (state) => outlineOf(state, null, null),
+    update: (value, tr) => (tr.docChanged || tr.selection ? outlineOf(tr.state, value, tr) : value),
     provide: (f) => EditorView.decorations.from(f, (o) => o.deco),
   });
 
@@ -189,7 +222,8 @@
   function jump(h: Heading) {
     const v = view;
     if (v === null) return;
-    v.dispatch({ selection: { anchor: Math.min(h.end, v.state.doc.length) }, scrollIntoView: true });
+    if (h.line > v.state.doc.lines) return;
+    v.dispatch({ selection: { anchor: v.state.doc.line(h.line).to }, scrollIntoView: true });
     v.focus();
   }
 
@@ -210,6 +244,9 @@
 
   $effect(() => {
     const wanted = prefs.noteFont;
+    // 設定が変わるか、部品を片付けたら、前の待ちと読み込みの結果は使わない
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     untrack(() => {
       if (wanted === "body") {
         setFont("body");
@@ -221,26 +258,42 @@
         ready = true;
         return;
       }
-      const timer = setTimeout(() => (ready = true), FONT_WAIT_MS);
+      timer = setTimeout(() => (ready = true), FONT_WAIT_MS);
       void font.load().then((ok) => {
+        if (done) return;
         clearTimeout(timer);
-        if (ok && prefs.noteFont === "mono") setFont("mono");
+        if (ok) setFont("mono");
         ready = true;
       });
     });
+    return () => {
+      done = true;
+      clearTimeout(timer);
+    };
   });
+
+  /** 書体を変えた後、出したときに測り直してカーソルの行を画面に残す（隠れている間は測れないため）。 */
+  let remeasure = $state(false);
 
   /** 書体を変える。字の幅が変わり折り返しが変わるので、測り直して、カーソルの行を画面に残す。 */
   function setFont(next: NoteFont) {
     if (applied === next) return;
     applied = next;
-    void tick().then(() => {
-      const v = view;
-      if (v === null) return;
-      v.requestMeasure();
-      v.dispatch({ effects: EditorView.scrollIntoView(v.state.selection.main.head, { y: "nearest" }) });
-    });
+    remeasure = true;
   }
+
+  $effect(() => {
+    if (!remeasure || !visible) return;
+    untrack(() => {
+      remeasure = false;
+      void tick().then(() => {
+        const v = view;
+        if (v === null) return;
+        v.requestMeasure();
+        v.dispatch({ effects: EditorView.scrollIntoView(v.state.selection.main.head, { y: "nearest" }) });
+      });
+    });
+  });
 
   onMount(() => {
     view = editor.mount(host!);
@@ -256,11 +309,11 @@
     if (view !== null && d !== null) untrack(() => void editor.open(d));
   });
 
-  // ボードを読み込み直したら、ノートの最新も読み直して取り込む
+  // ボードを読み込み直してノートの版が進んでいたら、最新を読み直して取り込む
   $effect(() => {
-    void refresh;
+    const r = rev;
     const d = date;
-    if (d !== null) untrack(() => editor.refresh(d));
+    if (d !== null) untrack(() => editor.refresh(d, r));
   });
 </script>
 

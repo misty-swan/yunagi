@@ -17,15 +17,15 @@
     date,
     save,
     presence,
-    refresh,
+    rev,
     onActivity,
     view = $bindable(null),
   }: {
     date: LogicalDate;
     save: SaveStatus;
     presence: EditorPresence;
-    /** 変わるたびに、コアの最新を読み直して取り込む（ボードを読み込み直したとき）。 */
-    refresh: unknown;
+    /** ボードを読んだときの振り返りの版（進んだら、コアの最新を読み直して取り込む）。 */
+    rev: number;
     onActivity: () => void;
     view?: EditorView | null;
   } = $props();
@@ -103,11 +103,11 @@
     if (view !== null) untrack(() => void editor.open(d));
   });
 
-  // ボードを読み込み直したら、振り返りの最新も読み直して取り込む
+  // ボードを読み込み直して振り返りの版が進んでいたら、最新を読み直して取り込む
   $effect(() => {
-    void refresh;
+    const r = rev;
     const d = date;
-    untrack(() => editor.refresh(d));
+    untrack(() => editor.refresh(d, r));
   });
 </script>
 
