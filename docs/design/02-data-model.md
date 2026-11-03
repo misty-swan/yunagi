@@ -232,7 +232,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | key | TEXT PK | 設定のキー |
 | value | TEXT（JSON） | 値。行が無いキーは既定値を使う |
 
-キーと値（JSON）の組で保持する（`carryover_review_threshold` は 1 以上の整数で、それ以外の値は既定の 3 として扱う。`day_boundary` は `"HH:MM"`（00:00〜23:59）の文字列で、それ以外の値は既定の `04:00` として扱う（壊れた設定で今日の日付を決められず、画面が開けなくならないように）。2026-11-03 決定）。主なキー：`day_boundary`（既定 `04:00`）、`layout`、`theme`（`system` / `light` / `dark`。既定 `system`）、`font_size`、`vim_mode`、`shortcuts`、`locale`、`carryover_review_threshold`（既定 3）、`update_check`（更新の自動確認。既定 `true`）、`meter_hours`（凪メーターの時間帯。既定 `09:00-19:00`）、`sidebar`（サイドバーの開閉の状態）、`vim_ime_restore`（挿入モードに入ったとき直前の入力状態に戻す。既定 `true`。操作仕様書 4.4）、`license`（サポーターライセンスのキーと最終確認時刻）。
+キーと値（JSON）の組で保持する（`carryover_review_threshold` は 1 以上の整数で、それ以外の値は既定の 3 として扱う。`day_boundary` は `"HH:MM"`（00:00〜23:59）の文字列で、それ以外の値は既定の `04:00` として扱う（壊れた設定で今日の日付を決められず、画面が開けなくならないように）。2026-11-03 決定）。主なキー：`day_boundary`（既定 `04:00`）、`layout`、`theme`（`system` / `light` / `dark`。既定 `system`）、`font_size`（13〜19 の整数（px）。既定 15。それ以外の値は 15 として扱う。デザインガイド 4章）、`note_font`（ノートの書体。`body`（本文と同じ）/ `mono`（等幅。デザインガイド 4章）。既定 `body`。それ以外の値は `body` として扱う）、`vim_mode`、`shortcuts`、`locale`、`carryover_review_threshold`（既定 3）、`update_check`（更新の自動確認。既定 `true`）、`meter_hours`（凪メーターの時間帯。既定 `09:00-19:00`）、`sidebar`（サイドバーの開閉の状態）、`vim_ime_restore`（挿入モードに入ったとき直前の入力状態に戻す。既定 `true`。操作仕様書 4.4）、`license`（サポーターライセンスのキーと最終確認時刻）。
 
 - `shortcuts` には、利用者が初期割当から変えたものだけを持つ。初期割当は操作仕様書 2章に従い、Vimモードの有無で変わる割当（Windows・Linux の前日・翌日へ移動など）も、変えていなければ初期割当に従う。
 - バックアップの世代数は設定に持たない。MVP では直近7日分に固定する（アーキテクチャ設計書 6.2）。
