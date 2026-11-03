@@ -24,8 +24,9 @@ use rusqlite::{Connection, OpenFlags};
 
 use super::data_dir::{self, DataDirError};
 use super::migration::{self, Migration};
-use super::{Database, ErrorChain, StorageError};
+use super::{Database, StorageError};
 use crate::domain::logical_date::LogicalDate;
+use crate::error::ErrorChain;
 
 /// 定期バックアップを残す数（日付の新しいものから）。
 ///
@@ -545,14 +546,15 @@ impl fmt::Display for BackupError {
                 "restore failed and the previous data was put back from {}",
                 saved.display()
             ),
-            // 原因が2つある。source() は復元の失敗を返すので、戻す失敗はその原因までここに書く
+            // 原因が2つある。source() は復元の失敗を返すので、戻す失敗はその原因までここに書く。
+            // source() の文が後ろにつながったとき、復元の原因と読めるよう、復元の失敗を最後に書く
             Self::RollbackFailed {
                 rollback_error,
                 saved,
                 ..
             } => write!(
                 f,
-                "putting back the previous data from {} also failed ({}) after the restore failed",
+                "putting back the previous data from {} failed ({}); the restore failed",
                 saved.display(),
                 ErrorChain(rollback_error.as_ref())
             ),
@@ -1048,8 +1050,8 @@ mod tests {
     fn assert_rejected(env: &Env, db: &mut Database, backup: &Path) -> BackupError {
         let before = names(&env.backups());
         let err = db.restore_backup(backup).unwrap_err();
-        assert_eq!(get(db.connection(), "a"), Some(1), "{err}");
-        assert_eq!(names(&env.backups()), before, "{err}");
+        assert_eq!(get(db.connection(), "a"), Some(1), "{err:?}");
+        assert_eq!(names(&env.backups()), before, "{err:?}");
         err
     }
 

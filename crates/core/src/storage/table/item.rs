@@ -286,7 +286,7 @@ mod tests {
         let err = insert(db.connection(), &todo(date("2026-11-03"), "x", "a0")).unwrap_err();
         assert!(
             matches!(&err, StorageError::Sqlite(e) if e.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation)),
-            "{err}"
+            "{err:?}"
         );
     }
 

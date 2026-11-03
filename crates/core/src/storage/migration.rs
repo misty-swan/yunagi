@@ -467,7 +467,7 @@ mod tests {
             version, backup, ..
         } = &err
         else {
-            panic!("unexpected error: {err}");
+            panic!("unexpected error: {err:?}");
         };
         assert_eq!(*version, 3);
         assert!(backup.exists());
@@ -600,7 +600,7 @@ mod tests {
             .expect("migration should fail");
         assert!(
             matches!(err, StorageError::MigrationFailed { version: 2, .. }),
-            "{err}"
+            "{err:?}"
         );
         assert_eq!(snapshot(&Connection::open(&path).unwrap()), before);
     }
@@ -651,7 +651,7 @@ mod tests {
         let err = open_with(&path, &[V1]).err().expect("should refuse");
         assert!(
             matches!(err, StorageError::UnsupportedSchema { found: -1, .. }),
-            "{err}"
+            "{err:?}"
         );
     }
 

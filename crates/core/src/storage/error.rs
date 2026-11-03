@@ -5,6 +5,7 @@ use std::io;
 use std::path::PathBuf;
 
 use super::LockError;
+use crate::error::ErrorChain;
 
 /// ストレージの操作が失敗した理由。
 #[derive(Debug)]
@@ -66,7 +67,8 @@ impl fmt::Display for StorageError {
                 backup.display()
             ),
             // 原因が2つある。source() はマイグレーションの失敗を返すので、戻す失敗は
-            // その原因までここに書く
+            // その原因までここに書く。source() の文が後ろにつながったとき、マイグレーションの
+            // 原因と読めるよう、マイグレーションの失敗を最後に書く
             Self::RestoreFailed {
                 version,
                 name,
@@ -75,7 +77,7 @@ impl fmt::Display for StorageError {
                 ..
             } => write!(
                 f,
-                "restoring from {} also failed ({}) after migration {version} ({name}) failed",
+                "restoring from {} failed ({}); migration {version} ({name}) failed",
                 backup.display(),
                 ErrorChain(restore_error.as_ref())
             ),
@@ -95,39 +97,6 @@ impl std::error::Error for StorageError {
             }
             Self::WalUnavailable { .. } | Self::UnsupportedSchema { .. } => None,
         }
-    }
-}
-
-/// エラーの文に、原因（[`source()`](std::error::Error::source)）の文を `: ` でつないで
-/// 最後までたどって表示する。利用者やログに1行で出すときに使う（README「エラーの表示」）。
-///
-/// このクレートのエラーは Display に原因の文を含めないが、rusqlite などの外部のエラーには、
-/// Display に原因の文を含め、同時に `source()` でも返すものがある。二重に出さないよう、
-/// 1つ前の文にすでに含まれている文は省く（たどるのは続ける）。
-///
-/// ```
-/// use yunagi_core::storage::{ErrorChain, StorageError};
-///
-/// let err = StorageError::from(std::io::Error::other("disk full"));
-/// assert_eq!(err.to_string(), "file error");
-/// assert_eq!(ErrorChain(&err).to_string(), "file error: disk full");
-/// ```
-pub struct ErrorChain<'a>(pub &'a (dyn std::error::Error + 'static));
-
-impl fmt::Display for ErrorChain<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut prev = self.0.to_string();
-        f.write_str(&prev)?;
-        let mut next = self.0.source();
-        while let Some(e) = next {
-            let text = e.to_string();
-            if !text.is_empty() && !prev.contains(&text) {
-                write!(f, ": {text}")?;
-            }
-            prev = text;
-            next = e.source();
-        }
-        Ok(())
     }
 }
 
@@ -153,6 +122,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::error::ErrorChain;
     use crate::storage::backup::BackupError;
     use crate::storage::data_dir::{DataDirError, DefaultDir};
     use crate::storage::{CloseError, Database, DbLock};
@@ -236,9 +206,29 @@ mod tests {
         // 戻す失敗は source() で返さないので、その原因（permission denied）まで Display に書く
         check(
             &err,
-            "restoring from /b/pre-2.db also failed (file error: permission denied) after migration 2 (add_notes) failed",
+            "restoring from /b/pre-2.db failed (file error: permission denied); migration 2 (add_notes) failed",
             Some("Query is not read-only"),
-            "restoring from /b/pre-2.db also failed (file error: permission denied) after migration 2 (add_notes) failed: Query is not read-only",
+            "restoring from /b/pre-2.db failed (file error: permission denied); migration 2 (add_notes) failed: Query is not read-only",
+        );
+    }
+
+    #[test]
+    fn restore_failed_keeps_main_cause_with_the_same_text() {
+        // ディスクがいっぱいで、マイグレーションも戻すのも同じ失敗になったとき。
+        // 戻す失敗の文に同じ文が入っていても、マイグレーションの原因を省かない
+        let sqlite = sqlite_err().to_string();
+        let err = StorageError::RestoreFailed {
+            version: 2,
+            name: "add_notes",
+            source: sqlite_err(),
+            restore_error: Box::new(StorageError::Sqlite(sqlite_err())),
+            backup: "/b/pre-2.db".into(),
+        };
+        assert_eq!(
+            ErrorChain(&err).to_string(),
+            format!(
+                "restoring from /b/pre-2.db failed (database error: {sqlite}); migration 2 (add_notes) failed: {sqlite}"
+            )
         );
     }
 
@@ -367,9 +357,9 @@ mod tests {
                 }),
                 saved: "/b/pre-restore.db".into(),
             },
-            "putting back the previous data from /b/pre-restore.db also failed (could not rename /d/yunagi.db: permission denied) after the restore failed",
+            "putting back the previous data from /b/pre-restore.db failed (could not rename /d/yunagi.db: permission denied); the restore failed",
             Some("database error"),
-            "putting back the previous data from /b/pre-restore.db also failed (could not rename /d/yunagi.db: permission denied) after the restore failed: database error: Query is not read-only",
+            "putting back the previous data from /b/pre-restore.db failed (could not rename /d/yunagi.db: permission denied); the restore failed: database error: Query is not read-only",
         );
     }
 
