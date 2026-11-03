@@ -237,7 +237,8 @@ impl Database {
     /// 保存先は、ロックを取った後で `config.json` から求める（[`Database::open`]）。
     /// 開けなければ（`config.json` が壊れている、保存先にデータベースが無いなど）、
     /// ロックを離してから [`OpenError`] を返す。データベースが無くても、初めて使うとき
-    /// 以外は作らない（[`OpenError::NotFound`]）。
+    /// 以外は作らない（[`OpenError::NotFound`]）。開く・マイグレーションの失敗は、
+    /// [`OpenError::Storage`] に包まず [`StorageError`] のまま返す（ロックの失敗と同じ経路）。
     ///
     /// ロックが取れなければ、最大 `wait` 待ってから [`StorageError::Lock`] を返す。
     /// `operation` が失敗しても、閉じてロックを離してからその失敗を返す（閉じるのにも
@@ -253,7 +254,11 @@ impl Database {
         E: From<StorageError> + From<OpenError>,
     {
         let lock = DbLock::acquire(default_dir, wait).map_err(StorageError::Lock)?;
-        let mut db = Database::open(lock)?;
+        // ストレージの失敗（開く・マイグレーション）は、ロックの失敗と同じく StorageError で渡す
+        let mut db = Database::open(lock).map_err(|e| match e {
+            OpenError::Storage(e) => E::from(e),
+            e => E::from(e),
+        })?;
         let result = operation(&mut db);
         let closed = db.close();
         let value = result?;
@@ -552,6 +557,26 @@ mod tests {
         // データベースは作らず、ロックは離している
         assert!(!super::super::data_dir::database_path(dir.path()).exists());
         drop(DbLock::acquire(path, Duration::ZERO).unwrap());
+    }
+
+    #[test]
+    fn with_locked_reports_storage_failures_as_storage_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = &dd(&dir);
+        // 新しい版で作られたデータベース（開くと失敗する）
+        rusqlite::Connection::open(super::super::data_dir::database_path(dir.path()))
+            .unwrap()
+            .pragma_update(None, "user_version", 9999)
+            .unwrap();
+        let err =
+            Database::with_locked(path, Duration::ZERO, |_db| Ok::<_, TestError>(())).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TestError::Storage(StorageError::UnsupportedSchema { .. })
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

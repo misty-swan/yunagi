@@ -2,8 +2,8 @@
 //!
 //! - 場所は、ロック（[`DbLock`]）の既定ディレクトリの `config.json` から求める。
 //!   呼び出し側はパスを渡せないので、保存先を移した後に古いパスで開くことはない。
-//! - [`Database::open`] は、データベースが無いとき、初めて使うとき（[`is_first_use`]）に
-//!   だけ新しく作る。それ以外は [`OpenError::NotFound`] を返し、空のデータベースを作らない
+//! - [`Database::open`] は、データベースが無いとき、初めて使うとき（保存先が既定ディレクトリの
+//!   ままで、データベースの跡もバックアップも無いとき）にだけ新しく作る。それ以外は [`OpenError::NotFound`] を返し、空のデータベースを作らない
 //!   （クラウド同期の途中でファイルがまだ届いていない、外付けの保存先を繋いでいないなど。
 //!   黙って作ると、利用者には「データが消えた」ように見える）。
 //! - 新しく作るのは [`Database::create`] で明示する。
@@ -13,6 +13,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::backup::{self, BackupKind};
 use super::data_dir::{self, DataDirError};
 use super::migration::Migration;
 use super::{Database, DbLock, StorageError};
@@ -26,15 +27,6 @@ pub(super) enum Intent {
     Create,
 }
 
-/// データベースの場所で見つかったもの。
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Found {
-    /// 中身のある `yunagi.db` がある（読めないものも含む。開くときに SQLite が確かめる）。
-    Database,
-    /// `yunagi.db` が無いか、空（0 バイト）のファイル。
-    Missing,
-}
-
 impl Database {
     /// ロックの既定ディレクトリの `config.json` から場所を求め、`intent` に従って開く・作る。
     pub(super) fn open_located(
@@ -43,35 +35,42 @@ impl Database {
         migrations: &[Migration],
     ) -> Result<Self, OpenError> {
         let default_dir = lock.default_dir().path().to_path_buf();
-        let data_dir = data_dir::resolve_data_dir(lock.default_dir())?;
-        let path = data_dir::database_path(&data_dir);
-        match (intent, find(&path)) {
-            (Intent::Open, Found::Database) => {}
-            (Intent::Open, Found::Missing) => {
-                if !is_first_use(&default_dir, &data_dir, &path) {
-                    let configured_in = (data_dir != default_dir)
-                        .then(|| default_dir.join(data_dir::CONFIG_FILE_NAME));
-                    return Err(OpenError::NotFound(DatabaseNotFound {
-                        data_dir_exists: data_dir.is_dir(),
-                        path,
-                        data_dir,
-                        configured_in,
-                    }));
+        let path = lock.database_path()?;
+        let data_dir = path.parent().unwrap_or(&default_dir).to_path_buf();
+        // 表記が違っても（シンボリックリンク・大文字小文字など）、実体が同じなら既定ディレクトリのまま
+        let customized = data_dir::resolve(&data_dir) != data_dir::resolve(&default_dir);
+        let not_found = |path: PathBuf, data_dir: PathBuf| {
+            OpenError::NotFound(DatabaseNotFound {
+                data_dir_exists: data_dir.is_dir(),
+                configured_in: customized.then(|| default_dir.join(data_dir::CONFIG_FILE_NAME)),
+                path,
+                data_dir,
+            })
+        };
+        let exists = has_database(&path);
+        let create = match intent {
+            Intent::Open if exists => false,
+            Intent::Open => {
+                if customized || trace_of_database(&path).is_some() || has_backups(&data_dir) {
+                    return Err(not_found(path, data_dir));
                 }
+                true
             }
-            (Intent::Create, Found::Database) => return Err(OpenError::AlreadyExists(path)),
-            (Intent::Create, Found::Missing) => {
-                // 取り残された -wal があると、SQLite が新しいデータベースに写し込んでしまう
-                if let Some(wal) = wal_of(&path).filter(|w| w.symlink_metadata().is_ok()) {
-                    return Err(OpenError::AlreadyExists(wal));
+            Intent::Create if exists => return Err(OpenError::AlreadyExists(path)),
+            Intent::Create => {
+                if let Some(trace) = trace_of_database(&path) {
+                    return Err(OpenError::AlreadyExists(trace));
                 }
-                // 宛先の無いシンボリックリンクは、SQLite がリンク先に作ってしまう
-                if path.is_symlink() {
-                    return Err(OpenError::AlreadyExists(path));
+                // 繋いでいないドライブの代わりに、別の場所へ作らないよう、フォルダは作らない
+                if !data_dir.is_dir() {
+                    return Err(not_found(path, data_dir));
                 }
+                true
             }
-        }
-        Ok(Self::connect(lock, &path, migrations)?)
+        };
+        // 今あるものを開くときは、作らない形で開く（確かめた後でファイルが消えても、
+        // SQLite に空のデータベースを作らせない）
+        Ok(Self::connect(lock, &path, migrations, create)?)
     }
 }
 
@@ -81,45 +80,46 @@ impl Database {
 /// 初めて作る途中で止まったもの）。SQLite は 0 バイトのファイルを空のデータベースとして開くため、
 /// 区別しないと空のデータベースを作るのと同じことになる。
 /// 調べられない（権限が無いなど）ときは「ある」とし、開くときの SQLite の失敗に任せる。
-fn find(path: &Path) -> Found {
+fn has_database(path: &Path) -> bool {
     match fs::metadata(path) {
-        Ok(m) if m.is_file() && m.len() == 0 => Found::Missing,
-        Ok(_) => Found::Database,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Found::Missing,
-        Err(_) => Found::Database,
+        Ok(m) => !(m.is_file() && m.len() == 0),
+        Err(e) => e.kind() != io::ErrorKind::NotFound,
     }
 }
 
-/// 初めて使うときか：保存先が既定ディレクトリのまま（`config.json` が無い・`data_dir` の項目が
-/// 無い・既定ディレクトリを指す）で、そこにデータベースの跡（`yunagi.db` のシンボリックリンク、
-/// `yunagi.db` の `-wal`、`backups/` の中身）も無い。`yunagi.db` が無いことは呼び出し側が確かめる。
+/// `yunagi.db`（`db_path`）が無いときに残っている、データベースを置いたことがある跡：
 ///
-/// 保存先を変えていれば、元の場所でデータベースを作ったことがある（保存先の変更はアプリの
-/// 設定画面で、データベースを開いてから行う）ので、初めてではない。`backups/` に何かあれば、
-/// データベースが消えたのであって初めてではない（黙って作らず、復元を案内する）。
-fn is_first_use(default_dir: &Path, data_dir: &Path, db_path: &Path) -> bool {
-    if data_dir != default_dir {
-        return false;
-    }
-    // 宛先の無いシンボリックリンク（リンク先のドライブを繋いでいないなど）は、データベースを
-    // 置いたことがある跡。作ると SQLite がリンク先に作ってしまう
+/// - 宛先の無い `yunagi.db` のシンボリックリンク（リンク先のドライブを繋いでいないなど）。
+///   作ると、SQLite がリンク先に作ってしまう。
+/// - 中身のある `-wal`。作ると、SQLite が新しいデータベースに写し込んでしまう
+///   （0 バイトの `-wal` は SQLite が使わないので、跡とみなさない）。
+fn trace_of_database(db_path: &Path) -> Option<PathBuf> {
     if db_path.is_symlink() {
-        return false;
+        return Some(db_path.to_path_buf());
     }
-    if wal_of(db_path).is_some_and(|w| w.symlink_metadata().is_ok()) {
-        return false;
-    }
-    match fs::read_dir(data_dir::backups_dir(data_dir)) {
-        Ok(mut entries) => entries.next().is_none(),
-        Err(e) => e.kind() == io::ErrorKind::NotFound,
+    let mut name = db_path.file_name()?.to_os_string();
+    name.push("-wal");
+    let wal = db_path.with_file_name(name);
+    match fs::symlink_metadata(&wal) {
+        Ok(m) if m.is_file() && m.len() == 0 => None,
+        Ok(_) => Some(wal),
+        Err(_) => None,
     }
 }
 
-/// データベースのファイル `db` の `-wal`。
-fn wal_of(db: &Path) -> Option<PathBuf> {
-    let mut name = db.file_name()?.to_os_string();
-    name.push("-wal");
-    Some(db.with_file_name(name))
+/// 保存先 `data_dir` の `backups/` に、データベースがあった証拠になるバックアップがあるか。
+///
+/// 名前の形に合わないもの（利用者が置いたもの・OS が作るファイル・書きかけの一時ファイル）と、
+/// 番号 0 からのマイグレーション前のもの（新しく作ったデータベースを初めて開くときに作られ、
+/// 成功すると消される。初めて使うときに中断すると残る）は数えない。
+/// 一覧を読めないときは、あるものとみなす（黙って作らない）。
+fn has_backups(data_dir: &Path) -> bool {
+    match backup::list_backups(data_dir) {
+        Ok(backups) => backups
+            .iter()
+            .any(|b| !matches!(b.kind, BackupKind::PreMigration { from: 0, .. })),
+        Err(_) => true,
+    }
 }
 
 /// データベースを開けなかった・作れなかった理由。
@@ -329,6 +329,64 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_first_use_with_its_own_backup_is_still_first_use() {
+        let env = Env::new();
+        // 初めて開く途中で止まった：0 バイトの yunagi.db と、番号 0 からのマイグレーション前の
+        // バックアップ（成功すれば消えるもの）、書きかけの一時ファイル、OS が作るファイルが残った
+        fs::write(database_path(&env.default), b"").unwrap();
+        let backups = backups_dir(&env.default);
+        fs::create_dir(&backups).unwrap();
+        fs::write(backups.join("pre-migration-v0-to-v3-1762000000.db"), b"").unwrap();
+        fs::write(backups.join("daily-2026-11-03-1762000000.db.tmp"), b"").unwrap();
+        fs::write(backups.join(".DS_Store"), b"").unwrap();
+        let db = env.open().unwrap();
+        write_note(&db, "ok");
+        assert_eq!(read_note(&db), "ok");
+    }
+
+    #[test]
+    fn default_dir_spelled_differently_in_config_is_still_the_default() {
+        let env = Env::new();
+        // config.json が、既定ディレクトリを別の表記（ここではシンボリックリンク）で指す
+        let alias = env.root.join("alias");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&env.default, &alias).unwrap();
+        #[cfg(not(unix))]
+        let alias = env.default.join(".");
+        env.point_config_to(&alias);
+        drop(env.open().unwrap());
+        assert!(database_path(&env.default).exists());
+    }
+
+    #[test]
+    fn empty_wal_is_not_a_trace_of_a_database() {
+        let env = Env::new();
+        fs::write(env.default.join("yunagi.db-wal"), b"").unwrap();
+        drop(env.open().unwrap());
+        let sync = env.root.join("sync");
+        fs::create_dir(&sync).unwrap();
+        fs::write(sync.join("yunagi.db-wal"), b"").unwrap();
+        env.point_config_to(&sync);
+        not_found(env.open());
+        drop(env.create().unwrap());
+    }
+
+    #[test]
+    fn opening_an_existing_database_never_creates_one() {
+        // 確かめた後でファイルが消えても、作らない形で開くので、SQLite は作らない
+        let env = Env::new();
+        let path = database_path(&env.default);
+        let err = Database::connect(
+            env.lock(),
+            &path,
+            super::super::migration::MIGRATIONS,
+            false,
+        );
+        assert!(err.is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn missing_database_after_moving_the_data_dir_is_not_created() {
         let env = Env::new();
         drop(env.open().unwrap());
@@ -391,7 +449,7 @@ mod tests {
         assert!(e.to_string().contains("does not exist"), "{e}");
         assert!(!env.root.join("external").exists());
         // 明示して作るときも、フォルダは作らない（繋いでいないドライブの代わりに作らないように）
-        assert!(matches!(env.create(), Err(OpenError::Storage(_))));
+        assert!(!not_found(env.create()).data_dir_exists);
         assert!(!env.root.join("external").exists());
     }
 

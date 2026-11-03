@@ -19,7 +19,7 @@ mod ulid;
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub use error::StorageError;
 pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
@@ -70,7 +70,7 @@ impl Database {
     /// （中身のある `yunagi.db`、その `-wal`、`yunagi.db` のシンボリックリンク）があれば、
     /// 上書きせずに [`OpenError::AlreadyExists`] を返す。中身の無い（0 バイトの）`yunagi.db` は
     /// 作り直す。保存先のフォルダは作らない（繋いでいないドライブの代わりに作らないように）ので、
-    /// 無ければ失敗する。
+    /// 無ければ [`OpenError::NotFound`]（`data_dir_exists` が `false`）を返す。
     ///
     /// バックアップから戻すときは、作ってから [`Database::restore_backup`] を呼ぶ。
     pub fn create(lock: DbLock) -> Result<Self, OpenError> {
@@ -85,17 +85,23 @@ impl Database {
         path: &Path,
         migrations: &[migration::Migration],
     ) -> Result<Self, StorageError> {
-        Self::connect(lock, path, migrations)
+        Self::connect(lock, path, migrations, true)
     }
 
-    /// `path` のデータベースを開き（無ければ SQLite が作る）、マイグレーションを適用する。
+    /// `path` のデータベースを開き、マイグレーションを適用する。`create` なら、無ければ
+    /// SQLite が作る。`create` でなければ作らず、無ければ失敗する。
     /// 開いてよい場所かは、呼び出し側（[`Database::open_located`]）が確かめる。
     fn connect(
         lock: DbLock,
         path: &Path,
         migrations: &[migration::Migration],
+        create: bool,
     ) -> Result<Self, StorageError> {
-        let mut conn = Connection::open(path)?;
+        let mut flags = OpenFlags::default();
+        if !create {
+            flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
+        }
+        let mut conn = Connection::open_with_flags(path, flags)?;
         // 新しい版で作られたデータベースは、WAL への切り替えなどでファイルを書き換える前に断る
         migration::check_supported(&conn, migrations)?;
         configure(&conn)?;
