@@ -16,8 +16,8 @@ use yunagi_core::domain::{board, export, item, text_doc};
 
 use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
 use crate::types::{
-    Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, Position,
-    Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, Overview,
+    Position, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -59,6 +59,17 @@ pub async fn today(core: Core<'_>) -> Result<Date, CommandError> {
 pub async fn get_board(core: Core<'_>, date: Date) -> Result<Board, CommandError> {
     blocking(&core, move |core| {
         core.read(|conn| board::get_board(conn, date.0).map(Board::from))
+    })
+    .await
+}
+
+/// 画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数：表示している日 `date` の件数、
+/// 今日と Recent の日の件数、エージェントによる未確認の変更の数。
+#[tauri::command]
+pub async fn get_overview(core: Core<'_>, date: Date) -> Result<Overview, CommandError> {
+    blocking(&core, move |core| {
+        let today = core.today()?;
+        core.read(|conn| board::overview(conn, date.0, today).map(Overview::new))
     })
     .await
 }

@@ -39,6 +39,7 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::create_database,
         commands::today,
         commands::get_board,
+        commands::get_overview,
         commands::add_item,
         commands::save_item,
         commands::delete_item,

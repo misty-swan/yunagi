@@ -44,13 +44,14 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 12] = [
+    let tests: [(&str, Test); 13] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
         ),
         ("item_commands", item_commands),
         ("text_doc_commands", text_doc_commands),
+        ("overview_counts", overview_counts),
         (
             "export_markdown_writes_one_file_per_day",
             export_markdown_writes_one_file_per_day,
@@ -491,6 +492,54 @@ fn text_doc_commands(_: &Path) {
     assert_eq!(board["note"]["length"], 14);
     assert_eq!(board["note"]["headings"][0]["text"], "10:00 定例");
     assert_eq!(board["note"]["headings"][0]["line"], 1);
+}
+
+/// 画面の骨組みの件数（`get_overview`）：表示している日の件数、今日から始まる Recent、
+/// エージェントによる未確認の変更の数。
+fn overview_counts(_: &Path) {
+    let h = Harness::opened();
+    let today = h.ok("today", json!({}));
+    // 先の日（今日から決める。決まった日付だと、その日が過ぎると Recent に入ってしまうため）
+    let later: LogicalDate = today.as_str().unwrap().parse().unwrap();
+    let later = later.add_days(30).unwrap();
+    let date = later.to_string();
+    let date = date.as_str();
+    let before = h.ok("get_overview", json!({ "date": date }));
+    assert_eq!(before["recent"][0]["date"], today);
+    assert_eq!(before["counts"]["todos"], 0);
+
+    h.add_todo(date, "件数を数える");
+    let agent = h.register_agent("overview", vec![Scope::Read, Scope::Todo]);
+    h.core
+        .agent_write(agent, |conn, a| {
+            item::add_todo(
+                conn,
+                a,
+                later,
+                "エージェントが足した",
+                &jiff::tz::TimeZone::UTC,
+                yunagi_core::storage::table::now(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let after = h.ok("get_overview", json!({ "date": date }));
+    assert_eq!(
+        after["counts"],
+        json!({ "todos": 2, "done": 0, "leftTodos": 2, "leftBlockers": 0, "resolved": 0, "carried": 0 })
+    );
+    assert_eq!(
+        after["unseenChanges"].as_u64().unwrap(),
+        before["unseenChanges"].as_u64().unwrap() + 1
+    );
+    // 先の日は Recent に入らない
+    assert!(
+        after["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["date"] != date)
+    );
 }
 
 /// Markdown 書き出し：日ごとのファイルを選んだフォルダに書き、パスを返す。データは変えないので

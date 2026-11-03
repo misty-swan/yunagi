@@ -37,5 +37,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.ts"],
+    // テストでは CSS を空にするが、色のトークンは中身を確かめる（src/styles/tokens.test.ts）
+    css: { include: [/src\/styles\/tokens\.css/] },
   },
 });

@@ -198,6 +198,57 @@ blockers: Array<BoardItem>,
 reflection: string, note: NoteOutline, };
 
 /**
+ * 件数（データモデル設計書 3章 item「件数の数え方」）。
+ */
+export type Counts = { 
+/**
+ * TODO 数（取りやめた TODO を除く）。
+ */
+todos: number, 
+/**
+ * 完了した TODO。
+ */
+done: number, 
+/**
+ * 残りのうち、未完了の TODO。
+ */
+leftTodos: number, 
+/**
+ * 残りのうち、未解消の障害。
+ */
+leftBlockers: number, 
+/**
+ * 解消した障害。
+ */
+resolved: number, 
+/**
+ * 前の日から持ち越してきた項目。
+ */
+carried: number, };
+
+/**
+ * サイドバーの Recent の1日。
+ */
+export type RecentDay = { date: LogicalDate, counts: Counts, };
+
+/**
+ * 画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数（画面設計書 3章「画面の骨組み」）。
+ */
+export type Overview = { 
+/**
+ * 表示している日の件数（凪メーター）。
+ */
+counts: Counts, 
+/**
+ * サイドバーの Recent（先頭はいつも今日の論理日付。新しい順に最大7日）。
+ */
+recent: Array<RecentDay>, 
+/**
+ * エージェントによる未確認の変更の数。
+ */
+unseenChanges: number, };
+
+/**
  * ある時点の本文と版の番号（まだ書いていない日は空の本文と版 0）。
  */
 export type Snapshot = { body: string, rev: number, };
