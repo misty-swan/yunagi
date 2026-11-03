@@ -235,7 +235,7 @@ mod tests {
 
     use super::*;
     use crate::storage::data_dir::DefaultDir;
-    use crate::storage::table::item::{self, Item, ItemKind, ItemStatus, Origin};
+    use crate::storage::table::item::{self, Item, ItemChanges, ItemKind, ItemStatus, Origin};
     use crate::storage::table::test_support::{at, date, ensure_day, open};
     use crate::storage::table::text_doc::{self, TextDoc};
     use crate::storage::{Database, DbLock, Ulid, migration};
@@ -629,17 +629,23 @@ mod tests {
     fn follows_item_updates_soft_deletes_restores_and_deletes() {
         let (db, _dir) = open();
         let conn = db.connection();
-        let mut todo = add(&db, "2026-11-03", ItemKind::Todo, "障害対応の手順書");
+        let todo = add(&db, "2026-11-03", ItemKind::Todo, "障害対応の手順書");
         assert_eq!(find(&db, &query("手順書")).len(), 1);
 
         // 状態だけの変更では入れ直さない（結果は変わらない）
-        todo.status = ItemStatus::Done;
-        todo.completed_at = Some(at(T0));
-        assert!(item::update(conn, &todo).unwrap());
+        let done = ItemChanges {
+            status: Some(ItemStatus::Done),
+            completed_at: Some(Some(at(T0))),
+            ..ItemChanges::default()
+        };
+        assert!(item::update_fields(conn, todo.id, &done, at(T0)).unwrap());
         assert_eq!(find(&db, &query("手順書")).len(), 1);
 
-        todo.text = "障害対応の振り返り会".into();
-        item::update(conn, &todo).unwrap();
+        let text = ItemChanges {
+            text: Some("障害対応の振り返り会".into()),
+            ..ItemChanges::default()
+        };
+        item::update_fields(conn, todo.id, &text, at(T0)).unwrap();
         assert!(find(&db, &query("手順書")).is_empty());
         assert_eq!(
             find(&db, &query("振り返り会")),
@@ -701,7 +707,7 @@ mod tests {
     fn finds_resolution_notes_of_resolved_blockers() {
         let (db, _dir) = open();
         let conn = db.connection();
-        let mut blocker = add_resolved(
+        let blocker = add_resolved(
             &db,
             "2026-11-02",
             "本番に繋がらない",
@@ -732,21 +738,30 @@ mod tests {
         assert_index_consistent(&db);
 
         // 未解消に戻すと、残っている解消メモは画面に出ないので、探さない
-        blocker.status = ItemStatus::Open;
-        blocker.completed_at = None;
-        item::update(conn, &blocker).unwrap();
+        let set = |changes: ItemChanges| {
+            assert!(item::update_fields(conn, blocker.id, &changes, at(T0)).unwrap());
+        };
+        set(ItemChanges {
+            status: Some(ItemStatus::Open),
+            completed_at: Some(None),
+            ..ItemChanges::default()
+        });
         assert!(hit("設定ミス").is_empty());
         assert!(hit("原因").is_empty());
         assert_eq!(hit("繋がらない")[0].resolution_note, None);
         assert_index_consistent(&db);
 
         // もう一度解消すると、また探す。解消メモを書き換えると、索引も変わる
-        blocker.status = ItemStatus::Resolved;
-        blocker.completed_at = Some(at(T0));
-        item::update(conn, &blocker).unwrap();
+        set(ItemChanges {
+            status: Some(ItemStatus::Resolved),
+            completed_at: Some(Some(at(T0))),
+            ..ItemChanges::default()
+        });
         assert_eq!(hit("設定ミス").len(), 1);
-        blocker.resolution_note = Some("証明書の期限切れ".into());
-        item::update(conn, &blocker).unwrap();
+        set(ItemChanges {
+            resolution_note: Some(Some("証明書の期限切れ".into())),
+            ..ItemChanges::default()
+        });
         assert!(hit("設定ミス").is_empty());
         assert_eq!(hit("期限切れ").len(), 1);
         assert_eq!(hit("期限").len(), 1);

@@ -231,6 +231,16 @@ pub(crate) mod test_support {
         s.parse().unwrap()
     }
 
+    /// 以後、この接続での change_log への書き込みをすべて失敗させる（書き込みの途中の失敗で、
+    /// トランザクションが取り消されることを確かめるため）。一時的なトリガーなので、接続を閉じれば消える。
+    pub fn fail_change_log_inserts(conn: &rusqlite::Connection) {
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER fail_change_log BEFORE INSERT ON change_log \
+             BEGIN SELECT RAISE(ABORT, 'change_log is not writable in this test'); END",
+        )
+        .unwrap();
+    }
+
     /// その日の day の行を作る（項目などの外部キーのため）。
     pub fn ensure_day(db: &Database, d: &str) -> LogicalDate {
         let d = date(d);

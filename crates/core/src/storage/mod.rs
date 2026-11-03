@@ -19,6 +19,7 @@ pub mod search;
 pub mod table;
 #[cfg(test)]
 mod test_util;
+mod transaction;
 mod ulid;
 
 use std::path::{Path, PathBuf};
@@ -28,6 +29,7 @@ use rusqlite::{Connection, OpenFlags};
 pub use error::StorageError;
 pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
 pub use open::{DatabaseNotFound, OpenError};
+pub(crate) use transaction::in_transaction;
 pub use ulid::{ParseUlidError, Ulid};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。

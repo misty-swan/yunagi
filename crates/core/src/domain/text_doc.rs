@@ -10,20 +10,27 @@
 //!
 //! 本文の行・見出し・追記の決まりは [`super::note_body`] にある。
 //!
+//! エージェントの書き込みは、はじめに権限（スコープ。`append`・`note_edit`）を確かめる
+//! （[`super::agent::require_scope`]）。
+//!
+//! 画面の保存の失敗中は、引数の誤りの後に `storage_unavailable` を返す（[`super::agent::UiState`]。
+//! アーキテクチャ設計書 4.1）。
+//!
 //! ここに無いもの（画面がつながってから作る）：利用者の入力中の行（守る行）への `edit_note` を
-//! `conflict`（`reason: user_editing`）にする判定と、画面の保存の失敗中に `storage_unavailable` を
-//! 返す判定（アーキテクチャ設計書 4.1）。権限（スコープ）の確かめも、接続口の側で行う。
+//! `conflict`（`reason: user_editing`）にする判定（守る行を画面から受け取る形がまだ無い）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
+use super::agent::{self, Agent, PermissionDenied, ScopeError};
 use super::note_body::{self, Changed, InvalidArgument, LineEdit, LineEditError};
 use crate::domain::day;
 use crate::domain::logical_date::LogicalDate;
+use crate::storage::table::agent_client::Scope;
 use crate::storage::table::change_log::{self, Actor, ChangeLog, Target};
 use crate::storage::table::text_doc;
-use crate::storage::{StorageError, Ulid};
+use crate::storage::{StorageError, Ulid, in_transaction};
 
 pub use crate::storage::table::text_doc::TextDoc;
 
@@ -48,8 +55,13 @@ pub struct Written {
 /// 読み書きが失敗した理由。
 #[derive(Debug)]
 pub enum TextDocError {
+    /// エージェントに、操作のスコープが許可されていない（`permission_denied`）。何も書いていない。
+    PermissionDenied(PermissionDenied),
     /// 引数が誤っている（`invalid_argument`）。何も書いていない。
     InvalidArgument(InvalidArgument),
+    /// 画面の保存の書き込みが失敗して再試行している（`storage_unavailable`。アーキテクチャ設計書
+    /// 4.1）。何も書いていない。
+    StorageUnavailable,
     /// `edit_note` の行が、エージェントの読んだ後に変わっている（`conflict`、`reason: changed`）。
     /// 何も書いていない。
     Changed(Changed),
@@ -63,7 +75,11 @@ pub enum TextDocError {
 impl std::fmt::Display for TextDocError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PermissionDenied(e) => e.fmt(f),
             Self::InvalidArgument(e) => e.fmt(f),
+            Self::StorageUnavailable => {
+                f.write_str("the app is retrying a failed save, so writes are not accepted")
+            }
             Self::Changed(e) => e.fmt(f),
             Self::Stale { latest } => write!(
                 f,
@@ -80,7 +96,10 @@ impl std::error::Error for TextDocError {
         match self {
             Self::InvalidArgument(e) => Some(e),
             Self::Storage(e) => Some(e),
-            Self::Changed(_) | Self::Stale { .. } => None,
+            Self::PermissionDenied(_)
+            | Self::StorageUnavailable
+            | Self::Changed(_)
+            | Self::Stale { .. } => None,
         }
     }
 }
@@ -94,6 +113,15 @@ impl From<StorageError> for TextDocError {
 impl From<rusqlite::Error> for TextDocError {
     fn from(e: rusqlite::Error) -> Self {
         Self::Storage(e.into())
+    }
+}
+
+impl From<ScopeError> for TextDocError {
+    fn from(e: ScopeError) -> Self {
+        match e {
+            ScopeError::Denied(e) => Self::PermissionDenied(e),
+            ScopeError::Storage(e) => Self::Storage(e),
+        }
     }
 }
 
@@ -168,26 +196,29 @@ pub fn save(
 /// 現在時刻（`now` の、端末のタイムゾーン `tz` での時刻）の見出し `## HH:MM 件名` を入れてから
 /// 追記する（件名が空なら `## HH:MM`）。追記の決まりは [`note_body::append`]。
 ///
-/// `agent_client_id` は操作したエージェント（CLI は `cli`）。change_log に `note.append` として
-/// 記録する。
+/// `agent` は操作したエージェント（CLI は `cli`）。`append` スコープが要る。
+/// change_log に `note.append` として記録する。
 pub fn append_note(
     conn: &Connection,
     date: LogicalDate,
     text: &str,
     heading: Option<&str>,
-    agent_client_id: Ulid,
+    agent: &Agent<'_>,
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
-    let heading = heading
-        .map(|title| note_body::time_heading_line(now.to_zoned(tz.clone()).time(), title))
-        .transpose()?;
-    let new_body = |body: &str| Ok(note_body::append(body, text, heading.as_deref())?);
+    let new_body = |body: &str| {
+        // 件名の誤りも引数の誤りなので、権限を確かめた後に確かめる
+        let heading = heading
+            .map(|title| note_body::time_heading_line(now.to_zoned(tz.clone()).time(), title))
+            .transpose()?;
+        Ok(note_body::append(body, text, heading.as_deref())?)
+    };
     write_by_agent(
         conn,
         date,
         AgentOperation::NoteAppend,
-        agent_client_id,
+        agent,
         tz,
         now,
         new_body,
@@ -195,14 +226,14 @@ pub fn append_note(
 }
 
 /// エージェント・CLI が、振り返りの末尾に追記する（`append_reflection`）。追記の決まりは
-/// [`note_body::append`]。change_log に `reflection.append` として記録する。
+/// [`note_body::append`]。`append` スコープが要る。change_log に `reflection.append` として記録する。
 ///
 /// 振り返りの既存の文章を書き換える操作は無い（MCP・CLI 仕様書 2章）。
 pub fn append_reflection(
     conn: &Connection,
     date: LogicalDate,
     text: &str,
-    agent_client_id: Ulid,
+    agent: &Agent<'_>,
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
@@ -211,7 +242,7 @@ pub fn append_reflection(
         conn,
         date,
         AgentOperation::ReflectionAppend,
-        agent_client_id,
+        agent,
         tz,
         now,
         new_body,
@@ -223,12 +254,13 @@ pub fn append_reflection(
 /// 行の本文が `expected_text` と一致しなければ [`TextDocError::Changed`]、引数の誤りは
 /// [`TextDocError::InvalidArgument`]（確かめる順は [`note_body::apply_line_edit`]）。
 /// まだ書いていない日のノートは、空の1行の本文として扱う。本文が変わらない書き換えは
-/// `updated: false` で、記録しない。change_log には `note.edit` として記録する。
+/// `updated: false` で、記録しない。`note_edit` スコープが要る。change_log には `note.edit` として
+/// 記録する。
 pub fn edit_note(
     conn: &Connection,
     date: LogicalDate,
     edit: &LineEdit,
-    agent_client_id: Ulid,
+    agent: &Agent<'_>,
     tz: &TimeZone,
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
@@ -237,7 +269,7 @@ pub fn edit_note(
         conn,
         date,
         AgentOperation::NoteEdit,
-        agent_client_id,
+        agent,
         tz,
         now,
         new_body,
@@ -262,6 +294,14 @@ impl AgentOperation {
         }
     }
 
+    /// 操作に要るスコープ（MCP・CLI 仕様書 2章）。
+    const fn scope(self) -> Scope {
+        match self {
+            Self::NoteAppend | Self::ReflectionAppend => Scope::Append,
+            Self::NoteEdit => Scope::NoteEdit,
+        }
+    }
+
     const fn doc(self) -> TextDoc {
         match self {
             Self::NoteAppend | Self::NoteEdit => TextDoc::Note,
@@ -270,21 +310,31 @@ impl AgentOperation {
     }
 }
 
-/// エージェントの書き込みの共通の手順。いまの本文から `new_body` で新しい本文を作り、
-/// いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
+/// エージェントの書き込みの共通の手順。権限・引数・保存の状態を確かめてから、いまの本文から `new_body` で
+/// 新しい本文を作り、いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
 fn write_by_agent(
     conn: &Connection,
     date: LogicalDate,
     operation: AgentOperation,
-    agent_client_id: Ulid,
+    agent: &Agent<'_>,
     tz: &TimeZone,
     now: Timestamp,
     new_body: impl FnOnce(&str) -> Result<String, TextDocError>,
 ) -> Result<Written, TextDocError> {
     let doc = operation.doc();
     in_transaction(conn, || {
+        // 権限の確かめも、書き込みと同じトランザクションで行う（項目の操作と同じ）
+        agent::require_scope(conn, agent.client_id, operation.scope())?;
         let current = get(conn, doc, date)?;
-        let body = new_body(&current.body)?;
+        // 判定の順：引数の誤り、保存の失敗中、行の食い違い（changed）（MCP・CLI 仕様書 3.2・4.3）
+        let body = new_body(&current.body);
+        if let Err(e @ TextDocError::InvalidArgument(_)) = body {
+            return Err(e);
+        }
+        if agent.ui.save_failing() {
+            return Err(TextDocError::StorageUnavailable);
+        }
+        let body = body?;
         if body == current.body {
             return Ok(Written {
                 rev: current.rev,
@@ -302,7 +352,7 @@ fn write_by_agent(
             &ChangeLog {
                 id: Ulid::generate(),
                 actor: Actor::Agent,
-                agent_client_id: Some(agent_client_id),
+                agent_client_id: Some(agent.client_id),
                 operation: operation.as_str().to_owned(),
                 target,
                 // まだ書いていなかった日も、空の本文として記録する（`get` と同じ。取り消しで
@@ -324,87 +374,28 @@ fn json_string(body: &str) -> String {
     serde_json::to_string(body).expect("a string always serializes to JSON")
 }
 
-/// `f` を1つのトランザクションの中で行い、成功したら確定し、失敗したら取り消す。
-/// 呼び出し側のトランザクションの中で呼べば、セーブポイントを使ってその一部になる（`BEGIN` は
-/// 入れ子にできないため）。確定は呼び出し側が行う。
-///
-/// - `f` の失敗は、取り消しにも失敗したときでも `f` の失敗のまま返す（行き違いの最新の本文などを
-///   失わないため）。
-/// - 確定（`COMMIT`）の失敗と、`f` の途中の panic でも取り消す。トランザクションが開いたまま
-///   残ると、以後の書き込みがすべてその中に入り、確定されないため。
-fn in_transaction<T>(
-    conn: &Connection,
-    f: impl FnOnce() -> Result<T, TextDocError>,
-) -> Result<T, TextDocError> {
-    let guard = TransactionGuard::begin(conn)?;
-    let value = f()?; // 失敗なら guard の drop で取り消す
-    guard.commit()?;
-    Ok(value)
-}
-
-/// [`in_transaction`] のトランザクション。確定せずに手放すと（失敗・panic）取り消す。
-struct TransactionGuard<'c> {
-    conn: &'c Connection,
-    /// 外側のトランザクションか（`false` なら呼び出し側のトランザクションの中のセーブポイント）。
-    outermost: bool,
-    done: bool,
-}
-
-impl<'c> TransactionGuard<'c> {
-    const SAVEPOINT: &'static str = "yunagi_text_doc";
-
-    fn begin(conn: &'c Connection) -> rusqlite::Result<Self> {
-        let outermost = conn.is_autocommit();
-        if outermost {
-            conn.execute_batch("BEGIN")?;
-        } else {
-            conn.execute_batch(&format!("SAVEPOINT {}", Self::SAVEPOINT))?;
-        }
-        Ok(Self {
-            conn,
-            outermost,
-            done: false,
-        })
-    }
-
-    /// 確定する。失敗したら、drop で取り消す。
-    fn commit(mut self) -> rusqlite::Result<()> {
-        if self.outermost {
-            self.conn.execute_batch("COMMIT")?;
-        } else {
-            self.conn
-                .execute_batch(&format!("RELEASE {}", Self::SAVEPOINT))?;
-        }
-        self.done = true;
-        Ok(())
-    }
-}
-
-impl Drop for TransactionGuard<'_> {
-    fn drop(&mut self) {
-        if self.done {
-            return;
-        }
-        // 取り消しの失敗は返す先が無い（元の失敗を返すほうを優先する）ので捨てる
-        let _ = if self.outermost {
-            self.conn.execute_batch("ROLLBACK")
-        } else {
-            // ROLLBACK TO はセーブポイントを残すので、続けて外す
-            self.conn.execute_batch(&format!(
-                "ROLLBACK TO {name}; RELEASE {name}",
-                name = Self::SAVEPOINT
-            ))
-        };
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::agent::test_support::{FakeUi, grant};
     use crate::domain::note_body::LineOp;
+    use crate::storage::Database;
     use crate::storage::table::agent_client::{CLI_ID, UNKNOWN_ID};
-    use crate::storage::table::test_support::{at, date, open};
+    use crate::storage::table::test_support::{at, date, fail_change_log_inserts};
     use crate::storage::table::{day as day_table, text_doc as text_doc_table};
+
+    fn cli() -> Agent<'static> {
+        Agent::without_ui(CLI_ID)
+    }
+
+    /// データベースを開き、`cli` と `unknown` に書き込みのスコープを許可する。
+    fn open() -> (Database, tempfile::TempDir) {
+        let (db, dir) = crate::storage::table::test_support::open();
+        for client in [CLI_ID, UNKNOWN_ID] {
+            grant(db.connection(), client, &[Scope::Append, Scope::NoteEdit]);
+        }
+        (db, dir)
+    }
 
     fn tokyo() -> TimeZone {
         TimeZone::get("Asia/Tokyo").unwrap()
@@ -476,7 +467,7 @@ mod tests {
         let conn = db.connection();
         let d = date("2026-11-03");
         save(conn, TextDoc::Note, d, "a", 0, &tokyo(), at(NOW)).unwrap();
-        append_note(conn, d, "agent", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
+        append_note(conn, d, "agent", None, &cli(), &tokyo(), at(NOW)).unwrap();
         for base_rev in [0, 1, 3] {
             match save(
                 conn,
@@ -546,7 +537,7 @@ mod tests {
         );
 
         // もとにした版が古くても、同じ本文なら行き違いにせず、いまの版を返す
-        append_note(conn, d, "x", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
+        append_note(conn, d, "x", None, &cli(), &tokyo(), at(NOW)).unwrap();
         let w = save(conn, TextDoc::Note, d, "a\nx", 1, &tokyo(), at(NOW)).unwrap();
         assert_eq!(
             w,
@@ -562,7 +553,7 @@ mod tests {
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        let w = append_note(conn, d, "first", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
+        let w = append_note(conn, d, "first", None, &cli(), &tokyo(), at(NOW)).unwrap();
         assert_eq!(
             w,
             Written {
@@ -570,7 +561,7 @@ mod tests {
                 updated: true
             }
         );
-        let w = append_note(conn, d, "second", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
+        let w = append_note(conn, d, "second", None, &cli(), &tokyo(), at(NOW)).unwrap();
         assert_eq!(
             w,
             Written {
@@ -601,11 +592,11 @@ mod tests {
         let conn = db.connection();
         let d = date("2026-11-03");
         save(conn, TextDoc::Note, d, "memo", 0, &tokyo(), at(NOW)).unwrap();
-        append_note(conn, d, "- 議題", Some("定例"), CLI_ID, &tokyo(), at(NOW)).unwrap();
-        append_note(conn, d, "x", Some(""), CLI_ID, &tokyo(), at(NOW)).unwrap();
+        append_note(conn, d, "- 議題", Some("定例"), &cli(), &tokyo(), at(NOW)).unwrap();
+        append_note(conn, d, "x", Some(""), &cli(), &tokyo(), at(NOW)).unwrap();
         // 見出しの時刻は端末のタイムゾーンでの時刻
         let utc = TimeZone::UTC;
-        append_note(conn, d, "y", Some("utc"), CLI_ID, &utc, at(NOW)).unwrap();
+        append_note(conn, d, "y", Some("utc"), &cli(), &utc, at(NOW)).unwrap();
         let body = get(conn, TextDoc::Note, d).unwrap().body;
         assert_eq!(
             body,
@@ -623,9 +614,9 @@ mod tests {
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        let agent = UNKNOWN_ID;
-        append_reflection(conn, d, "良かった\n", agent, &tokyo(), at(NOW)).unwrap();
-        append_reflection(conn, d, "明日", agent, &tokyo(), at(NOW)).unwrap();
+        let agent = Agent::without_ui(UNKNOWN_ID);
+        append_reflection(conn, d, "良かった\n", &agent, &tokyo(), at(NOW)).unwrap();
+        append_reflection(conn, d, "明日", &agent, &tokyo(), at(NOW)).unwrap();
         assert_eq!(
             get(conn, TextDoc::Reflection, d).unwrap(),
             Snapshot {
@@ -637,8 +628,9 @@ mod tests {
         let logs = logs_of(conn, Target::Reflection(d));
         assert_eq!(logs.len(), 2);
         assert!(
-            logs.iter()
-                .all(|l| l.operation == "reflection.append" && l.agent_client_id == Some(agent))
+            logs.iter().all(
+                |l| l.operation == "reflection.append" && l.agent_client_id == Some(UNKNOWN_ID)
+            )
         );
         assert!(logs_of(conn, Target::Note(d)).is_empty());
     }
@@ -649,17 +641,17 @@ mod tests {
         let conn = db.connection();
         let d = date("2026-11-03");
         assert!(matches!(
-            append_note(conn, d, " \n", None, CLI_ID, &tokyo(), at(NOW)),
+            append_note(conn, d, " \n", None, &cli(), &tokyo(), at(NOW)),
             Err(TextDocError::InvalidArgument(InvalidArgument::EmptyText))
         ));
         assert!(matches!(
-            append_note(conn, d, "x", Some("a\nb"), CLI_ID, &tokyo(), at(NOW)),
+            append_note(conn, d, "x", Some("a\nb"), &cli(), &tokyo(), at(NOW)),
             Err(TextDocError::InvalidArgument(
                 InvalidArgument::MultilineTitle
             ))
         ));
         assert!(matches!(
-            append_reflection(conn, d, "", CLI_ID, &tokyo(), at(NOW)),
+            append_reflection(conn, d, "", &cli(), &tokyo(), at(NOW)),
             Err(TextDocError::InvalidArgument(InvalidArgument::EmptyText))
         ));
         assert_eq!(day_table::get(conn, d).unwrap(), None);
@@ -685,7 +677,7 @@ mod tests {
             conn,
             d,
             &edit(2, "b", LineOp::Replace("B".into())),
-            CLI_ID,
+            &cli(),
             &tokyo(),
             later,
         )
@@ -701,7 +693,7 @@ mod tests {
             conn,
             d,
             &edit(1, "a", LineOp::MoveTo(3)),
-            CLI_ID,
+            &cli(),
             &tokyo(),
             later,
         )
@@ -710,7 +702,7 @@ mod tests {
             conn,
             d,
             &edit(1, "B", LineOp::Delete),
-            CLI_ID,
+            &cli(),
             &tokyo(),
             later,
         )
@@ -747,7 +739,7 @@ mod tests {
             conn,
             d,
             &edit(1, "b", LineOp::Delete),
-            CLI_ID,
+            &cli(),
             &tokyo(),
             at(NOW),
         );
@@ -762,7 +754,7 @@ mod tests {
                 conn,
                 d,
                 &edit(3, "", LineOp::Delete),
-                CLI_ID,
+                &cli(),
                 &tokyo(),
                 at(NOW)
             ),
@@ -773,7 +765,7 @@ mod tests {
                 conn,
                 d,
                 &edit(0, "a", LineOp::Delete),
-                CLI_ID,
+                &cli(),
                 &tokyo(),
                 at(NOW)
             ),
@@ -799,7 +791,7 @@ mod tests {
             edit(1, "a", LineOp::Replace("a".into())),
             edit(2, "b", LineOp::MoveTo(2)),
         ] {
-            let w = edit_note(conn, d, &e, CLI_ID, &tokyo(), at(NOW)).unwrap();
+            let w = edit_note(conn, d, &e, &cli(), &tokyo(), at(NOW)).unwrap();
             assert_eq!(
                 w,
                 Written {
@@ -820,7 +812,7 @@ mod tests {
             conn,
             d,
             &edit(1, "", LineOp::Replace("x".into())),
-            CLI_ID,
+            &cli(),
             &tokyo(),
             at(NOW),
         )
@@ -841,14 +833,13 @@ mod tests {
 
     #[test]
     fn a_failed_write_leaves_nothing_behind() {
-        // 知らないエージェント（外部キーの誤り）で change_log に入れられないと、本文と day の行も
-        // 書かれない
+        // change_log に入れられないと、本文と day の行も書かれない
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        let unknown = Ulid::from_u128(99);
+        fail_change_log_inserts(conn);
         assert!(matches!(
-            append_note(conn, d, "x", None, unknown, &tokyo(), at(NOW)),
+            append_note(conn, d, "x", None, &cli(), &tokyo(), at(NOW)),
             Err(TextDocError::Storage(_))
         ));
         assert_eq!(get(conn, TextDoc::Note, d).unwrap().rev, 0);
@@ -858,22 +849,98 @@ mod tests {
     }
 
     #[test]
-    fn a_panic_inside_the_transaction_rolls_it_back() {
+    fn writes_need_the_scope_before_anything_else() {
+        let (db, _dir) = crate::storage::table::test_support::open();
+        let conn = db.connection();
+        let d = date("2026-11-03");
+        let denied = |r: Result<Written, TextDocError>, scope: Scope| {
+            assert!(
+                matches!(r, Err(TextDocError::PermissionDenied(PermissionDenied { required_scope })) if required_scope == scope)
+            );
+        };
+        // 引数の誤り（空の本文・改行を含む件名・行番号 0）より先に確かめる
+        denied(
+            append_note(conn, d, "", Some("a\nb"), &cli(), &tokyo(), at(NOW)),
+            Scope::Append,
+        );
+        denied(
+            append_reflection(conn, d, "x", &cli(), &tokyo(), at(NOW)),
+            Scope::Append,
+        );
+        grant(conn, CLI_ID, &[Scope::Append]);
+        denied(
+            edit_note(
+                conn,
+                d,
+                &edit(0, "", LineOp::Delete),
+                &cli(),
+                &tokyo(),
+                at(NOW),
+            ),
+            Scope::NoteEdit,
+        );
+        // 登録されていないエージェントには何も許可しない
+        denied(
+            append_note(
+                conn,
+                d,
+                "x",
+                None,
+                &Agent::without_ui(Ulid::from_u128(99)),
+                &tokyo(),
+                at(NOW),
+            ),
+            Scope::Append,
+        );
+        assert_eq!(day_table::get(conn, d).unwrap(), None);
+        append_reflection(conn, d, "x", &cli(), &tokyo(), at(NOW)).unwrap();
+    }
+
+    #[test]
+    fn writes_are_refused_while_the_screen_save_is_failing() {
         let (db, _dir) = open();
         let conn = db.connection();
         let d = date("2026-11-03");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _: Result<(), TextDocError> = in_transaction(conn, || {
-                day::ensure(conn, d, &tokyo(), at(NOW))?;
-                panic!("boom");
-            });
-        }));
-        assert!(result.is_err());
-        assert!(conn.is_autocommit());
-        assert_eq!(day_table::get(conn, d).unwrap(), None);
-        // 以後の書き込みは確定される
-        append_note(conn, d, "y", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
-        assert!(conn.is_autocommit());
+        save(conn, TextDoc::Note, d, "a", 0, &tokyo(), at(NOW)).unwrap();
+        let ui = FakeUi {
+            save_failing: true,
+            ..FakeUi::default()
+        };
+        let agent = Agent {
+            client_id: CLI_ID,
+            ui: &ui,
+        };
+        // 引数の誤りは先に返す
+        assert!(matches!(
+            append_note(conn, d, " ", None, &agent, &tokyo(), at(NOW)),
+            Err(TextDocError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            edit_note(
+                conn,
+                d,
+                &edit(0, "a", LineOp::Delete),
+                &agent,
+                &tokyo(),
+                at(NOW)
+            ),
+            Err(TextDocError::InvalidArgument(_))
+        ));
+        // 行の食い違いや、何も変えない書き換えより先に返す
+        for e in [
+            edit(1, "x", LineOp::Delete),
+            edit(1, "a", LineOp::Replace("a".into())),
+        ] {
+            assert!(matches!(
+                edit_note(conn, d, &e, &agent, &tokyo(), at(NOW)),
+                Err(TextDocError::StorageUnavailable)
+            ));
+        }
+        assert!(matches!(
+            append_reflection(conn, d, "x", &agent, &tokyo(), at(NOW)),
+            Err(TextDocError::StorageUnavailable)
+        ));
+        assert_eq!(get(conn, TextDoc::Note, d).unwrap().rev, 1);
     }
 
     #[test]
@@ -882,7 +949,7 @@ mod tests {
         let d = date("2026-11-03");
         {
             let tx = db.connection().unchecked_transaction().unwrap();
-            append_note(&tx, d, "x", None, CLI_ID, &tokyo(), at(NOW)).unwrap();
+            append_note(&tx, d, "x", None, &cli(), &tokyo(), at(NOW)).unwrap();
             // 確定せずに手放すと取り消される
         }
         let conn = db.connection();
