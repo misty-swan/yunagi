@@ -122,6 +122,8 @@ export class TextDocEditor {
         // 行の区切りは LF だけ（コアと同じ数え方。CR は行の文字のまま残し、保存で書き換えない。
         // データモデル設計書 3章 note「行」）
         EditorState.lineSeparator.of("\n"),
+        // 貼り付けた文字の改行（CRLF・CR）は LF にそろえる（ほかのアプリから写した文に CR を持ち込まない）
+        EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
         EditorView.editable.of(editable),
         history(),
         keymap.of([...own.keys, ...historyKeymap, ...standardKeymap]),

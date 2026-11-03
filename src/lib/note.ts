@@ -33,6 +33,14 @@ export function timeHeadingOf(line: string): TimeHeading | null {
   return { time: line.slice(3, timeTo), title: line.slice(timeTo).replace(EDGE_WS, ""), timeFrom: 3, timeTo };
 }
 
+/**
+ * 空の行か：空白だけの行も空とみなす。ただし CR を含む行は空とみなさない（CR は行の文字として残す。
+ * コアの追記の決まりと同じ。データモデル設計書 3章 note）。
+ */
+function blank(text: string): boolean {
+  return !text.includes("\r") && text.trim() === "";
+}
+
 /** 時刻 `now` の見出しの行の始め（`## HH:MM `。続けて件名を書けるよう、空白で終える）。 */
 export function timeHeadingPrefix(now: Date): string {
   const hh = String(now.getHours()).padStart(2, "0");
@@ -51,12 +59,12 @@ export interface Edit {
 /**
  * 時刻付き見出しを入れる書き換え：カーソルのある行（`line`。`from` はその行の始まりの位置）が空なら
  * その行に、そうでなければ空行を1行あけて次の行に入れる。カーソルは見出しの後ろ（件名を書く所）。
- * 空白だけの行も空とみなし、その空白は見出しに置き換える。
+ * 空白だけの行も空とみなし、その空白は見出しに置き換える（CR を含む行は空とみなさない）。
  */
 export function insertTimeHeading(line: { from: number; text: string }, now: Date): Edit {
   const head = timeHeadingPrefix(now);
   const to = line.from + line.text.length;
-  if (line.text.trim() === "") return { from: line.from, to, insert: head, caret: line.from + head.length };
+  if (blank(line.text)) return { from: line.from, to, insert: head, caret: line.from + head.length };
   const insert = `\n\n${head}`;
   return { from: to, to, insert, caret: to + insert.length };
 }
@@ -72,7 +80,7 @@ const LIST_ITEM = /^(\s*)- /;
 export function continueList(line: { from: number; text: string }, at: number): Edit | null {
   const m = LIST_ITEM.exec(line.text);
   if (m === null || at < m[0].length) return null;
-  if (line.text.trim() === "-") {
+  if (!line.text.includes("\r") && line.text.trim() === "-") {
     const indent = m[1].length;
     return { from: line.from + indent, to: line.from + line.text.length, insert: "", caret: line.from + indent };
   }

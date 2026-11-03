@@ -326,3 +326,15 @@ test("1回の書き換えで本文の行を見出しの上から下へ動かし�
   qa(".outline button")[0].click();
   expect(view().state.selection.main.head).toBe(view().state.doc.line(2).to);
 });
+
+test("貼り付けた文の改行（CRLF・CR）は LF にそろえる", async () => {
+  const { core, view } = await start("");
+  const content = q(".note-ed .cm-content")!;
+  content.focus();
+  // jsdom には DataTransfer が無いので、CodeMirror が読む getData だけを持つものを渡す
+  const data = { getData: (t: string) => (t === "text/plain" ? "一\r\n二\r三" : ""), types: ["text/plain"] };
+  content.dispatchEvent(Object.assign(new Event("paste", { bubbles: true, cancelable: true }), { clipboardData: data }));
+  flushSync();
+  expect(view().state.doc.toString()).toBe("一\n二\n三");
+  await until(() => core.note.body === "一\n二\n三");
+});

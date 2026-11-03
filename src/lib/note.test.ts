@@ -20,6 +20,8 @@ test("時刻付き見出しは、空の行ならその行に、そうでなけ�
   expect(insertTimeHeading({ from: 10, text: "" }, now)).toEqual({ from: 10, to: 10, insert: "## 09:05 ", caret: 19 });
   // 空白だけの行も空とみなし、空白は見出しに置き換える
   expect(insertTimeHeading({ from: 0, text: "  " }, now)).toEqual({ from: 0, to: 2, insert: "## 09:05 ", caret: 9 });
+  // CR だけの行は空とみなさない（CR を消さない）
+  expect(insertTimeHeading({ from: 0, text: "\r" }, now)).toEqual({ from: 1, to: 1, insert: "\n\n## 09:05 ", caret: 12 });
   expect(insertTimeHeading({ from: 4, text: "メモ" }, now)).toEqual({ from: 6, to: 6, insert: "\n\n## 09:05 ", caret: 17 });
 });
 
@@ -30,6 +32,8 @@ test("「- 」の行の Enter は次の行も「- 」で始め、中身のない
   expect(continueList({ from: 3, text: "- " }, 2)).toEqual({ from: 3, to: 5, insert: "", caret: 3 });
   // 字下げは残す
   expect(continueList({ from: 3, text: "  - " }, 4)).toEqual({ from: 5, to: 7, insert: "", caret: 5 });
+  // CR の付いた「- 」は中身のない行とみなさず、CR を消さない
+  expect(continueList({ from: 0, text: "- \r" }, 2)).toEqual({ from: 2, to: 2, insert: "\n- ", caret: 5 });
   // 「- 」より前のカーソルと、リストでない行はふつうの Enter
   expect(continueList({ from: 0, text: "- 買う" }, 1)).toBeNull();
   expect(continueList({ from: 0, text: "-買う" }, 3)).toBeNull();
