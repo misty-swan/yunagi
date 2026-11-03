@@ -175,14 +175,24 @@ pub fn save(
     now: Timestamp,
 ) -> Result<Written, TextDocError> {
     in_transaction(conn, || {
-        save_screen_body(conn, doc, date, body, base_rev, tz, now)?
-            .map_err(|latest| TextDocError::Stale { latest })
+        match save_screen_body(conn, doc, date, body, base_rev, tz, now)? {
+            ScreenSave::Saved(written) => Ok(written),
+            ScreenSave::Stale(latest) => Err(TextDocError::Stale { latest }),
+        }
     })
+}
+
+/// [`save_screen_body`] の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScreenSave {
+    /// 保存した（本文が同じなら書かずに成功）。
+    Saved(Written),
+    /// もとにした版が古いので書かなかった。いまの本文と版。
+    Stale(Snapshot),
 }
 
 /// [`save`] の中身。呼び出し側のトランザクションの中で呼ぶ（行送り
 /// [`super::note_send::send`] も、本文の保存と項目の作成を1つのトランザクションにするために使う）。
-/// もとにした版が古ければ、書かずに `Err(最新)` を返す。
 pub(crate) fn save_screen_body(
     conn: &Connection,
     doc: TextDoc,
@@ -191,22 +201,22 @@ pub(crate) fn save_screen_body(
     base_rev: i64,
     tz: &TimeZone,
     now: Timestamp,
-) -> Result<Result<Written, Snapshot>, StorageError> {
+) -> Result<ScreenSave, StorageError> {
     let current = get(conn, doc, date)?;
     // 同じ本文なら、もとにした版が古くても書かずに成功にする。行き違いにすると、画面の取り込みで
     // 同じ行が両方から足されたものとして二重になるため
     if current.body == body {
-        return Ok(Ok(Written {
+        return Ok(ScreenSave::Saved(Written {
             rev: current.rev,
             updated: false,
         }));
     }
     if current.rev != base_rev {
-        return Ok(Err(current));
+        return Ok(ScreenSave::Stale(current));
     }
     day::ensure(conn, date, tz, now)?;
     let rev = text_doc::save(conn, doc, date, body, now)?;
-    Ok(Ok(Written { rev, updated: true }))
+    Ok(ScreenSave::Saved(Written { rev, updated: true }))
 }
 
 /// エージェント・CLI が、ノートの末尾に追記する（`append_note`）。`heading` が `Some` なら、

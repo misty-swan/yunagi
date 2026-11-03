@@ -11,10 +11,12 @@
 //!
 //! # 指紋と照合（2026-11-03 決定）
 //!
-//! 指紋（[`fingerprint`]）は、行の本文と、前後の「空白だけでない最も近い行」の本文のハッシュを
+//! 指紋は、行の本文と、前後の「空白だけでない最も近い行」の本文のハッシュを
 //! 並べた文字列。照合では、本文のハッシュが一致する行だけを候補にし（本文を変えると印が外れる）、
 //! 候補が複数あるときは前後の行も一致する数の多い行を選ぶ（行を動かしても、同じ本文の別の行と
-//! 取り違えにくくするため）。本文の比べ方とハッシュの形は [`fingerprint`] にある。
+//! 取り違えにくくするため）。形は `v1:<本文のハッシュ>:<前の行のハッシュ>:<後の行のハッシュ>`
+//! で、前・後の行が無ければ `-`。ハッシュは、行の末尾の空白（CR を含む）を除いた本文の 64 ビット
+//! FNV-1a（16 桁の小文字の 16 進数）。
 
 use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
@@ -25,7 +27,7 @@ use rusqlite::Connection;
 
 use super::item::{self, carried_to};
 use super::note_body::{self, Section};
-use super::text_doc::{self, Snapshot, TextDoc};
+use super::text_doc::{self, ScreenSave, Snapshot, TextDoc};
 use crate::domain::logical_date::LogicalDate;
 use crate::storage::table::item::{self as item_table, Item, ItemKind, ItemStatus};
 use crate::storage::table::note_send::{self as note_send_table, NoteSend};
@@ -67,6 +69,7 @@ struct LineKey {
 }
 
 impl LineKey {
+    /// 指紋の文字列（note_send の `line_fingerprint`）。形はモジュールの説明のとおり。
     fn fingerprint(&self) -> String {
         format!(
             "{FINGERPRINT_VERSION}:{}:{}:{}",
@@ -99,8 +102,7 @@ impl LineKey {
 
 /// 本文の各行の [`LineKey`]（1行目から順）。前・後の行は、上からと下からの1回ずつの走査で、
 /// 直前に見た空白だけでない行を覚えて求める。
-fn line_keys(body: &str) -> Vec<LineKey> {
-    let lines: Vec<&str> = note_body::lines(body).collect();
+fn line_keys(lines: &[&str]) -> Vec<LineKey> {
     let hashes: Vec<String> = lines.iter().map(|l| line_hash(l)).collect();
     let nearest = |order: &mut dyn Iterator<Item = usize>| {
         let mut found = vec![NO_LINE.to_owned(); lines.len()];
@@ -123,17 +125,6 @@ fn line_keys(body: &str) -> Vec<LineKey> {
         .zip(next)
         .map(|((text, prev), next)| LineKey { text, prev, next })
         .collect()
-}
-
-/// 本文 `body` の `line` 行目（1始まり）の指紋。行が本文に無ければ `None`。
-///
-/// 形：`v1:<本文のハッシュ>:<前の行のハッシュ>:<後の行のハッシュ>`。前・後の行は、空白だけの行を
-/// 飛ばした最も近い行で、無ければ `-`。ハッシュは、行の末尾の空白を除いた本文の 64 ビット
-/// FNV-1a（16 桁の小文字の 16 進数）。
-pub fn fingerprint(body: &str, line: usize) -> Option<String> {
-    line_keys(body)
-        .get(line.checked_sub(1)?)
-        .map(LineKey::fingerprint)
 }
 
 /// 送った記録 `sends` のそれぞれが、各行の [`LineKey`] が `keys` の本文のどの行（1始まり）に
@@ -198,7 +189,7 @@ fn assign(sends: &[&NoteSend], keys: &[LineKey]) -> Vec<Option<usize>> {
 pub enum SkipReason {
     /// 見出しの行（`#` 1〜6個と空白で始まる行。時刻付き見出しも含む）。
     Heading,
-    /// リストの印などを除くと本文が無い（空の行、`- ` だけの行など）。
+    /// リストの印などを除くと本文が無い（空の行、`- ` だけの行、区切り線、コードの囲みの行など）。
     NoText,
     /// すでに送信済みの印が付いている（同じ行から2つ目の項目を作らない）。印を付けている記録の
     /// 送り先の項目。
@@ -228,15 +219,30 @@ fn strip_marker<'a>(rest: &'a str, marker: &str) -> Option<&'a str> {
         .then_some(after)
 }
 
-/// ノートの1行を、項目の本文にする。行頭の空白、リストの印（`-`・`*`・`+`・`1.`・`1)`）、続く
-/// チェック欄（`[ ]`・`[x]`・`[X]`）を除き、前後の空白を除く。行の中の CR は空白にする。
-/// 見出しの行と、本文が残らない行は送らない。
+/// 区切り線（`-`・`*`・`_` のどれか1種を3つ以上と空白だけの行）か、コードの囲み（`` ``` `` か
+/// `~~~` で始まる行）か。本文の無い、書式だけの行。行頭の空白は除いてから見る。
+fn is_markup(rest: &str) -> bool {
+    if rest.starts_with("```") || rest.starts_with("~~~") {
+        return true;
+    }
+    ['-', '*', '_'].iter().any(|&mark| {
+        rest.chars().filter(|&c| c == mark).count() >= 3
+            && rest.chars().all(|c| c == mark || c.is_whitespace())
+    })
+}
+
+/// ノートの1行を、項目の本文にする。行頭の空白とリストの印（`-`・`*`・`+`・`1.`・`1)`）を除き、
+/// 印の後にチェック欄（`[ ]`・`[x]`・`[X]`）があればそれも除き、前後の空白を除く。行の中の CR は
+/// 空白にする。見出しの行、区切り線・コードの囲みの行、本文が残らない行は送らない。
 fn item_text(line: &str) -> Result<String, SkipReason> {
     if is_heading(line) {
         return Err(SkipReason::Heading);
     }
     let line = line.replace('\r', " ");
     let mut rest = line.trim_start();
+    if is_markup(rest) {
+        return Err(SkipReason::NoText);
+    }
     let ordered = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
     if let Some(after) = ["-", "*", "+"]
         .iter()
@@ -249,12 +255,12 @@ fn item_text(line: &str) -> Result<String, SkipReason> {
         })
     {
         rest = after.trim_start();
-    }
-    if let Some(after) = ["[ ]", "[x]", "[X]"]
-        .iter()
-        .find_map(|m| strip_marker(rest, m))
-    {
-        rest = after;
+        if let Some(after) = ["[ ]", "[x]", "[X]"]
+            .iter()
+            .find_map(|m| strip_marker(rest, m))
+        {
+            rest = after;
+        }
     }
     item::one_line_text(rest).map_err(|_| SkipReason::NoText)
 }
@@ -266,7 +272,7 @@ fn item_text(line: &str) -> Result<String, SkipReason> {
 pub enum InvalidArgument {
     /// 行番号が 0（行番号は1始まり）。
     LineZero,
-    /// 範囲の始まりが終わりより後。
+    /// 範囲が空（始まりが終わりより後か、使い切った範囲）。
     EmptyRange,
     /// 行が本文に無い。`line_count` は本文の行数。
     LineOutOfRange { line: usize, line_count: usize },
@@ -391,8 +397,8 @@ pub struct SendLines<'a> {
 ///   何も書かずに [`SendError::Stale`] を返す。送信済みの印は保存した本文と照合するため、本文の
 ///   保存と項目の作成を1つのトランザクションで行う。
 /// - 項目はノートと同じ日の末尾に、上の行から順に作る（`origin = note`）。本文は、行から行頭の空白・
-///   リストの印・チェック欄を除いたもの。各行に note_send を1件作り、行の指紋（[`fingerprint`]）を入れる。
-/// - 見出しの行、本文が残らない行、すでに送信済みの印が付いた行は送らずに、`skipped` に理由を返す。
+///   リストの印・チェック欄を除いたもの。各行に note_send を1件作り、行の指紋（モジュールの説明）を入れる。
+/// - 見出しの行、区切り線・コードの囲みの行、本文が残らない行、すでに送信済みの印が付いた行は送らずに、`skipped` に理由を返す。
 ///   1行も送らなくても、本文は保存する。
 /// - 行番号の誤り（0、範囲が空、本文に無い行）は [`SendError::InvalidArgument`] で、何も書かない。
 pub fn send(
@@ -408,14 +414,16 @@ pub fn send(
         ref lines,
         kind,
     } = *request;
+    // 使い切った範囲も空とみなす（`start`・`end` だけでは分からないため）
+    if lines.is_empty() {
+        return Err(InvalidArgument::EmptyRange.into());
+    }
     let (first, last) = (*lines.start(), *lines.end());
     if first == 0 {
         return Err(InvalidArgument::LineZero.into());
     }
-    if first > last {
-        return Err(InvalidArgument::EmptyRange.into());
-    }
-    let line_count = note_body::line_count(body);
+    let texts: Vec<&str> = note_body::lines(body).collect();
+    let line_count = texts.len();
     if last > line_count {
         return Err(InvalidArgument::LineOutOfRange {
             line: last,
@@ -424,15 +432,16 @@ pub fn send(
         .into());
     }
     in_transaction(conn, || {
-        let rev = text_doc::save_screen_body(conn, TextDoc::Note, date, body, base_rev, tz, now)?
-            .map_err(|latest| SendError::Stale { latest })?
-            .rev;
-        let keys = line_keys(body);
-        let already: HashMap<usize, Ulid> = marks_for(conn, date, &keys)?
+        let rev =
+            match text_doc::save_screen_body(conn, TextDoc::Note, date, body, base_rev, tz, now)? {
+                ScreenSave::Saved(written) => written.rev,
+                ScreenSave::Stale(latest) => return Err(SendError::Stale { latest }),
+            };
+        let keys = line_keys(&texts);
+        let already: HashMap<usize, Ulid> = marks_for(conn, date, &keys, None)?
             .into_iter()
             .map(|m| (m.line, m.item_id))
             .collect();
-        let texts: Vec<&str> = note_body::lines(body).collect();
         let mut to_send = Vec::new();
         let mut skipped = Vec::new();
         for line in first..=last {
@@ -492,23 +501,34 @@ pub struct Mark {
 /// 送り先の項目が削除された記録は印を付けない（データモデル設計書 3章 note_send）。行の照合の
 /// 決まりは、このモジュールの説明の「指紋と照合」。
 pub fn marks(conn: &Connection, date: LogicalDate, body: &str) -> Result<Vec<Mark>, StorageError> {
-    marks_for(conn, date, &line_keys(body))
+    let lines: Vec<&str> = note_body::lines(body).collect();
+    marks_for(conn, date, &line_keys(&lines), None)
 }
 
 /// [`marks`] の中身。本文は、各行の [`LineKey`] で受け取る。
+///
+/// `extra` は、送り先の項目が削除されていても照合に加える記録と、その項目（[`source_with_marks`] が
+/// さかのぼった先の記録に使う）。ほかの記録の後に照合するので、ほかの記録の印の行は変えない。
 fn marks_for(
     conn: &Connection,
     date: LogicalDate,
     keys: &[LineKey],
+    extra: Option<(&NoteSend, &Item)>,
 ) -> Result<Vec<Mark>, StorageError> {
-    let live: HashMap<Ulid, Item> = item_table::list_by_date(conn, date)?
+    let mut live: HashMap<Ulid, Item> = item_table::list_by_date(conn, date)?
         .into_iter()
         .map(|i| (i.id, i))
         .collect();
-    let sends: Vec<NoteSend> = note_send_table::list_by_date(conn, date)?
+    let mut sends: Vec<NoteSend> = note_send_table::list_by_date(conn, date)?
         .into_iter()
         .filter(|s| live.contains_key(&s.item_id))
         .collect();
+    if let Some((send, item)) = extra
+        && !sends.iter().any(|s| s.id == send.id)
+    {
+        live.insert(item.id, item.clone());
+        sends.push(send.clone());
+    }
     let refs: Vec<&NoteSend> = sends.iter().collect();
     let mut marks: Vec<Mark> = assign(&refs, keys)
         .into_iter()
@@ -542,14 +562,18 @@ pub struct SourceLine {
 /// 項目 `item_id` がどのノートの行から来たか（データモデル設計書 3章 note_send）。
 ///
 /// その項目を送り先にする記録を探し、無ければ `carried_from_id`・`split_from_id` で元の項目へ
-/// さかのぼって同じく探す。最初に見つかった項目の記録が、いまのそのノートの本文で印を付けていない
-/// （本文が変わった、送り元の項目が削除された）なら、ノートから来ていないものとして `None`。
-/// 項目が無いときも `None`。さかのぼる元の項目は、削除されていてもたどる。
+/// さかのぼって同じく探す。最初に見つかった記録の行が、いまのそのノートの本文に無ければ（本文が
+/// 変わった）、ノートから来ていないものとして `None`。項目が無いときも `None`。
+///
+/// 見つかった記録の送り先の項目（さかのぼった先の元の項目を含む）が削除されていても、その記録の
+/// 行は照合する（持ち越した後に元の日の項目を消して整理しても、持ち越し先の依頼文の文脈を失わない
+/// ため）。その場合も、送信済みの印（[`marks`]）は付かない。
 pub fn source_line(conn: &Connection, item_id: Ulid) -> Result<Option<SourceLine>, StorageError> {
     Ok(source_with_marks(conn, item_id)?.map(|(source, _)| source))
 }
 
-/// [`source_line`] と、送り元のノートのいまの本文の印（[`marks`]。[`request_context`] で使い回す）。
+/// [`source_line`] と、送り元のノートのいまの本文の印（[`request_context`] で使い回す）。印には、
+/// 削除された項目への見つかった記録も含む（[`marks_for`] の `extra`）。
 fn source_with_marks(
     conn: &Connection,
     item_id: Ulid,
@@ -565,15 +589,14 @@ fn source_with_marks(
             return Ok(None);
         };
         let sends = note_send_table::list_by_item(conn, current)?;
-        if !sends.is_empty() {
-            let body = text_doc::get(conn, TextDoc::Note, sends[0].date)?.body;
-            let marked = marks(conn, sends[0].date, &body)?;
-            for send in sends {
-                if let Some(line) = marked.iter().find(|m| m.send_id == send.id).map(|m| m.line) {
-                    return Ok(Some((SourceLine { line, send, body }, marked)));
-                }
-            }
-            return Ok(None);
+        if let Some(send) = sends.into_iter().next() {
+            let body = text_doc::get(conn, TextDoc::Note, send.date)?.body;
+            let lines: Vec<&str> = note_body::lines(&body).collect();
+            let marked = marks_for(conn, send.date, &line_keys(&lines), Some((&send, &item)))?;
+            let Some(line) = marked.iter().find(|m| m.send_id == send.id).map(|m| m.line) else {
+                return Ok(None);
+            };
+            return Ok(Some((SourceLine { line, send, body }, marked)));
         }
         match item.carried_from_id.or(item.split_from_id) {
             Some(from) => current = from,
@@ -611,11 +634,7 @@ pub fn request_context(
     let body = &source.body;
     let section =
         note_body::section_of_line(body, source.line).expect("the marked line is in the body");
-    let lines = note_body::lines(body)
-        .skip(section.lines.start - 1)
-        .take(section.lines.len())
-        .map(str::to_owned)
-        .collect();
+    let lines = section.lines_in(body).map(str::to_owned).collect();
     let mut blockers = Vec::new();
     let mut seen = HashSet::new();
     for mark in marked {
@@ -718,6 +737,14 @@ mod tests {
             .collect()
     }
 
+    /// 本文 `body` の `line` 行目（1始まり）の指紋。行が本文に無ければ `None`。
+    fn fingerprint(body: &str, line: usize) -> Option<String> {
+        let lines: Vec<&str> = note_body::lines(body).collect();
+        line_keys(&lines)
+            .get(line.checked_sub(1)?)
+            .map(LineKey::fingerprint)
+    }
+
     // ---- 行から項目の本文へ ----
 
     #[test]
@@ -729,7 +756,9 @@ mod tests {
         assert_eq!(item_text("3) 番号").unwrap(), "番号");
         assert_eq!(item_text("- [ ] 未完").unwrap(), "未完");
         assert_eq!(item_text("- [x] 済み").unwrap(), "済み");
-        assert_eq!(item_text("[X] 印だけ").unwrap(), "印だけ");
+        // チェック欄は、リストの印の後にあるときだけ除く
+        assert_eq!(item_text("[X] 印だけ").unwrap(), "[X] 印だけ");
+        assert_eq!(item_text("1. [ ] 番号の後").unwrap(), "番号の後");
         assert_eq!(item_text("ただの文").unwrap(), "ただの文");
         // 印の後に空白が無ければ印ではない
         assert_eq!(item_text("-5度").unwrap(), "-5度");
@@ -752,10 +781,16 @@ mod tests {
         ] {
             assert_eq!(item_text(line), Err(SkipReason::Heading), "{line}");
         }
+        // 区切り線に似ても、ほかの文字があれば本文
+        assert_eq!(item_text("--- 区切り").unwrap(), "--- 区切り");
+        assert_eq!(item_text("-*-").unwrap(), "-*-");
         // `#` が7つ以上、`#` の後に空白が無いものは見出しではない
         assert_eq!(item_text("####### 7").unwrap(), "####### 7");
         assert_eq!(item_text("#tag").unwrap(), "#tag");
-        for line in ["", "   ", "- ", "-", "1. ", "- [ ] ", "\u{3000}"] {
+        for line in [
+            "", "   ", "- ", "-", "1. ", "- [ ] ", "\u{3000}", "---", " * * * ", "___", "```",
+            "```rust", "~~~",
+        ] {
             assert_eq!(item_text(line), Err(SkipReason::NoText), "{line:?}");
         }
     }
@@ -805,10 +840,10 @@ mod tests {
             format!("v1:{a}:-"),
             format!("v1:{a}:-:-:-"),
         ] {
-            assert_eq!(assign(&[&send(&fp)], &line_keys("a")), [None], "{fp}");
+            assert_eq!(assign(&[&send(&fp)], &line_keys(&["a"])), [None], "{fp}");
         }
         assert_eq!(
-            assign(&[&send(&format!("v1:{a}:-:-"))], &line_keys("a")),
+            assign(&[&send(&format!("v1:{a}:-:-"))], &line_keys(&["a"])),
             [Some(1)]
         );
     }
@@ -1024,6 +1059,13 @@ mod tests {
                 Err(SendError::InvalidArgument(e)) => assert_eq!(e, expected),
                 other => panic!("{other:?}"),
             }
+        }
+        // 使い切った範囲は、始まりと終わりが同じでも空
+        let mut used = 1..=1;
+        assert_eq!(used.next(), Some(1));
+        match send_at(conn, "2026-11-03", body, used, ItemKind::Todo, T1) {
+            Err(SendError::InvalidArgument(e)) => assert_eq!(e, InvalidArgument::EmptyRange),
+            other => panic!("{other:?}"),
         }
         assert_eq!(day_table::get(conn, date("2026-11-03")).unwrap(), None);
         assert_eq!(
@@ -1271,12 +1313,56 @@ mod tests {
     }
 
     #[test]
-    fn the_source_line_is_lost_when_the_original_item_is_deleted() {
+    fn the_source_line_is_kept_when_the_original_item_is_deleted() {
         let (db, _dir) = open();
         let conn = db.connection();
-        let (original, done) = send_and_carry(conn, "- 持ち越す行", 1, None);
+        let body = "## 10:00 定例\n- 持ち越す行\n- 権限待ち";
+        let (original, done) = send_and_carry(conn, body, 2, None);
+        let carried = &done.created[0];
+        // 持ち越した後に、元の日の項目を消して整理する
         delete(conn, original.id, at(T2)).unwrap();
-        assert_eq!(source_line(conn, done.created[0].id).unwrap(), None);
+        // 元の行の印は外れるが、持ち越し先からは元の行をたどれる
+        assert_eq!(marked_lines(conn, "2026-11-02", body), Vec::<usize>::new());
+        let source = source_line(conn, carried.id).unwrap().unwrap();
+        assert_eq!(source.send.item_id, original.id);
+        assert_eq!(source.line, 2);
+        let context = request_context(conn, carried.id).unwrap().unwrap();
+        assert_eq!(context.lines, ["- 持ち越す行", "- 権限待ち"]);
+        // 本文を変えれば、たどれない
+        let d = date("2026-11-02");
+        let rev = text_doc::get(conn, TextDoc::Note, d).unwrap().rev;
+        text_doc::save(
+            conn,
+            TextDoc::Note,
+            d,
+            "## 10:00 定例\n- 直した",
+            rev,
+            &tokyo(),
+            at(T2),
+        )
+        .unwrap();
+        assert_eq!(source_line(conn, carried.id).unwrap(), None);
+    }
+
+    #[test]
+    fn a_deleted_original_does_not_take_a_line_from_a_live_record() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let body = "- 同じ行";
+        let (original, done) = send_and_carry(conn, body, 1, None);
+        delete(conn, original.id, at(T2)).unwrap();
+        // 印が外れたので送り直せる。送り直した項目の印は、削除した元の記録に取られない
+        let resent = send_ok(conn, "2026-11-02", body, 1..=1, ItemKind::Todo);
+        let again = &resent.sent[0];
+        assert_eq!(
+            source_line(conn, again.item.id).unwrap().unwrap().send,
+            again.send
+        );
+        // 持ち越し先も、同じ行（重ねて）をたどれる
+        assert_eq!(
+            source_line(conn, done.created[0].id).unwrap().unwrap().line,
+            1
+        );
     }
 
     // ---- 依頼文の書き出しの文脈 ----
