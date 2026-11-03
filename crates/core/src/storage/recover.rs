@@ -27,7 +27,13 @@ use crate::error::ErrorChain;
 const DAMAGED_PREFIX: &str = "damaged-";
 /// 置く前に写す一時ファイルの名前の頭（`backups/restore-<秒>.db.tmp`）。中断で残ったものは、
 /// 次の回復と定期バックアップのときに消す（`backup` モジュール）。
-pub(super) const RESTORE_TEMP_PREFIX: &str = "restore-";
+const RESTORE_TEMP_PREFIX: &str = "restore-";
+
+/// `backups/` の中の `<名前>.db` が、回復で置く前に写した一時ファイルのものか（中断で残ったものを
+/// 片付けるときに使う。`backup` モジュールの一時ファイルの片付けが呼ぶ）。
+pub(super) fn is_restore_temp(name: &str) -> bool {
+    name.starts_with(RESTORE_TEMP_PREFIX)
+}
 
 /// [`Database::open_from_backup`] の結果。
 pub struct Recovered {
@@ -122,7 +128,14 @@ impl Database {
                 // 置いたもの（とその横のファイル）を消してから、退避したものを戻す。ロックは
                 // まだ持っているので、その間にほかのプロセスが開くことはない
                 db_files::remove_with_side_files(&path);
-                Err(set_aside.put_back(RecoverError::Open(e)))
+                let e = match e {
+                    // マイグレーションが作った写しは、上で消している（選んだバックアップと同じ内容）
+                    StorageError::MigrationFailed { .. } | StorageError::RestoreFailed { .. } => {
+                        RecoverError::Migration(e)
+                    }
+                    e => RecoverError::Open(e),
+                };
+                Err(set_aside.put_back(e))
             }
         }
     }
@@ -182,9 +195,16 @@ impl SetAside {
 
     /// 動かしたものを元の場所に戻し、`error` を返す。戻すのに失敗したら
     /// [`RecoverError::PutBackFailed`] にして返す。
+    ///
+    /// 途中で戻せなくなったときは、それまでに戻したものをもう一度退避した名前へ動かし（できる限り）、
+    /// 本体と横のファイルが別々の場所に分かれないようにする（分かれたまま次の回復で別の名前に退避
+    /// すると、SQLite が `-wal` を本体と組にして読めなくなるため）。
     fn put_back(self, error: RecoverError) -> RecoverError {
-        for (from, to) in self.moved.iter().rev() {
+        for (i, (from, to)) in self.moved.iter().enumerate().rev() {
             if let Err(e) = fs::rename(to, from) {
+                for (back_from, back_to) in &self.moved[i + 1..] {
+                    let _ = fs::rename(back_from, back_to);
+                }
                 return RecoverError::PutBackFailed {
                     source: Box::new(error),
                     put_back_error: io::Error::new(
@@ -217,8 +237,12 @@ pub enum RecoverError {
         path: PathBuf,
         source: io::Error,
     },
-    /// 戻したデータベースを開けなかった（マイグレーションの失敗など）。退避したものは元に戻した。
+    /// 戻したデータベースを開けなかった。退避したものは元に戻した。
     Open(StorageError),
+    /// 戻したデータベースのマイグレーションに失敗した（[`StorageError::MigrationFailed`]・
+    /// [`StorageError::RestoreFailed`] を包む）。退避したものは元に戻した。包んだエラーが示す
+    /// マイグレーション前のバックアップは、選んだバックアップと同じ内容なので消してある。
+    Migration(StorageError),
     /// 失敗し（`source`）、退避したものを元の場所に戻すことにも失敗した。退避したものは
     /// `set_aside`（とその横のファイル）に残っている。
     PutBackFailed {
@@ -267,6 +291,12 @@ impl fmt::Display for RecoverError {
             Self::DataDir(e) => write!(f, "{e}"),
             Self::Backup(e) => write!(f, "{e}"),
             Self::Open(e) => write!(f, "{e}"),
+            // 包んだエラーが示すマイグレーション前のバックアップは消してあるので、そう書く。
+            // 原因は source() で返す
+            Self::Migration(_) => write!(
+                f,
+                "the restored backup could not be migrated (the copy made before the migration was the same as the selected backup and was removed)"
+            ),
             Self::NoDataDir(path) => {
                 write!(f, "the data directory {} does not exist", path.display())
             }
@@ -299,6 +329,7 @@ impl std::error::Error for RecoverError {
             Self::DataDir(e) => e.source(),
             Self::Backup(e) => e.source(),
             Self::Open(e) => e.source(),
+            Self::Migration(e) => Some(e),
             Self::Io { source, .. } => Some(source),
             Self::PutBackFailed { source, .. } => Some(source.as_ref()),
             Self::NoDataDir(_) | Self::Symlink(_) => None,
@@ -551,7 +582,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                RecoverError::Open(StorageError::MigrationFailed { .. })
+                RecoverError::Migration(StorageError::MigrationFailed { .. })
             ),
             "{err:?}"
         );
@@ -619,6 +650,42 @@ mod tests {
             Err(RecoverError::Symlink(_))
         ));
         assert!(fs::symlink_metadata(env.db()).unwrap().is_symlink());
+    }
+
+    #[test]
+    fn a_partial_put_back_keeps_the_set_aside_files_together() {
+        let env = Env::new();
+        fs::create_dir_all(env.backups()).unwrap();
+        let db = env.db();
+        let wal = db_files::side_file(&db, "-wal");
+        let name = env.backups().join("damaged-1.db");
+        let name_wal = db_files::side_file(&name, "-wal");
+        // 本体は（何かの理由で）退避した場所から消えていて、戻せない。-wal は戻せる
+        fs::write(&name_wal, b"wal").unwrap();
+        let set_aside = SetAside {
+            name: Some(name.clone()),
+            moved: vec![(db.clone(), name.clone()), (wal.clone(), name_wal.clone())],
+        };
+        let err = set_aside.put_back(RecoverError::NoDataDir("/x".into()));
+        assert!(
+            matches!(&err, RecoverError::PutBackFailed { set_aside, .. } if *set_aside == name),
+            "{err:?}"
+        );
+        // 戻した -wal は、退避した名前の横に戻してある
+        assert_eq!(fs::read(&name_wal).unwrap(), b"wal");
+        assert!(!wal.exists());
+    }
+
+    #[test]
+    fn a_failed_migration_says_its_copy_was_removed() {
+        let err = RecoverError::Migration(StorageError::MigrationFailed {
+            version: 2,
+            name: "x",
+            source: rusqlite::Error::InvalidQuery,
+            backup: "/d/backups/pre-migration-v1-to-v2-1.db".into(),
+        });
+        let text = ErrorChain(&err).to_string();
+        assert!(text.starts_with("the restored backup could not be migrated (the copy made before the migration was the same as the selected backup and was removed): migration 2 (x) failed"), "{text}");
     }
 
     #[test]

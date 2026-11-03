@@ -27,10 +27,8 @@
   onDestroy(() => notice.clear());
   const mac = isMacPlatform();
   const startupActions = new StartupActions();
-  // 戻している間は、開いた知らせ（startup）がコマンドの結果より先に届くので、結果が届くまで待つ
-  const ready = $derived(
-    session.startup?.state === "ready" && startupActions.restored === null && startupActions.busy !== "restore",
-  );
+  // バックアップから戻した後（restored）は、利用者が確かめるまで起動時の画面のまま
+  const ready = $derived(session.startup?.state === "ready");
 
   // 定期バックアップを作れなかった（1日に1回だけ届く。コアは自動で作り直す。画面設計書 3章「上部のバー」）
   let stopped = false;

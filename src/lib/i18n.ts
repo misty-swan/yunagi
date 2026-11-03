@@ -129,6 +129,7 @@ export interface StartupMessages {
   chooseFailed: string;
   createFailed: string;
   retryFailed: string;
+  acknowledgeFailed: string;
   /** バックアップの一覧の種類。 */
   backupDaily: (date: string) => string;
   backupPreMigration: (from: number, to: number) => string;
@@ -280,6 +281,7 @@ const jaStartup: StartupMessages = {
   chooseFailed: "保存先を記録できませんでした。",
   createFailed: "データベースを作れませんでした。",
   retryFailed: "開き直せませんでした。",
+  acknowledgeFailed: "進めませんでした。もう一度押せます。",
   backupDaily: (date) => `定期 ${date}`,
   backupPreMigration: (from, to) => `更新前（スキーマ ${from} → ${to}）`,
   backupPreRestore: "復元前",
@@ -375,6 +377,7 @@ const enStartup: StartupMessages = {
   chooseFailed: "Couldn't record the data folder.",
   createFailed: "Couldn't create the database.",
   retryFailed: "Couldn't open it again.",
+  acknowledgeFailed: "Couldn't continue. You can press it again.",
   backupDaily: (date) => `Daily ${date}`,
   backupPreMigration: (from, to) => `Before update (schema ${from} → ${to})`,
   backupPreRestore: "Before restore",

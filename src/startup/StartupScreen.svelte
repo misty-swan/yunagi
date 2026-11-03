@@ -78,7 +78,6 @@
   $effect(() => {
     void phase;
     void reason;
-    void actions.restored;
     heading?.focus();
   });
 
@@ -104,6 +103,7 @@
       create: m.createFailed,
       choose: m.chooseFailed,
       restore: m.restoreFailed,
+      acknowledge: m.acknowledgeFailed,
     }[e.action];
   }
   const error = $derived(errorText());
@@ -184,8 +184,9 @@
       >
         {actions.busy === "restore" ? m.working : m.restore}
       </button>
-      {@render errorLine("restore")}
     {/if}
+    <!-- 戻せなかった後に読み直した一覧が空・読めなくても、理由は消さない -->
+    {@render errorLine("restore")}
   </section>
 {/snippet}
 
@@ -210,13 +211,16 @@
   <div class="column">
     <div class="brand"><Logo /></div>
 
-    {#if actions.restored !== null}
+    {#if startup?.state === "restored"}
       <h1 tabindex="-1" bind:this={heading}>{m.restoredTitle}</h1>
       <p>{m.restoredBody}</p>
-      {#if actions.restored.setAside !== null}
-        <p>{m.restoredSetAside(actions.restored.setAside)}</p>
+      {#if startup.setAside !== null}
+        <p>{m.restoredSetAside(startup.setAside)}</p>
       {/if}
-      <button type="button" class="btn primary" onclick={() => actions.acknowledge()}>{m.continue}</button>
+      <button type="button" class="btn primary" disabled={busy} onclick={() => void actions.acknowledge()}>
+        {m.continue}
+      </button>
+      {@render errorLine("acknowledge")}
     {:else if phase === "opening" || phase === "ready"}
       <h1 tabindex="-1" bind:this={heading} class="quiet" aria-live="polite">{m.opening}</h1>
       {#if slow}<p class="muted">{m.openingWait}</p>{/if}

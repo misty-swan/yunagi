@@ -35,7 +35,7 @@ use yunagi_core::storage::{
 use crate::screen::ScreenState;
 use crate::types::{
     BackupEntry, BackupFailed, ChangeSource, Changed, CommandError, ItemOutcome, RejectReason,
-    SplitResult, Startup, StartupFailure, StartupRestored, TextSave, TodayChanged,
+    SplitResult, Startup, StartupFailure, TextSave, TodayChanged,
 };
 
 /// コアから画面への知らせ（Tauri のイベントになる。`crate::run`）。
@@ -93,6 +93,10 @@ pub struct AppCore {
     /// 走らせない（`DailyBackup` の説明）。作るときは、作っている途中のものを
     /// [`AppCore::wait_for_backup`] で待ち、その間に次が始まらないようにする。
     backup: Mutex<BackupState>,
+    /// 起動時にバックアップから戻した後、利用者が確かめる（[`AppCore::acknowledge_restore`]）まで
+    /// 持つ、退避した前のデータベースの場所（無かったときは中が `None`）。持っている間、開いた状態は
+    /// [`Startup::Restored`] として知らせる（画面が読み込み直しても、場所を示せるように）。
+    restored: Mutex<Option<Option<PathBuf>>>,
     notify: Notify,
 }
 
@@ -220,6 +224,7 @@ impl AppCore {
             screen: ScreenState::default(),
             today: Mutex::new(None),
             backup: Mutex::new(BackupState::default()),
+            restored: Mutex::new(None),
             notify,
         })
     }
@@ -268,15 +273,7 @@ impl AppCore {
     /// 前に止まったときは [`CommandError::NotReady`]（状態は [`Notice::Startup`] で届く）。それ以外の
     /// 状態では [`CommandError::InvalidState`]。
     pub fn choose_data_dir(self: &Arc<Self>, dir: &Path) -> Result<Startup, CommandError> {
-        self.begin(|s| matches!(s, Slot::NotFound(_)))?;
-        let lock = match acquire_lock() {
-            Ok(lock) => lock,
-            Err(slot) => {
-                // ロックが取れないなど、選び直す前に止まった（状態は startup で届く）
-                self.finish(*slot);
-                return Err(CommandError::NotReady);
-            }
-        };
+        let lock = self.begin_locked(|s| matches!(s, Slot::NotFound(_)))?;
         let chosen = data_dir::use_existing_data_dir(&lock, dir);
         // 記録できなかったときも、同じロックで開き直して、見つからない状態に戻す
         self.finish(open_slot(lock, Database::open));
@@ -296,18 +293,16 @@ impl AppCore {
     /// 見つからなかったとき（[`Startup::NotFound`]）と、データベースが壊れていて開けなかったとき
     /// （[`StartupFailure::Corrupted`]）に、バックアップ `backup` で置き換えて開く（アーキテクチャ
     /// 設計書 6.2「開けないデータベースからの回復」・6.3）。それまでのデータベースは消さずに
-    /// `backups/` に退避し、その場所を返す。
+    /// `backups/` に退避する。戻したら、利用者が確かめる（[`AppCore::acknowledge_restore`]）まで、状態は
+    /// 退避した場所を持つ [`Startup::Restored`] になる。
     ///
     /// 戻せなかったときは、開き直して元の状態に戻してから、エラーを返す（使えないバックアップは
     /// [`CommandError::Rejected`]、前のデータベースを元の場所に戻せなかったときは
     /// [`CommandError::PutBackFailed`]）。ロックが取れないなど、戻す前に止まったときは
     /// [`CommandError::NotReady`]（状態は [`Notice::Startup`] で届く）。それ以外の状態では
     /// [`CommandError::InvalidState`]。
-    pub fn restore_at_startup(
-        self: &Arc<Self>,
-        backup: &Path,
-    ) -> Result<StartupRestored, CommandError> {
-        self.begin(|s| {
+    pub fn restore_at_startup(self: &Arc<Self>, backup: &Path) -> Result<Startup, CommandError> {
+        let db_lock = self.begin_locked(|s| {
             matches!(
                 s,
                 Slot::NotFound(_)
@@ -317,18 +312,12 @@ impl AppCore {
                     }
             )
         })?;
-        let lock = match acquire_lock() {
-            Ok(lock) => lock,
-            Err(slot) => {
-                self.finish(*slot);
-                return Err(CommandError::NotReady);
-            }
-        };
-        match Database::open_from_backup(lock, backup) {
+        match Database::open_from_backup(db_lock, backup) {
             Ok(recovered) => {
-                let set_aside = recovered.set_aside.map(|p| p.display().to_string());
+                // 開いた知らせより先に記録する（知らせは Restored で届く）
+                *lock(&self.restored) = Some(recovered.set_aside);
                 self.finish(Slot::Open(recovered.database));
-                Ok(StartupRestored { set_aside })
+                Ok(self.startup())
             }
             Err(e) => {
                 eprintln!(
@@ -360,6 +349,30 @@ impl AppCore {
         .ok_or(CommandError::InvalidState)?;
         let list = backup::list_backups(&data_dir).map_err(|e| CommandError::storage(&e))?;
         Ok(list.into_iter().map(BackupEntry::from).collect())
+    }
+
+    /// バックアップから戻した結果（[`Startup::Restored`]）を、利用者が確かめた。状態を
+    /// [`Startup::Ready`] にして知らせる。戻した後でなければ [`CommandError::InvalidState`]。
+    pub fn acknowledge_restore(&self) -> Result<Startup, CommandError> {
+        if !matches!(*lock(&self.db), Slot::Open(_)) || lock(&self.restored).take().is_none() {
+            return Err(CommandError::InvalidState);
+        }
+        let startup = self.startup();
+        self.notify(Notice::Startup(startup.clone()));
+        Ok(startup)
+    }
+
+    /// [`AppCore::begin`] の後で `yunagi.lock` を取る（選び直し・戻すとき）。取れなければ、開けなかった
+    /// 状態を記録して知らせ、[`CommandError::NotReady`] を返す（操作は始めていない）。
+    fn begin_locked(
+        self: &Arc<Self>,
+        allowed: impl FnOnce(&Slot) -> bool,
+    ) -> Result<DbLock, CommandError> {
+        self.begin(allowed)?;
+        acquire_lock().map_err(|slot| {
+            self.finish(*slot);
+            CommandError::NotReady
+        })
     }
 
     /// 状態が `allowed` なら、開いている途中にする（その間に、ほかの起動時の操作を断る）。
@@ -406,7 +419,12 @@ impl AppCore {
         let text = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
         match &*lock(&self.db) {
             Slot::Opening => Startup::Opening,
-            Slot::Open(_) => Startup::Ready,
+            Slot::Open(_) => match &*lock(&self.restored) {
+                Some(set_aside) => Startup::Restored {
+                    set_aside: text(set_aside),
+                },
+                None => Startup::Ready,
+            },
             Slot::NotFound(nf) => Startup::NotFound {
                 path: nf.path.display().to_string(),
                 data_dir: nf.data_dir.display().to_string(),

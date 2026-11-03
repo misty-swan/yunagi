@@ -1084,12 +1084,24 @@ fn a_damaged_database_can_be_replaced_from_a_backup(default_dir: &Path) {
     assert_eq!(std::fs::read(&db).unwrap(), b"this is not a database");
 
     let restored = h.ok("restore_at_startup", json!({ "backup": backup }));
-    assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+    assert_eq!(restored["state"], "restored");
+    // 確かめるまでは、読み込み直しても戻した結果（退避した場所）が届く
+    assert_eq!(h.next_event(), ("startup", restored.clone()));
+    assert_eq!(h.ok("startup_status", json!({})), restored);
     let set_aside = PathBuf::from(restored["setAside"].as_str().unwrap());
     assert_eq!(set_aside.parent().unwrap(), data_dir.join("backups"));
     assert_eq!(
         std::fs::read(&set_aside).unwrap(),
         b"this is not a database"
+    );
+    assert_eq!(
+        h.ok("acknowledge_restore", json!({})),
+        json!({ "state": "ready" })
+    );
+    assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+    assert_eq!(
+        h.err("acknowledge_restore", json!({})),
+        json!({ "kind": "invalid_state" })
     );
     // バックアップの内容が戻っている（バックアップは TODO を足す前に作ったので空）
     let today = h.today();

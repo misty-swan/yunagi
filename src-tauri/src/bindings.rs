@@ -58,7 +58,6 @@ fn render() -> String {
         decl::<EditorLines>(&cfg),
         decl::<Startup>(&cfg),
         decl::<StartupFailure>(&cfg),
-        decl::<StartupRestored>(&cfg),
         decl::<BackupEntry>(&cfg),
         decl::<BackupKind>(&cfg),
         decl::<Changed>(&cfg),

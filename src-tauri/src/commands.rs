@@ -17,8 +17,7 @@ use yunagi_core::domain::{board, export, item, text_doc};
 use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
 use crate::types::{
     BackupEntry, Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome,
-    Overview, Position, Snapshot, SplitResult, Startup, StartupRestored, TextDoc, TextSave,
-    UiReport,
+    Overview, Position, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -65,14 +64,17 @@ pub async fn choose_data_dir(core: Core<'_>, dir: String) -> Result<Startup, Com
 /// 見つからなかった・壊れていて開けなかったときに、バックアップ `backup`（`list_backups` の
 /// `path`）で置き換えて開く。
 #[tauri::command]
-pub async fn restore_at_startup(
-    core: Core<'_>,
-    backup: String,
-) -> Result<StartupRestored, CommandError> {
+pub async fn restore_at_startup(core: Core<'_>, backup: String) -> Result<Startup, CommandError> {
     blocking(&core, move |core| {
         core.restore_at_startup(Path::new(&backup))
     })
     .await
+}
+
+/// バックアップから戻した結果（`Startup::Restored`）を、利用者が確かめた。
+#[tauri::command]
+pub async fn acknowledge_restore(core: Core<'_>) -> Result<Startup, CommandError> {
+    blocking(&core, |core| core.acknowledge_restore()).await
 }
 
 /// 保存先の `backups/` にあるバックアップの一覧（新しいものが先）。

@@ -636,6 +636,13 @@ pub enum Startup {
     Opening,
     /// 開いた。コマンドを使える。
     Ready,
+    /// 起動時にバックアップから戻して開いた（`restore_at_startup`）。コマンドは使えるが、画面は
+    /// 退避した場所を示し、利用者が確かめたら `acknowledge_restore` を呼ぶ（その後は `ready`）。
+    #[serde(rename_all = "camelCase")]
+    Restored {
+        /// 退避した、それまでのデータベース（`backups/damaged-<秒>.db`）。無かったときは `None`。
+        set_aside: Option<String>,
+    },
     /// 保存先にデータベースが無く、初めて使うときでもない（アーキテクチャ設計書 6.3）。
     /// 画面は探した場所を示して案内する。新しく作るのは `create_database`。
     #[serde(rename_all = "camelCase")]
@@ -663,15 +670,6 @@ pub enum Startup {
         /// `config.json` のパス（`config` のとき）。
         config: Option<String>,
     },
-}
-
-/// 起動時にバックアップから戻した結果（`restore_at_startup`）。開いた状態は `startup` で届く。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(TS))]
-#[serde(rename_all = "camelCase")]
-pub struct StartupRestored {
-    /// 退避した、それまでのデータベース（`backups/damaged-<秒>.db`）。無かったときは `None`。
-    pub set_aside: Option<String>,
 }
 
 /// `backups/` にある1つのバックアップ（`list_backups`）。

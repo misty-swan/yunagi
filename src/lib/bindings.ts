@@ -315,7 +315,11 @@ lines: Array<number>, };
  * データベースを開く処理の状態（起動直後に画面が `startup_status` で問い合わせ、変わると
  * `startup` イベントでも届く）。
  */
-export type Startup = { "state": "opening" } | { "state": "ready" } | { "state": "not_found", 
+export type Startup = { "state": "opening" } | { "state": "ready" } | { "state": "restored", 
+/**
+ * 退避した、それまでのデータベース（`backups/damaged-<秒>.db`）。無かったときは `None`。
+ */
+setAside: string | null, } | { "state": "not_found", 
 /**
  * 探した `yunagi.db` のパス。
  */
@@ -350,15 +354,6 @@ config: string | null, };
  * データベースを開けなかった理由。
  */
 export type StartupFailure = "default_dir" | "lock_busy" | "lock" | "config" | "already_exists" | "migration_failed" | "migration_restore_failed" | "unsupported_schema" | "corrupted" | "storage";
-
-/**
- * 起動時にバックアップから戻した結果（`restore_at_startup`）。開いた状態は `startup` で届く。
- */
-export type StartupRestored = { 
-/**
- * 退避した、それまでのデータベース（`backups/damaged-<秒>.db`）。無かったときは `None`。
- */
-setAside: string | null, };
 
 /**
  * `backups/` にある1つのバックアップ（`list_backups`）。

@@ -23,7 +23,6 @@ import {
   type Snapshot,
   type SplitResult,
   type Startup,
-  type StartupRestored,
   type TextDoc,
   type TextSave,
   type TodayChanged,
@@ -80,7 +79,9 @@ export const core = {
   /** 見つからなかったときに、データベースのある既存のフォルダ `dir` を保存先にして開く。 */
   chooseDataDir: (dir: string) => call<Startup>("choose_data_dir", { dir }),
   /** 見つからなかった・壊れていて開けなかったときに、バックアップ `backup` で置き換えて開く。 */
-  restoreAtStartup: (backup: string) => call<StartupRestored>("restore_at_startup", { backup }),
+  restoreAtStartup: (backup: string) => call<Startup>("restore_at_startup", { backup }),
+  /** バックアップから戻した結果（`restored`）を、利用者が確かめた。 */
+  acknowledgeRestore: () => call<Startup>("acknowledge_restore"),
   /** 保存先の `backups/` にあるバックアップの一覧（新しいものが先）。 */
   listBackups: () => call<BackupEntry[]>("list_backups"),
   /** 今日の論理日付。 */

@@ -157,6 +157,18 @@ test("フォルダが無いときは、ドライブ・同期の案内を出す",
   expect(text(".startup")).not.toContain("に記録されています");
 });
 
+test("やり直して同じ状態に戻っても、バックアップの一覧を読み直す", async () => {
+  let lists = 0;
+  await start(NOT_FOUND, (cmd) => {
+    if (cmd === "retry_open") return NOT_FOUND;
+    if (cmd === "list_backups") return lists++ === 0 ? [] : BACKUPS;
+    return undefined;
+  });
+  await until(() => text(".startup").includes("使えるバックアップがありません。"));
+  click("やり直す");
+  await until(() => document.querySelectorAll(".backup").length === 2);
+});
+
 test("やり直すと retry_open を呼び、届いた状態に変わる", async () => {
   const calls = await start(NOT_FOUND, (cmd) => (cmd === "retry_open" ? NOT_FOUND : undefined));
   click("やり直す");
@@ -199,9 +211,23 @@ test("新しく作るは、確かめてから create_database を呼ぶ", async 
 });
 
 test("バックアップから戻すと、退避した場所を示し、続けると整理モードへ進む", async () => {
-  const calls = await start(failed("corrupted"), (cmd) =>
-    cmd === "restore_at_startup" ? { setAside: "/data/backups/damaged-1793700000.db" } : undefined,
-  );
+  const restored: Startup = { state: "restored", setAside: "/data/backups/damaged-1793700000.db" };
+  const calls = await start(failed("corrupted"), (cmd) => {
+    if (cmd === "restore_at_startup") {
+      // コアは、結果を返す前に startup を出す
+      return (async () => {
+        await emit(EVENTS.startup, restored);
+        return restored;
+      })();
+    }
+    if (cmd === "acknowledge_restore") {
+      return (async () => {
+        await emit(EVENTS.startup, { state: "ready" });
+        return { state: "ready" };
+      })();
+    }
+    return undefined;
+  });
   expect(text(".startup h1")).toBe("データベースが壊れているため、開けませんでした");
   expect(text(".startup")).toContain("データベースには触れていません。");
   await until(() => document.querySelectorAll(".backup").length === 2);
@@ -209,24 +235,36 @@ test("バックアップから戻すと、退避した場所を示し、続け�
   document.querySelectorAll<HTMLInputElement>(".backup input")[1].click();
   flushSync();
   click("選んだバックアップから戻す");
-  await until(() => calls.some((c) => c.cmd === "restore_at_startup"));
-  expect(calls.find((c) => c.cmd === "restore_at_startup")?.args).toEqual({ backup: BACKUPS[1].path });
-  await emit(EVENTS.startup, { state: "ready" });
   await until(() => text(".startup h1") === "バックアップから戻しました");
+  expect(calls.find((c) => c.cmd === "restore_at_startup")?.args).toEqual({ backup: BACKUPS[1].path });
   expect(text(".startup")).toContain("それまでのデータベースは /data/backups/damaged-1793700000.db に残しています。");
   expect($(".top")).toBeNull();
+  // 戻すコマンドが終わるまで（知らせが先に届く）は押せない
+  await until(() => !button("続ける").disabled);
   click("続ける");
   await until(() => $(".top") !== null);
+  expect(calls.some((c) => c.cmd === "acknowledge_restore")).toBe(true);
 });
 
-test("使えないバックアップを選んだときは、理由を出してそのままにする", async () => {
+test("戻した後に読み込み直しても、確かめるまで退避した場所を出す", async () => {
+  await start({ state: "restored", setAside: "/data/backups/damaged-7.db" });
+  expect(text(".startup h1")).toBe("バックアップから戻しました");
+  expect(text(".startup")).toContain("/data/backups/damaged-7.db");
+  expect($(".top")).toBeNull();
+});
+
+test("使えないバックアップを選んだときは、理由を出してそのままにする。読み直した一覧が空でも理由は消さない", async () => {
+  let lists = 0;
   await start(failed("corrupted"), (cmd) => {
     if (cmd === "restore_at_startup") throw { kind: "rejected", reason: "corrupted" };
+    if (cmd === "list_backups") return lists++ === 0 ? BACKUPS : [];
     return undefined;
   });
   await until(() => document.querySelectorAll(".backup").length === 2);
   click("選んだバックアップから戻す");
   await until(() => text(".startup .error") === "壊れているため使えません。");
+  await until(() => text(".startup").includes("使えるバックアップがありません。"));
+  expect(text(".startup .error")).toBe("壊れているため使えません。");
   expect(text(".startup h1")).toBe("データベースが壊れているため、開けませんでした");
 });
 
@@ -289,25 +327,6 @@ test("定期バックアップを作れなかったら、上部のバーに知�
   await until(() => $(".top") !== null);
   await emit(EVENTS.backupFailed, { detail: "could not create directory /data/backups" });
   await until(() => text(".top .notice") === "今日のバックアップを作れませんでした。自動で作り直します");
-});
-
-test("戻している途中に開いた知らせが先に届いても、結果を確かめるまで整理モードを出さない", async () => {
-  let sawShell: boolean | null = null;
-  await start(failed("corrupted"), (cmd) => {
-    if (cmd !== "restore_at_startup") return undefined;
-    // コアは、コマンドの結果を返す前に startup（ready）を出す
-    return (async () => {
-      await emit(EVENTS.startup, { state: "ready" });
-      flushSync();
-      sawShell = $(".top") !== null;
-      return { setAside: null };
-    })();
-  });
-  await until(() => document.querySelectorAll(".backup").length === 2);
-  click("選んだバックアップから戻す");
-  await until(() => text(".startup h1") === "バックアップから戻しました");
-  expect(sawShell).toBe(false);
-  expect(text(".startup")).not.toContain("残しています");
 });
 
 test("戻せなかったときは一覧を読み直し、前のデータベースを戻せなかったときはその場所と問い合わせ先を出す", async () => {

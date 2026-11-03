@@ -350,7 +350,7 @@ pub(super) fn remove_stale_temp_files(dir: &Path) {
         parse(Path::new(name))
             .is_some_and(|b| matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore))
             // 開けないデータベースからの回復で、置く前に写したもの（`recover` モジュール）
-            || name.starts_with(super::recover::RESTORE_TEMP_PREFIX)
+            || super::recover::is_restore_temp(name)
     });
 }
 
