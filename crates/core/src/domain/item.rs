@@ -7,16 +7,16 @@
 //!   [`complete_todo`]・[`reopen_todo`]・[`resolve_blocker`]）は、MCP・CLI 仕様書 3.2 の判定の順で
 //!   確かめ、実際に何かを変えたときだけ書き込んで change_log に記録する。何も変えない操作は
 //!   `updated: false` で成功し、`updated_at` も変えない。
-//! - 画面の操作（[`add`]・[`save_text`]・[`set_closed`]・[`save_resolution_note`]・[`delete`]・
-//!   [`restore`]・[`move_item`]・[`split`]）は、人の編集なので記録しない。持ち越しの確定
-//!   （[`super::carryover`]）と行送り（[`super::note_send`]）も同じ。
+//! - 画面の操作（[`add`]・[`save`]・[`delete`]・[`restore`]・[`move_item`]・[`split`]）は、人の
+//!   編集なので記録しない。持ち越しの確定（[`super::carryover`]）と行送り（[`super::note_send`]）も同じ。
 //! - どちらも、変えた欄だけを書く（item は版の番号を持たない。アーキテクチャ設計書 4.1）。
 //! - 項目を作るときは、その日の day の行が無ければ作る（[`day::ensure`]）。
+//! - 画面の保存（[`save`]）で状態を変えたときは、利用者とエージェントが項目を同じ状態にした
+//!   行き違い（アーキテクチャ設計書 4.1 の後半）を判定し、当たればエージェントの記録から状態と
+//!   完了時刻の欄を外す。
 //!
-//! ここに無いもの（画面がつながってから作る）：利用者とエージェントが項目を同じ状態にした
-//! 行き違いの判定（アーキテクチャ設計書 4.1 の後半。画面の保存に添える「変える前の値」と操作の時刻を
-//! 使う）。画面の状態（保存の失敗中・入力中）は [`Agent::ui`] で受け取って判定する（アプリでは、
-//! 画面が知らせたものを src-tauri の `ScreenState` が返す。アーキテクチャ設計書 4.3）。
+//! 画面の状態（保存の失敗中・入力中）は [`Agent::ui`] で受け取って判定する（アプリでは、画面が
+//! 知らせたものを src-tauri の `ScreenState` が返す。アーキテクチャ設計書 4.3）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -647,82 +647,278 @@ pub(crate) fn add_from_note(
         .collect()
 }
 
-/// 画面で項目の本文を保存する。前後の空白を除いて今と同じなら書かない。取りやめた TODO と
-/// 持ち越し済みの項目は変えられない（操作仕様書 2章）。
+/// 画面からの項目の保存で、状態の欄に添えるもの（アーキテクチャ設計書 4.1「利用者とエージェントが
+/// 項目を同じ状態にした行き違い」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusSave {
+    /// 変える前の値：利用者がこの保存で最初に状態を変えたときに、画面に出ていた状態。
+    pub before: ItemStatus,
+    /// `Some` なら完了（TODO）・解消（障害）にしてその時刻を完了時刻に、`None` なら未完了・未解消に
+    /// 戻して完了時刻を空にする。完了時刻は画面が決める（ふつうは利用者の最後の操作の時刻。Mod+Z で
+    /// 戻す操作を取り消したときは元の時刻。操作仕様書 2章）。
+    pub closed_at: Option<Timestamp>,
+    /// 利用者がこの保存で最初に状態を変えた操作の時刻（コアと同じ端末の時計で、ミリ秒まで）。
+    pub changed_at: Timestamp,
+}
+
+/// 画面からの項目の保存：利用者が変えた欄だけ（アーキテクチャ設計書 4.1「項目の保存」）。
+/// `None` の欄には触れない。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemSave {
+    /// 本文。前後の空白を除いて保存する。
+    pub text: Option<String>,
+    /// 障害の解消メモ。前後の空白を除いて保存し、空なら消す（NULL）。
+    pub resolution_note: Option<String>,
+    /// 状態（完了・解消の切り替え）。
+    pub status: Option<StatusSave>,
+}
+
+/// 画面で項目を保存する（本文・解消メモ・状態のうち、送られた欄だけを書く。アーキテクチャ設計書
+/// 4.1「項目の保存」）。
+///
+/// - 欄ごとに今と比べ、違う欄だけを書く。どれも同じなら書かない（`updated: false`）。本文・解消メモは
+///   前後の空白を除いて比べる。障害を未解消に戻しても、解消メモは残す（操作仕様書 2章）。
+/// - 確かめる順：本文の誤り、解消メモの誤り、項目があるか（[`ItemError::NotFound`]）、取りやめた
+///   TODO と持ち越し済みの項目（変えられない。操作仕様書 2章）、TODO への解消メモ
+///   （[`InvalidArgument::WrongKind`]）。
+/// - 状態を送ったときは、利用者とエージェントが項目を同じ状態にした行き違いを判定し、当たれば
+///   エージェントの記録から状態と完了時刻の欄を外す（アーキテクチャ設計書 4.1）。記録を変えたときも
+///   `updated: true` を返す（画面は再読み込みして、その記録の分の印を消す）。
+///
+/// どれも1つのトランザクションで行う。
+pub fn save(
+    conn: &Connection,
+    id: Ulid,
+    save: &ItemSave,
+    now: Timestamp,
+) -> Result<Outcome, ItemError> {
+    in_transaction(conn, || {
+        let text = save.text.as_deref().map(one_line_text).transpose()?;
+        let note = save
+            .resolution_note
+            .as_deref()
+            .map(|note| {
+                match one_line(
+                    note,
+                    InvalidArgument::EmptyNote,
+                    InvalidArgument::MultilineNote,
+                ) {
+                    Ok(note) => Ok(Some(note)),
+                    Err(InvalidArgument::EmptyNote) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            })
+            .transpose()?;
+        let item = target_for_screen(conn, id)?;
+        let mut changes = match text {
+            Some(text) => text_change(&item, text),
+            None => ItemChanges::default(),
+        };
+        if let Some(note) = note {
+            if item.kind != ItemKind::Blocker {
+                return Err(InvalidArgument::WrongKind {
+                    item_kind: item.kind,
+                    use_operation: None,
+                }
+                .into());
+            }
+            // 保存済みの側も前後の空白を除いて比べる（resolve_blocker と同じ）。空白だけなら空とみなす
+            let current = item
+                .resolution_note
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty());
+            changes.resolution_note = (note.as_deref() != current).then_some(note);
+        }
+        let mut logs_changed = false;
+        if let Some(status) = &save.status {
+            let (status_changes, changed) = status_changes(conn, &item, status)?;
+            changes.status = status_changes.status;
+            changes.completed_at = status_changes.completed_at;
+            logs_changed = changed;
+        }
+        let mut outcome = apply(conn, None, item, changes, now)?;
+        outcome.updated |= logs_changed;
+        Ok(outcome)
+    })
+}
+
+/// 画面で項目の本文を保存する（[`save`] の本文だけのもの）。
 pub fn save_text(
     conn: &Connection,
     id: Ulid,
     text: &str,
     now: Timestamp,
 ) -> Result<Outcome, ItemError> {
-    in_transaction(conn, || {
-        let text = one_line_text(text)?;
-        let item = target_for_screen(conn, id)?;
-        let changes = text_change(&item, text);
-        apply(conn, None, item, changes, now)
-    })
+    let save_text = ItemSave {
+        text: Some(text.to_owned()),
+        ..ItemSave::default()
+    };
+    save(conn, id, &save_text, now)
 }
 
-/// 画面で項目の完了・解消を切り替える。`closed_at` が `Some` なら完了（TODO）・解消（障害）にして
-/// その時刻を完了時刻に、`None` なら未完了・未解消に戻して完了時刻を空にする。完了時刻は画面が
-/// 決める（ふつうは操作の時刻。Mod+Z で戻す操作を取り消したときは元の時刻。操作仕様書 2章）。
-///
-/// 障害を未解消に戻しても、解消メモは残す。取りやめた TODO と持ち越し済みの項目は変えられない。
-pub fn set_closed(
-    conn: &Connection,
-    id: Ulid,
-    closed_at: Option<Timestamp>,
-    now: Timestamp,
-) -> Result<Outcome, ItemError> {
-    in_transaction(conn, || {
-        let item = target_for_screen(conn, id)?;
-        let closed = match item.kind {
-            ItemKind::Todo => ItemStatus::Done,
-            ItemKind::Blocker => ItemStatus::Resolved,
-        };
-        let changes = done_changes(&item, closed_at, closed, true);
-        apply(conn, None, item, changes, now)
-    })
-}
-
-/// 画面で障害の解消メモを保存する。前後の空白を除いて保存し、空なら解消メモを消す（NULL）。
-/// TODO は [`InvalidArgument::WrongKind`]、持ち越し済みの障害は変えられない。
+/// 画面で障害の解消メモを保存する（[`save`] の解消メモだけのもの）。空なら解消メモを消す（NULL）。
 pub fn save_resolution_note(
     conn: &Connection,
     id: Ulid,
     note: &str,
     now: Timestamp,
 ) -> Result<Outcome, ItemError> {
-    in_transaction(conn, || {
-        let note = match one_line(
-            note,
-            InvalidArgument::EmptyNote,
-            InvalidArgument::MultilineNote,
-        ) {
-            Ok(note) => Some(note),
-            Err(InvalidArgument::EmptyNote) => None,
-            Err(e) => return Err(e.into()),
+    let save_note = ItemSave {
+        resolution_note: Some(note.to_owned()),
+        ..ItemSave::default()
+    };
+    save(conn, id, &save_note, now)
+}
+
+/// テストで、行き違いを考えずに完了・解消を切り替える（変える前の値は今の状態、操作の時刻は `now`）。
+#[cfg(test)]
+pub(crate) fn set_closed(
+    conn: &Connection,
+    id: Ulid,
+    closed_at: Option<Timestamp>,
+    now: Timestamp,
+) -> Result<Outcome, ItemError> {
+    let before = load(conn, id)?.status;
+    let save_status = ItemSave {
+        status: Some(StatusSave {
+            before,
+            closed_at,
+            changed_at: now,
+        }),
+        ..ItemSave::default()
+    };
+    save(conn, id, &save_status, now)
+}
+
+/// 種類 `kind` の項目の、完了・解消の状態。
+const fn closed_status(kind: ItemKind) -> ItemStatus {
+    match kind {
+        ItemKind::Todo => ItemStatus::Done,
+        ItemKind::Blocker => ItemStatus::Resolved,
+    }
+}
+
+/// 画面の保存の状態の欄から、項目に書く状態と完了時刻を決める。利用者とエージェントが項目を同じ
+/// 状態にした行き違い（アーキテクチャ設計書 4.1）に当たれば、エージェントの記録を書き換え、
+/// 記録を変えたかを `true` で返す。
+///
+/// - 項目の、状態を変えた記録（取り消しの記録も含む）のうち、`status.changed_at` 以後（同じ時刻も
+///   含む。同じなら利用者の操作が先とみなす）に作られたものを、作った順に見る。
+/// - 最初の記録が、取り消されていないエージェントの状態の操作（`todo.complete`・`todo.reopen`・
+///   `blocker.resolve`）で、状態の `before` が変える前の値、`after` が保存の値なら、行き違いとする。
+///   取り消しの記録（`revert_of_id` がある）や人の記録が最初なら当たらない。取り消された記録と、
+///   取り消しの記録から指されている記録（`reverted_at` が無くても）は、外部キーのため消せないので、
+///   当たらないものとして扱う（ふつうは取り消すと `reverted_at` も入るので、条件 1 で外れる）。
+/// - 当たれば、その記録から状態と完了時刻の欄を外し、何も残らなければ記録を消す。すぐ後の記録が
+///   あれば、その状態と完了時刻の `before` を保存の値に書き直し、今の状態が保存の値と同じなら
+///   状態と完了時刻を書かない（最後の記録の `after` のまま）。
+/// - 当たらなければ、保存の値をそのまま書く（今と違う欄だけ。状態が同じでも、画面が決めた完了時刻を
+///   書く）。
+fn status_changes(
+    conn: &Connection,
+    item: &Item,
+    status: &StatusSave,
+) -> Result<(ItemChanges, bool), ItemError> {
+    let closed = closed_status(item.kind);
+    let target = if status.closed_at.is_some() {
+        closed
+    } else {
+        ItemStatus::Open
+    };
+    let overwrite = done_changes(item, status.closed_at, closed, true);
+    let mut logs: Vec<(ChangeLog, Snapshots)> =
+        change_log::list_by_target(conn, Target::Item(item.id))?
+            .into_iter()
+            .filter(|l| l.created_at >= status.changed_at)
+            .filter_map(|l| {
+                let snapshots = Snapshots::of(&l)?;
+                snapshots
+                    .after
+                    .contains_key("status")
+                    .then_some((l, snapshots))
+            })
+            .collect();
+    logs.sort_by_key(|(a, _)| (a.created_at, a.id));
+    let mut logs = logs.into_iter();
+    let Some((first, mut first_snapshots)) = logs.next() else {
+        return Ok((overwrite, false));
+    };
+    let is_state_operation = [
+        ItemOperation::CompleteTodo,
+        ItemOperation::ReopenTodo,
+        ItemOperation::ResolveBlocker,
+    ]
+    .iter()
+    .any(|op| op.log_operation() == first.operation);
+    let crossed = first.actor == Actor::Agent
+        && first.revert_of_id.is_none()
+        && first.reverted_at.is_none()
+        && is_state_operation
+        && first_snapshots.before.get("status") == Some(&json!(status.before.as_str()))
+        && first_snapshots.after.get("status") == Some(&json!(target.as_str()))
+        && !change_log::is_reverted_by_any(conn, first.id)?;
+    if !crossed {
+        return Ok((overwrite, false));
+    }
+    for fields in [&mut first_snapshots.before, &mut first_snapshots.after] {
+        fields.remove("status");
+        fields.remove("completed_at");
+    }
+    if first_snapshots.is_empty() {
+        change_log::delete(conn, first.id)?;
+    } else {
+        first_snapshots.write(conn, first.id)?;
+    }
+    let Some((next, mut next_snapshots)) = logs.next() else {
+        return Ok((overwrite, true));
+    };
+    next_snapshots
+        .before
+        .insert("status".into(), json!(target.as_str()));
+    if next_snapshots.before.contains_key("completed_at") {
+        next_snapshots
+            .before
+            .insert("completed_at".into(), time_json(status.closed_at));
+    }
+    next_snapshots.write(conn, next.id)?;
+    if item.status == target {
+        Ok((ItemChanges::default(), true))
+    } else {
+        Ok((overwrite, true))
+    }
+}
+
+/// 項目の記録の `before` / `after`（変えた欄の JSON のオブジェクト）。
+struct Snapshots {
+    before: Map<String, Value>,
+    after: Map<String, Value>,
+}
+
+impl Snapshots {
+    /// 記録の `before` / `after`。どちらかがオブジェクトでなければ `None`（項目の欄の書き換えの
+    /// 記録ではない。追加の記録は `before` が無い）。
+    fn of(log: &ChangeLog) -> Option<Self> {
+        let object = |s: &Option<String>| match serde_json::from_str(s.as_deref()?) {
+            Ok(Value::Object(m)) => Some(m),
+            _ => None,
         };
-        let item = target_for_screen(conn, id)?;
-        if item.kind != ItemKind::Blocker {
-            return Err(InvalidArgument::WrongKind {
-                item_kind: item.kind,
-                use_operation: None,
-            }
-            .into());
-        }
-        // 保存済みの側も前後の空白を除いて比べる（resolve_blocker と同じ）。空白だけなら空とみなす
-        let current = item
-            .resolution_note
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty());
-        let changes = ItemChanges {
-            resolution_note: (note.as_deref() != current).then_some(note),
-            ..ItemChanges::default()
-        };
-        apply(conn, None, item, changes, now)
-    })
+        Some(Self {
+            before: object(&log.before)?,
+            after: object(&log.after)?,
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.before.is_empty() && self.after.is_empty()
+    }
+
+    fn write(&self, conn: &Connection, id: Ulid) -> Result<(), StorageError> {
+        let before = Value::Object(self.before.clone()).to_string();
+        let after = Value::Object(self.after.clone()).to_string();
+        change_log::update_snapshots(conn, id, Some(&before), Some(&after))?;
+        Ok(())
+    }
 }
 
 /// [`delete`] の結果。画面は、削除の取り消し（Mod+Z）のために取り消しの履歴に持ち、[`restore`] に渡す。
@@ -2127,6 +2323,249 @@ mod tests {
             }
         ));
         assert!(logs(conn, b.id).len() == 1);
+    }
+
+    /// 画面の状態の保存（行き違いの判定つき）。
+    fn save_status(
+        conn: &Connection,
+        id: Ulid,
+        before: ItemStatus,
+        closed_at: Option<&str>,
+        changed_at: &str,
+        now: &str,
+    ) -> Outcome {
+        let s = ItemSave {
+            status: Some(StatusSave {
+                before,
+                closed_at: closed_at.map(at),
+                changed_at: at(changed_at),
+            }),
+            ..ItemSave::default()
+        };
+        save(conn, id, &s, at(now)).unwrap()
+    }
+
+    const TA: &str = "2026-11-03T02:00:00.100Z";
+    const TB: &str = "2026-11-03T02:00:00.200Z";
+    const TC: &str = "2026-11-03T02:00:00.300Z";
+
+    #[test]
+    fn screen_save_writes_several_fields_at_once() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let b = blocker(conn, "b");
+        let s = ItemSave {
+            text: Some(" 障害 ".into()),
+            resolution_note: Some("メモ".into()),
+            status: Some(StatusSave {
+                before: ItemStatus::Open,
+                closed_at: Some(at(T1)),
+                changed_at: at(T1),
+            }),
+        };
+        let out = save(conn, b.id, &s, at(T2)).unwrap();
+        assert!(out.updated);
+        assert_eq!(out.item.text, "障害");
+        assert_eq!(out.item.resolution_note.as_deref(), Some("メモ"));
+        assert_eq!(
+            (out.item.status, out.item.completed_at),
+            (ItemStatus::Resolved, Some(at(T1)))
+        );
+        assert!(!save(conn, b.id, &s, at(T2)).unwrap().updated);
+        // 本文の誤りは、解消メモの誤りより先に返し、何も書かない
+        let bad = ItemSave {
+            text: Some("".into()),
+            resolution_note: Some("a\nb".into()),
+            ..ItemSave::default()
+        };
+        assert_eq!(
+            invalid(save(conn, b.id, &bad, at(T2))),
+            InvalidArgument::EmptyText
+        );
+        assert!(matches!(
+            save(conn, Ulid::generate(), &ItemSave::default(), at(T2)),
+            Err(ItemError::NotFound)
+        ));
+    }
+
+    /// 利用者が完了にしてから保存が届くまでの間に、エージェントも完了にした：記録を消し、利用者の
+    /// 完了時刻を書く（アーキテクチャ設計書 4.1）。同じ時刻の記録も行き違いとみなす。
+    #[test]
+    fn same_state_from_the_agent_in_the_meantime_becomes_the_users_change() {
+        for agent_at in [T1, TA] {
+            let (db, _dir) = open();
+            let conn = db.connection();
+            let item = todo(conn, "a");
+            complete_todo(conn, &cli(), item.id, at(agent_at)).unwrap();
+            assert_eq!(logs(conn, item.id).len(), 2);
+            let out = save_status(conn, item.id, ItemStatus::Open, Some(T1), T1, T2);
+            assert!(out.updated, "the record was removed, so the screen reloads");
+            assert_eq!(
+                (out.item.status, out.item.completed_at),
+                (ItemStatus::Done, Some(at(T1)))
+            );
+            let left = logs(conn, item.id);
+            assert_eq!(left.len(), 1, "only todo.add is left");
+            assert_eq!(left[0].operation, "todo.add");
+            // 同じ操作をやり直したエージェントには、何も変えない成功
+            assert!(
+                !complete_todo(conn, &cli(), item.id, at(T2))
+                    .unwrap()
+                    .updated
+            );
+        }
+    }
+
+    #[test]
+    fn agent_changes_before_the_users_operation_are_kept() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let item = todo(conn, "a");
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        // 画面の再読み込みが間に合わず、利用者は未完了の表示から完了にした（操作は TB）
+        let out = save_status(conn, item.id, ItemStatus::Open, Some(TB), TB, T2);
+        assert!(out.updated);
+        assert_eq!(out.item.completed_at, Some(at(TB)));
+        let left = logs(conn, item.id);
+        assert_eq!(left.len(), 2);
+        assert_eq!(json(&left[1].after)["status"], "done");
+    }
+
+    #[test]
+    fn other_fields_of_the_record_are_kept() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let b = blocker(conn, "b");
+        resolve_blocker(conn, &cli(), b.id, Some("原因"), at(TA)).unwrap();
+        let out = save_status(conn, b.id, ItemStatus::Open, Some(T1), T1, T2);
+        assert_eq!(
+            (out.item.status, out.item.completed_at),
+            (ItemStatus::Resolved, Some(at(T1)))
+        );
+        assert_eq!(out.item.resolution_note.as_deref(), Some("原因"));
+        let left = logs(conn, b.id);
+        assert_eq!(left.len(), 2);
+        assert_eq!(json(&left[1].before), json!({ "resolution_note": null }));
+        assert_eq!(json(&left[1].after), json!({ "resolution_note": "原因" }));
+        assert_eq!(
+            left[1].seen_at, None,
+            "the note is still the agent's change"
+        );
+    }
+
+    /// 後の記録があるとき：すぐ後の記録の `before` を利用者の保存の値にする。
+    #[test]
+    fn later_agent_records_are_kept_and_rewired() {
+        // 完了・未完了に戻すと続いた：今の状態（未完了）は保存の値と違うので、利用者の保存で上書きする
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let item = todo(conn, "a");
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        reopen_todo(conn, &cli(), item.id, at(TB)).unwrap();
+        let out = save_status(conn, item.id, ItemStatus::Open, Some(T1), T1, T2);
+        assert_eq!(
+            (out.item.status, out.item.completed_at),
+            (ItemStatus::Done, Some(at(T1)))
+        );
+        let left = logs(conn, item.id);
+        assert_eq!(left.len(), 2);
+        assert_eq!(left[1].operation, "todo.reopen");
+        assert_eq!(
+            json(&left[1].before),
+            json!({ "status": "done", "completed_at": "2026-11-03T02:00:00.000Z" })
+        );
+
+        // 完了・未完了・完了と続いた：今の状態は保存の値と同じなので、最後の記録の値のまま
+        let item = todo(conn, "b");
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        reopen_todo(conn, &cli(), item.id, at(TB)).unwrap();
+        complete_todo(conn, &cli(), item.id, at(TC)).unwrap();
+        let out = save_status(conn, item.id, ItemStatus::Open, Some(T1), T1, T2);
+        assert!(out.updated);
+        assert_eq!(
+            (out.item.status, out.item.completed_at),
+            (ItemStatus::Done, Some(at(TC)))
+        );
+        let left = logs(conn, item.id);
+        assert_eq!(left.len(), 3);
+        assert_eq!(
+            json(&left[1].before),
+            json!({ "status": "done", "completed_at": "2026-11-03T02:00:00.000Z" })
+        );
+        assert_eq!(json(&left[2].before)["status"], "open");
+    }
+
+    #[test]
+    fn a_different_final_state_overwrites_and_keeps_the_record() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let item = todo(conn, "a");
+        // 利用者は完了にしてから未完了に戻した（まとめた保存は、変える前の値と最後の状態で判定する）
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        let out = save_status(conn, item.id, ItemStatus::Open, None, T1, T2);
+        assert_eq!(
+            (out.item.status, out.item.completed_at),
+            (ItemStatus::Open, None)
+        );
+        assert_eq!(logs(conn, item.id).len(), 2);
+
+        // 完了・未完了・完了と続けた間にエージェントが完了にした：行き違い
+        let item = todo(conn, "b");
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        let out = save_status(conn, item.id, ItemStatus::Open, Some(TB), T1, T2);
+        assert_eq!(out.item.completed_at, Some(at(TB)));
+        assert_eq!(logs(conn, item.id).len(), 1);
+    }
+
+    /// 取り消された記録・取り消しの記録から指されている記録・取り消しの記録は、外さない（外部キーの
+    /// ため消せない記録を消そうとして、保存が失敗し続けないように）。
+    #[test]
+    fn reverted_and_revert_records_are_never_removed() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let revert_of = |of: &ChangeLog, created: &str, reverted: bool| {
+            if reverted {
+                assert!(change_log::set_reverted_at(conn, of.id, at(created)).unwrap());
+            }
+            let revert = ChangeLog {
+                id: Ulid::generate(),
+                actor: Actor::Human,
+                agent_client_id: None,
+                operation: "agent.revert".into(),
+                before: of.after.clone(),
+                after: of.before.clone(),
+                created_at: at(created),
+                revert_of_id: Some(of.id),
+                ..of.clone()
+            };
+            change_log::insert(conn, &revert).unwrap();
+        };
+
+        // 取り消された（reverted_at がある）
+        let item = todo(conn, "a");
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        let first = logs(conn, item.id).pop().unwrap();
+        revert_of(&first, TB, true);
+        save_status(conn, item.id, ItemStatus::Open, Some(T1), T1, T2);
+        assert_eq!(logs(conn, item.id).len(), 3);
+
+        // 取り消しの記録から指されているのに reverted_at が無い（壊れたデータ）：保存は成功する
+        let item = todo(conn, "b");
+        complete_todo(conn, &cli(), item.id, at(TA)).unwrap();
+        let first = logs(conn, item.id).pop().unwrap();
+        revert_of(&first, TB, false);
+        let out = save_status(conn, item.id, ItemStatus::Open, Some(T1), T1, T2);
+        assert_eq!(out.item.completed_at, Some(at(T1)));
+        assert_eq!(logs(conn, item.id).len(), 3);
+
+        // 最初の記録が取り消しの記録（利用者の操作の前のエージェントの未完了に戻す操作を取り消した）
+        let item = todo(conn, "c");
+        complete_todo(conn, &cli(), item.id, at(T0)).unwrap();
+        reopen_todo(conn, &cli(), item.id, at(T0)).unwrap();
+        let reopen = logs(conn, item.id).pop().unwrap();
+        revert_of(&reopen, TA, true);
+        save_status(conn, item.id, ItemStatus::Open, Some(T1), T1, T2);
+        assert_eq!(logs(conn, item.id).len(), 4);
     }
 
     #[test]

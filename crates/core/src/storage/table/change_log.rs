@@ -169,6 +169,41 @@ pub fn set_reverted_at(conn: &Connection, id: Ulid, at: Timestamp) -> Result<boo
     Ok(n == 1)
 }
 
+/// 記録の `before`・`after` を書き換える（利用者とエージェントが項目を同じ状態にした行き違いで、
+/// 記録から欄を外すとき。アーキテクチャ設計書 4.1）。行が無ければ `false`。JSON として正しく
+/// なければ失敗する。
+pub fn update_snapshots(
+    conn: &Connection,
+    id: Ulid,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Result<bool, StorageError> {
+    let n = execute(
+        conn,
+        "UPDATE change_log SET before = ?2, after = ?3 WHERE id = ?1",
+        params![id, before, after],
+    )?;
+    Ok(n == 1)
+}
+
+/// 記録を消す（行き違いで、記録から欄を外して何も残らなかったとき。アーキテクチャ設計書 4.1）。
+/// 行が無ければ `false`。取り消しの記録（`revert_of_id`）が指している記録は、外部キーのため
+/// 消せずに失敗する（消す前に [`is_reverted_by_any`] で確かめる）。
+pub fn delete(conn: &Connection, id: Ulid) -> Result<bool, StorageError> {
+    let n = execute(conn, "DELETE FROM change_log WHERE id = ?1", [id])?;
+    Ok(n == 1)
+}
+
+/// 記録 `id` を取り消した記録（`revert_of_id` が `id`）があるか。
+pub fn is_reverted_by_any(conn: &Connection, id: Ulid) -> Result<bool, StorageError> {
+    Ok(query_row(
+        conn,
+        "SELECT EXISTS (SELECT 1 FROM change_log WHERE revert_of_id = ?1)",
+        [id],
+        |r| r.get(0),
+    )?)
+}
+
 /// 利用者が確認した時刻を記録する。行が無いか、すでに確認済みなら何もせず `false`
 /// （最初に確認した時刻を残す）。
 pub fn set_seen_at(conn: &Connection, id: Ulid, at: Timestamp) -> Result<bool, StorageError> {
@@ -304,6 +339,35 @@ mod tests {
             .unwrap();
         assert_eq!(stored, "01JBZ3K8Q0ABCDEFGHJKMNPQRS");
         assert_eq!(list_by_target(conn, Target::Item(id)).unwrap(), [l]);
+    }
+
+    #[test]
+    fn snapshots_can_be_rewritten_and_records_deleted() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let l = log(item(10));
+        insert(conn, &l).unwrap();
+        assert!(update_snapshots(conn, l.id, Some(r#"{"a":1}"#), None).unwrap());
+        let saved = get(conn, l.id).unwrap().unwrap();
+        assert_eq!(saved.before.as_deref(), Some(r#"{"a":1}"#));
+        assert_eq!(saved.after, None);
+        assert!(update_snapshots(conn, l.id, Some("{bad"), None).is_err());
+        assert!(!update_snapshots(conn, Ulid::generate(), None, None).unwrap());
+
+        // 取り消しの記録が指している記録は消せない
+        let revert = ChangeLog {
+            revert_of_id: Some(l.id),
+            ..log(item(10))
+        };
+        insert(conn, &revert).unwrap();
+        assert!(is_reverted_by_any(conn, l.id).unwrap());
+        assert!(!is_reverted_by_any(conn, revert.id).unwrap());
+        assert!(delete(conn, l.id).is_err());
+        assert!(delete(conn, revert.id).unwrap());
+        assert!(!is_reverted_by_any(conn, l.id).unwrap());
+        assert!(delete(conn, l.id).unwrap());
+        assert!(!delete(conn, l.id).unwrap());
+        assert_eq!(get(conn, l.id).unwrap(), None);
     }
 
     #[test]

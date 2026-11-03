@@ -37,6 +37,8 @@ fn render() -> String {
         decl::<TextDoc>(&cfg),
         decl::<Item>(&cfg),
         decl::<Position>(&cfg),
+        decl::<ItemFields>(&cfg),
+        decl::<StatusChange>(&cfg),
         decl::<ItemOutcome>(&cfg),
         decl::<SplitResult>(&cfg),
         decl::<Deleted>(&cfg),

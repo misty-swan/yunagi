@@ -24,8 +24,10 @@ use yunagi_app::AppCore;
 use yunagi_core::domain::agent::{ItemField, ProtectedLines, UiState};
 use yunagi_core::domain::item::{self, ItemError};
 use yunagi_core::domain::logical_date::LogicalDate;
-use yunagi_core::domain::text_doc::TextDoc;
+use yunagi_core::domain::note_body::{LineEdit, LineOp};
+use yunagi_core::domain::text_doc::{self, TextDoc, TextDocError};
 use yunagi_core::storage::table::agent_client::{self, AgentClient, Scope};
+use yunagi_core::storage::table::change_log;
 use yunagi_core::storage::{StorageError, Ulid};
 
 /// 待つ時間の上限（イベントとバックアップ）。
@@ -42,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 9] = [
+    let tests: [(&str, Test); 11] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -52,6 +54,14 @@ fn main() {
         (
             "agent_writes_use_the_same_events_and_the_screen_state",
             agent_writes_use_the_same_events_and_the_screen_state,
+        ),
+        (
+            "the_same_state_from_screen_and_agent_becomes_the_users_change",
+            the_same_state_from_screen_and_agent_becomes_the_users_change,
+        ),
+        (
+            "edit_note_refuses_the_lines_the_screen_protects",
+            edit_note_refuses_the_lines_the_screen_protects,
         ),
         (
             "save_failures_refuse_agent_writes_until_a_save_succeeds",
@@ -312,15 +322,15 @@ fn item_commands(_: &Path) {
 
     // 同じ本文なら何も変えず、知らせない
     let same = h.ok(
-        "save_item_text",
-        json!({ "id": a_id, "text": "設計を読む" }),
+        "save_item",
+        json!({ "id": a_id, "fields": { "text": "設計を読む" } }),
     );
     assert_eq!(same["updated"], false);
     h.assert_no_event();
 
     let edited = h.ok(
-        "save_item_text",
-        json!({ "id": a_id, "text": "設計書を読む" }),
+        "save_item",
+        json!({ "id": a_id, "fields": { "text": "設計書を読む" } }),
     );
     assert_eq!(edited["updated"], true);
     assert_eq!(edited["item"]["text"], "設計書を読む");
@@ -328,13 +338,15 @@ fn item_commands(_: &Path) {
 
     // 完了時刻は画面が決めた時刻（ミリ秒）のまま
     let closed_at = 1_893_888_000_123_i64;
-    let done = h.ok(
-        "set_item_closed",
-        json!({ "id": a_id, "closedAt": closed_at }),
-    );
+    let status = |before: &str, closed: Value| {
+        json!({ "id": a_id, "fields": { "status": {
+            "before": before, "closedAt": closed, "changedAt": closed_at,
+        } } })
+    };
+    let done = h.ok("save_item", status("open", json!(closed_at)));
     assert_eq!(done["item"]["status"], "done");
     assert_eq!(done["item"]["completedAt"], closed_at);
-    let reopened = h.ok("set_item_closed", json!({ "id": a_id, "closedAt": null }));
+    let reopened = h.ok("save_item", status("done", Value::Null));
     assert_eq!(reopened["item"]["status"], "open");
     assert_eq!(reopened["item"]["completedAt"], Value::Null);
     h.drain();
@@ -346,12 +358,15 @@ fn item_commands(_: &Path) {
     );
     let b_id = b["id"].as_str().unwrap().to_owned();
     let noted = h.ok(
-        "save_resolution_note",
-        json!({ "id": b_id, "note": "キャッシュを消した" }),
+        "save_item",
+        json!({ "id": b_id, "fields": { "resolutionNote": "キャッシュを消した" } }),
     );
     assert_eq!(noted["item"]["resolutionNote"], "キャッシュを消した");
     assert_eq!(
-        h.err("save_resolution_note", json!({ "id": a_id, "note": "x" })),
+        h.err(
+            "save_item",
+            json!({ "id": a_id, "fields": { "resolutionNote": "x" } })
+        ),
         json!({ "kind": "invalid_argument", "reason": "wrong_kind" })
     );
 
@@ -409,8 +424,8 @@ fn item_commands(_: &Path) {
     );
     assert_eq!(
         h.err(
-            "save_item_text",
-            json!({ "id": Ulid::generate().to_string(), "text": "x" })
+            "save_item",
+            json!({ "id": Ulid::generate().to_string(), "fields": { "text": "x" } })
         ),
         json!({ "kind": "not_found" })
     );
@@ -424,7 +439,7 @@ fn item_commands(_: &Path) {
     h.assert_no_event();
     // 形の誤り（ID でない文字列）は、Tauri が引数を読めずに断る（文字列のエラー）
     assert!(
-        h.err("save_item_text", json!({ "id": "x", "text": "x" }))
+        h.err("save_item", json!({ "id": "x", "fields": { "text": "x" } }))
             .is_string()
     );
 }
@@ -573,6 +588,96 @@ fn agent_writes_use_the_same_events_and_the_screen_state(_: &Path) {
     );
 }
 
+/// 利用者が完了にしてから保存が届くまでの間に、エージェントも完了にした：保存の書き込みで
+/// エージェントの記録を消し、`changed` で知らせる（アーキテクチャ設計書 4.1）。
+fn the_same_state_from_screen_and_agent_becomes_the_users_change(_: &Path) {
+    let h = Harness::opened();
+    let date = "2030-01-10";
+    let agent = h.register_agent("same-state", vec![Scope::Read, Scope::Todo]);
+    let todo = h.add_todo(date, "レビューする");
+    let id: Ulid = todo["id"].as_str().unwrap().parse().unwrap();
+    // 利用者の操作（画面の時計で測った時刻）
+    let clicked = yunagi_core::storage::table::now().as_millisecond();
+    std::thread::sleep(Duration::from_millis(5));
+    h.core
+        .agent_write(agent, |conn, a| {
+            item::complete_todo(conn, a, id, yunagi_core::storage::table::now())
+        })
+        .unwrap()
+        .unwrap();
+    let logs = |h: &Harness| {
+        h.core
+            .read(|conn| change_log::list_by_target(conn, change_log::Target::Item(id)))
+            .unwrap()
+    };
+    assert_eq!(logs(&h).len(), 1);
+    h.drain();
+    let saved = h.ok(
+        "save_item",
+        json!({ "id": id.to_string(), "fields": { "status": {
+            "before": "open", "closedAt": clicked, "changedAt": clicked,
+        } } }),
+    );
+    assert_eq!(saved["updated"], true);
+    assert_eq!(saved["item"]["status"], "done");
+    assert_eq!(saved["item"]["completedAt"], clicked);
+    assert_eq!(h.next_event(), changed_by("screen"));
+    assert!(logs(&h).is_empty(), "the agent's record was removed");
+}
+
+/// 画面が知らせた守る行への `edit_note` は `user_editing`。知らせた版が古い間はどの行も。
+fn edit_note_refuses_the_lines_the_screen_protects(_: &Path) {
+    let h = Harness::opened();
+    let date = "2030-01-11";
+    let ld: LogicalDate = date.parse().unwrap();
+    let agent = h.register_agent("protected-lines", vec![Scope::Read, Scope::NoteEdit]);
+    let saved = h.ok(
+        "save_text_doc",
+        json!({ "doc": "note", "date": date, "body": "a\nb\nc", "baseRev": 0 }),
+    );
+    let rev = saved["rev"].as_i64().unwrap();
+    h.ok(
+        "report_ui_state",
+        json!({ "state": {
+            "session": "n", "seq": 1, "editingItems": [],
+            "editors": [{ "doc": "note", "date": date, "rev": rev, "lines": [2] }],
+        } }),
+    );
+    let tz = jiff::tz::TimeZone::UTC;
+    let edit = |line: usize, expected: &str| {
+        h.core
+            .agent_write(agent, |conn, a| {
+                text_doc::edit_note(
+                    conn,
+                    ld,
+                    &LineEdit {
+                        line,
+                        expected_text: expected.into(),
+                        op: LineOp::Replace("X".into()),
+                    },
+                    a,
+                    &tz,
+                    yunagi_core::storage::table::now(),
+                )
+            })
+            .unwrap()
+    };
+    assert!(matches!(edit(2, "b"), Err(TextDocError::UserEditing)));
+    h.drain();
+    edit(3, "c").unwrap();
+    assert_eq!(h.next_event(), changed_by("agent"));
+    // 版が進んだので、知らせ直しが届くまではどの行も user_editing
+    assert!(matches!(edit(1, "a"), Err(TextDocError::UserEditing)));
+    h.ok(
+        "report_ui_state",
+        json!({ "state": {
+            "session": "n", "seq": 2, "editingItems": [],
+            "editors": [{ "doc": "note", "date": date, "rev": rev + 1, "lines": [2] }],
+        } }),
+    );
+    edit(1, "a").unwrap();
+}
+
 /// 画面の保存の書き込みが失敗したら、次に成功するまでエージェントの書き込みを断る
 /// （アーキテクチャ設計書 4.1「保存に失敗している間」）。引数の誤りでは断らない。
 fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
@@ -591,8 +696,8 @@ fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
 
     // 引数の誤りは保存の失敗に数えない
     h.err(
-        "save_item_text",
-        json!({ "id": id.to_string(), "text": "" }),
+        "save_item",
+        json!({ "id": id.to_string(), "fields": { "text": "" } }),
     );
     assert!(!h.core.screen().save_failing());
     let other = h.add_todo(date, "削除する");
@@ -609,8 +714,8 @@ fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
         })
         .unwrap();
     let e = h.err(
-        "save_item_text",
-        json!({ "id": id.to_string(), "text": "書けない" }),
+        "save_item",
+        json!({ "id": id.to_string(), "fields": { "text": "書けない" } }),
     );
     assert_eq!(e["kind"], "storage");
     assert!(
@@ -636,8 +741,8 @@ fn save_failures_refuse_agent_writes_until_a_save_succeeds(_: &Path) {
         })
         .unwrap();
     h.ok(
-        "save_item_text",
-        json!({ "id": id.to_string(), "text": "書けた" }),
+        "save_item",
+        json!({ "id": id.to_string(), "fields": { "text": "書けた" } }),
     );
     assert!(!h.core.screen().save_failing());
     agent_edit("エージェント").unwrap();

@@ -65,6 +65,42 @@ completedAt: Millis | null, createdAt: Millis, updatedAt: Millis, deletedAt: Mil
 export type Position = { "at": "first" } | { "at": "last" } | { "at": "before", id: Id, } | { "at": "after", id: Id, };
 
 /**
+ * 画面からの項目の保存：利用者が変えた欄だけ（アーキテクチャ設計書 4.1「項目の保存」）。
+ * 無い（`undefined`・`null`）欄には触れない。
+ */
+export type ItemFields = { 
+/**
+ * 本文。
+ */
+text?: string, 
+/**
+ * 障害の解消メモ（空なら消す）。
+ */
+resolutionNote?: string, 
+/**
+ * 状態（完了・解消の切り替え）。
+ */
+status?: StatusChange, };
+
+/**
+ * 項目の状態の保存（アーキテクチャ設計書 4.1「利用者とエージェントが項目を同じ状態にした行き違い」）。
+ */
+export type StatusChange = { 
+/**
+ * 変える前の値：利用者がこの保存で最初に状態を変えたときに、画面に出ていた状態。
+ */
+before: ItemStatus, 
+/**
+ * 数なら完了・解消にしてその時刻を完了時刻に、`null` なら未完了・未解消に戻す（完了時刻は
+ * 画面が決める。操作仕様書 2章）。
+ */
+closedAt: Millis | null, 
+/**
+ * 利用者がこの保存で最初に状態を変えた操作の時刻。
+ */
+changedAt: Millis, };
+
+/**
  * 項目の書き込みの結果。
  */
 export type ItemOutcome = { 

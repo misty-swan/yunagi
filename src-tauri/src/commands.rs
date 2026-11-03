@@ -15,7 +15,7 @@ use yunagi_core::domain::{board, item, text_doc};
 
 use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
 use crate::types::{
-    Board, CommandError, Date, Deleted, Id, Item, ItemKind, ItemOutcome, Millis, Position,
+    Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, Position,
     Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
@@ -88,47 +88,18 @@ pub async fn add_item(
     .await
 }
 
-/// 項目の本文を保存する。
+/// 項目を保存する。`fields` は利用者が変えた欄だけ（無い欄には触れない。アーキテクチャ設計書 4.1
+/// 「項目の保存」）。状態を変えたときは、利用者とエージェントが同じ状態にした行き違いも判定する。
 #[tauri::command]
-pub async fn save_item_text(
+pub async fn save_item(
     core: Core<'_>,
     id: Id,
-    text: String,
+    fields: ItemFields,
 ) -> Result<ItemOutcome, CommandError> {
     blocking(&core, move |core| {
+        let fields = fields.into();
         core.screen_write(ScreenWrite::Save, |conn| {
-            item::save_text(conn, id.0, &text, now()).map(ItemOutcome::from)
-        })
-    })
-    .await
-}
-
-/// 項目の完了・解消を切り替える。`closedAt` が数なら完了・解消にしてその時刻を完了時刻に、
-/// `null` なら未完了・未解消に戻す（完了時刻は画面が決める。操作仕様書 2章）。
-#[tauri::command]
-pub async fn set_item_closed(
-    core: Core<'_>,
-    id: Id,
-    closed_at: Option<Millis>,
-) -> Result<ItemOutcome, CommandError> {
-    blocking(&core, move |core| {
-        core.screen_write(ScreenWrite::Save, |conn| {
-            item::set_closed(conn, id.0, closed_at.map(|m| m.0), now()).map(ItemOutcome::from)
-        })
-    })
-    .await
-}
-
-/// 障害の解消メモを保存する（空なら消す）。
-#[tauri::command]
-pub async fn save_resolution_note(
-    core: Core<'_>,
-    id: Id,
-    note: String,
-) -> Result<ItemOutcome, CommandError> {
-    blocking(&core, move |core| {
-        core.screen_write(ScreenWrite::Save, |conn| {
-            item::save_resolution_note(conn, id.0, &note, now()).map(ItemOutcome::from)
+            item::save(conn, id.0, &fields, now()).map(ItemOutcome::from)
         })
     })
     .await

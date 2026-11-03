@@ -16,9 +16,9 @@
 //! 画面の保存の失敗中は、引数の誤りの後に `storage_unavailable` を返す（[`super::agent::UiState`]。
 //! アーキテクチャ設計書 4.1）。
 //!
-//! ここに無いもの（接続口の作業で作る）：利用者の入力中の行（守る行）への `edit_note` を
-//! `conflict`（`reason: user_editing`）にする判定。守る行は、画面から知らされたものを
-//! [`super::agent::UiState::protected_lines`] で受け取れる。
+//! `edit_note` は、利用者の入力中の行（守る行）を書き換え・削除・移動しようとしたときと、画面から
+//! 知らされた守る行が古い版のものであるときに `conflict`（`reason: user_editing`）にする
+//! （[`TextDocError::UserEditing`]。守る行は [`super::agent::UiState::protected_lines`] で受け取る）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -66,6 +66,9 @@ pub enum TextDocError {
     /// `edit_note` の行が、エージェントの読んだ後に変わっている（`conflict`、`reason: changed`）。
     /// 何も書いていない。
     Changed(Changed),
+    /// `edit_note` の行が、利用者の入力中の行（守る行）か、画面が知らせた守る行が古い版のもの
+    /// （`conflict`、`reason: user_editing`。アーキテクチャ設計書 4.1）。何も書いていない。
+    UserEditing,
     /// 画面の保存の、もとにした版が古い（その間にエージェントが変えた）。何も書いていない。
     /// 画面は `latest` を取り込んでから保存し直す（アーキテクチャ設計書 4.1）。
     Stale { latest: Snapshot },
@@ -80,6 +83,7 @@ impl std::fmt::Display for TextDocError {
             Self::InvalidArgument(e) => e.fmt(f),
             Self::StorageUnavailable(e) => e.fmt(f),
             Self::Changed(e) => e.fmt(f),
+            Self::UserEditing => f.write_str("the user is editing the line"),
             Self::Stale { latest } => write!(
                 f,
                 "the text was changed in the meantime (now at rev {})",
@@ -98,6 +102,7 @@ impl std::error::Error for TextDocError {
             Self::PermissionDenied(_)
             | Self::StorageUnavailable(_)
             | Self::Changed(_)
+            | Self::UserEditing
             | Self::Stale { .. } => None,
         }
     }
@@ -249,6 +254,7 @@ pub fn append_note(
         agent,
         tz,
         now,
+        None,
         new_body,
     )
 }
@@ -273,6 +279,7 @@ pub fn append_reflection(
         agent,
         tz,
         now,
+        None,
         new_body,
     )
 }
@@ -281,6 +288,12 @@ pub fn append_reflection(
 ///
 /// 行の本文が `expected_text` と一致しなければ [`TextDocError::Changed`]、引数の誤りは
 /// [`TextDocError::InvalidArgument`]（確かめる順は [`note_body::apply_line_edit`]）。
+/// 画面が守る行を知らせている間（[`super::agent::UiState::protected_lines`]）は、知らせた版が
+/// いまの版と違うか、`edit.line`（書き換え・削除・移動する行）が守る行なら
+/// [`TextDocError::UserEditing`]。`changed` に当たるときはそちらを返し（`--expect` を先に確かめる。
+/// MCP・CLI 仕様書 3章）、本文が変わらない書き換えでも `user_editing` を返す（項目の本文と同じく、
+/// 入力中の行はまだ保存されておらず、利用者の見ている行と違いうるため）。ほかの行を動かして
+/// 守る行の番号がずれるだけの操作は受け付ける（画面は差分として取り込む）。
 /// まだ書いていない日のノートは、空の1行の本文として扱う。本文が変わらない書き換えは
 /// `updated: false` で、記録しない。`note_edit` スコープが要る。change_log には `note.edit` として
 /// 記録する。
@@ -300,8 +313,26 @@ pub fn edit_note(
         agent,
         tz,
         now,
+        Some(edit.line),
         new_body,
     )
+}
+
+/// 画面が知らせた守る行に照らして、`edit_note` が行 `line` を変えてよいか（アーキテクチャ設計書 4.1）。
+/// `rev` はいまの版。守る行が無ければ（知らせが無いか空なら）変えてよい。
+fn check_protected(
+    agent: &Agent<'_>,
+    doc: TextDoc,
+    date: LogicalDate,
+    rev: i64,
+    line: usize,
+) -> Result<(), TextDocError> {
+    match agent.ui.protected_lines(doc, date) {
+        Some(p) if !p.lines.is_empty() && (p.rev != rev || p.lines.contains(&line)) => {
+            Err(TextDocError::UserEditing)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// エージェント・CLI による本文の書き込みの種類。change_log の `operation` と対象の表を決める。
@@ -340,6 +371,8 @@ impl AgentOperation {
 
 /// エージェントの書き込みの共通の手順。権限・引数・保存の状態を確かめてから、いまの本文から `new_body` で
 /// 新しい本文を作り、いまと違えば、本文と change_log の記録を1つのトランザクションで書く。
+/// `edited_line` は `edit_note` の変える行（守る行の判定に使う。[`check_protected`]）。
+#[allow(clippy::too_many_arguments)]
 fn write_by_agent(
     conn: &Connection,
     date: LogicalDate,
@@ -347,6 +380,7 @@ fn write_by_agent(
     agent: &Agent<'_>,
     tz: &TimeZone,
     now: Timestamp,
+    edited_line: Option<usize>,
     new_body: impl FnOnce(&str) -> Result<String, TextDocError>,
 ) -> Result<Written, TextDocError> {
     let doc = operation.doc();
@@ -354,13 +388,17 @@ fn write_by_agent(
         // 権限の確かめも、書き込みと同じトランザクションで行う（項目の操作と同じ）
         agent::require_scope::<TextDocError>(conn, agent.client_id, operation.scope())?;
         let current = get(conn, doc, date)?;
-        // 判定の順：引数の誤り、保存の失敗中、行の食い違い（changed）（MCP・CLI 仕様書 3.2・4.3）
+        // 判定の順：引数の誤り、保存の失敗中、行の食い違い（changed）、入力中の行（user_editing）
+        // （MCP・CLI 仕様書 3章・3.2・4.3）
         let body = new_body(&current.body);
         if let Err(e @ TextDocError::InvalidArgument(_)) = body {
             return Err(e);
         }
         agent::require_save_working(agent)?;
         let body = body?;
+        if let Some(line) = edited_line {
+            check_protected(agent, doc, date, current.rev, line)?;
+        }
         if body == current.body {
             return Ok(Written {
                 rev: current.rev,
@@ -967,6 +1005,55 @@ mod tests {
             Err(TextDocError::StorageUnavailable(_))
         ));
         assert_eq!(get(conn, TextDoc::Note, d).unwrap().rev, 1);
+    }
+
+    /// 守る行（アーキテクチャ設計書 4.1）：書き換え・削除・移動は `user_editing`、ほかの行は受け付ける。
+    /// 知らせた版が古ければ、どの行も `user_editing`。`changed` が先。
+    #[test]
+    fn edit_note_refuses_protected_lines() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = date("2026-11-03");
+        save(conn, TextDoc::Note, d, "a\nb\nc\nd", 0, &tokyo(), at(NOW)).unwrap();
+        let ui = FakeUi::default();
+        let agent = Agent {
+            client_id: CLI_ID,
+            ui: &ui,
+        };
+        let run = |e: LineEdit| edit_note(conn, d, &e, &agent, &tokyo(), at(NOW));
+        let user_editing = |r: Result<Written, TextDocError>| {
+            assert!(matches!(r, Err(TextDocError::UserEditing)), "{r:?}");
+        };
+        ui.protect(TextDoc::Note, d, 1, &[2]);
+        user_editing(run(edit(2, "b", LineOp::Replace("B".into()))));
+        user_editing(run(edit(2, "b", LineOp::Delete)));
+        user_editing(run(edit(2, "b", LineOp::MoveTo(4))));
+        // 何も変えない書き換えでも、入力中の行なら user_editing
+        user_editing(run(edit(2, "b", LineOp::Replace("b".into()))));
+        // --expect の食い違いが先
+        assert!(matches!(
+            run(edit(2, "x", LineOp::Delete)),
+            Err(TextDocError::Changed(_))
+        ));
+        // 振り返りの守る行は、ノートの判定に使わない
+        ui.protect(TextDoc::Reflection, d, 1, &[1, 3, 4]);
+        // ほかの行は受け付ける（守る行の番号がずれる移動も）
+        let w = run(edit(4, "d", LineOp::MoveTo(1))).unwrap();
+        assert_eq!(w.rev, 2);
+        assert_eq!(get(conn, TextDoc::Note, d).unwrap().body, "d\na\nb\nc");
+        // 画面の知らせ直しが届くまで（版が古い間）は、どの行も user_editing
+        user_editing(run(edit(1, "d", LineOp::Delete)));
+        ui.protect(TextDoc::Note, d, 2, &[3]);
+        user_editing(run(edit(3, "b", LineOp::Delete)));
+        run(edit(1, "d", LineOp::Delete)).unwrap();
+        // 守る行が無い知らせ（空）なら、版が違っても通常の判定
+        ui.protect(TextDoc::Note, d, 1, &[]);
+        run(edit(2, "b", LineOp::Replace("B".into()))).unwrap();
+        // 追記は守る行に関係なく受け付ける
+        ui.protect(TextDoc::Note, d, 1, &[1]);
+        append_note(conn, d, "e", None, &agent, &tokyo(), at(NOW)).unwrap();
+        assert_eq!(get(conn, TextDoc::Note, d).unwrap().body, "a\nB\nc\ne");
+        assert_eq!(logs_of(conn, Target::Note(d)).len(), 4);
     }
 
     #[test]
