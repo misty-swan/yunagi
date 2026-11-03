@@ -98,8 +98,27 @@ pub fn latest_nonblank_date(
     before: LogicalDate,
     after: Option<LogicalDate>,
 ) -> Result<Option<LogicalDate>, StorageError> {
+    Ok(nonblank_dates(conn, doc, before, after, 1)?.pop())
+}
+
+/// `before` より前で `after` より後（`None` なら下限なし）の日のうち、本文が空白（Unicode の空白文字）
+/// 以外の文字を含む日を、新しい順に `limit` 日まで返す。新しい日から順に読み、`limit` 日見つかったら止める。
+pub fn nonblank_dates(
+    conn: &Connection,
+    doc: TextDoc,
+    before: LogicalDate,
+    after: Option<LogicalDate>,
+    limit: usize,
+) -> Result<Vec<LogicalDate>, StorageError> {
+    let mut found = Vec::new();
+    if limit == 0 {
+        return Ok(found);
+    }
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT date, body FROM {} WHERE date < ?1 AND date > ?2 ORDER BY date DESC",
+        // 半角の空白・タブ・改行だけの本文は SQL で外し、読む本文を減らす（空白の行が多くても、
+        // 本文をすべて読まずに済むように）。それ以外の空白（全角の空白など）は下で確かめる
+        "SELECT date, body FROM {} WHERE date < ?1 AND date > ?2 \
+         AND trim(body, ' ' || char(9, 10, 11, 12, 13)) <> '' ORDER BY date DESC",
         doc.table()
     ))?;
     // 下限なしは空の文字列（どの日付より小さい）にして、主キーの範囲で読めるようにする
@@ -108,10 +127,13 @@ pub fn latest_nonblank_date(
     while let Some(row) = rows.next()? {
         let body: String = row.get(1)?;
         if !body.trim().is_empty() {
-            return Ok(Some(row.get(0)?));
+            found.push(row.get(0)?);
+            if found.len() == limit {
+                break;
+            }
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 #[cfg(test)]

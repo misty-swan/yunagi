@@ -149,7 +149,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {
   "date": "2026-11-02",
   "todos": [
-    {"id": "01J...", "text": "API のレート制限を調査", "status": "open", "carry_count": 1, "origin": "human", "external_ref": null, "carried_to_id": null, "carried_to_date": null}
+    {"id": "01J...", "text": "API のレート制限を調査", "status": "open", "close_reason": null, "carry_count": 1, "origin": "human", "external_ref": null, "carried_to_id": null, "carried_to_date": null}
   ],
   "blockers": [
     {"id": "01J...", "text": "ステージング環境の権限待ち", "status": "open", "carry_count": 0, "origin": "note", "external_ref": null, "resolution_note": null, "carried_to_id": null, "carried_to_date": null}
@@ -160,6 +160,13 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 ```
 
 ノート本文はサイズが大きくなりうるため、`get_board` では見出しと長さのみを返し、本文は `get_note`（read）で見出し単位または全文を取得する。
+
+返り値の細部（2026-11-03 決定。コアの `domain::board`）：
+
+- `todos`・`blockers` は、その日の削除されていない項目を、画面と同じ並び順で返す。`todos` には取りやめた TODO（`status: "dropped"`）も入れ、理由を `close_reason`（`dropped` / `split` / `returned_external`。それ以外の TODO は `null`）で返す（取りやめた TODO への書き込みのエラーと同じ値。3章）。エージェントが、取りやめた TODO を操作の対象から外し、利用者に理由を正しく伝えられるようにするため。
+- `note.length` は本文の文字数（Unicode のコードポイントの数。バイト数ではない）。`headings` は時刻付き見出しの文字（データモデル設計書 3章 note）。まだ書いていない日は `reflection` が `""`、`note` が `{"headings": [], "length": 0}`。
+- `open_board` は `date`・`todos`・`blockers` だけを返す（振り返りとノートは返さない）。項目の形は `get_board` と同じで、`status` が `open` の項目だけを入れる。過去の日の項目は持ち越しても `status` を変えないので、持ち越し済みの項目も入る（`carried_to_id` で見分ける。件数の「残り」と同じく、その日の終わりの状態を表す）。
+- どちらも読むだけで、day の行を作らない。
 
 ### 4.3 エラー
 

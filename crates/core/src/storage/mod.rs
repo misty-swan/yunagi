@@ -29,7 +29,7 @@ use rusqlite::{Connection, OpenFlags};
 pub use error::StorageError;
 pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
 pub use open::{DatabaseNotFound, OpenError};
-pub(crate) use transaction::in_transaction;
+pub(crate) use transaction::{in_read_transaction, in_transaction};
 pub use ulid::{ParseUlidError, Ulid};
 
 /// 開いた `yunagi.db`。マイグレーションはすべて適用済み。

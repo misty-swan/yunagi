@@ -2,6 +2,8 @@
 //!
 //! ドメイン層の書き込み（ノート・項目の操作）は、本文や項目の行・day の行・change_log の記録を
 //! 一緒に書く。どれかが失敗したら全部を取り消すため、[`in_transaction`] の中で書く。
+//! 複数の表をまたいで読むだけの処理（ボード・検索）は、同じ時点の内容を読むため、
+//! [`in_read_transaction`] の中で読む。
 
 use rusqlite::Connection;
 
@@ -20,8 +22,25 @@ pub(crate) fn in_transaction<T, E: From<rusqlite::Error>>(
     conn: &Connection,
     f: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
-    let guard = TransactionGuard::begin(conn)?;
+    let guard = TransactionGuard::begin(conn, "BEGIN IMMEDIATE")?;
     let value = f()?; // 失敗なら guard の drop で取り消す
+    guard.commit()?;
+    Ok(value)
+}
+
+/// 読むだけの `f` を1つのトランザクションの中で行い、`f` の中の読み取りがすべて同じ時点の内容を
+/// 見るようにする（WAL では、トランザクションの最初の読み取りの時点の内容が、終わるまで変わらない）。
+/// 途中でほかの接続が書いても、項目の一覧と持ち越し先などが食い違わない。
+///
+/// 書き込みのロックは取らない（`BEGIN DEFERRED`）ので、ほかの接続の書き込みを待たせない。
+/// `f` の中で書いてはいけない（書くと、ほかの接続が先に書いていたときに `SQLITE_BUSY` になりうる）。
+/// 呼び出し側のトランザクションの中で呼べば、そのトランザクションの時点で読む。
+pub(crate) fn in_read_transaction<T, E: From<rusqlite::Error>>(
+    conn: &Connection,
+    f: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let guard = TransactionGuard::begin(conn, "BEGIN DEFERRED")?;
+    let value = f()?;
     guard.commit()?;
     Ok(value)
 }
@@ -39,10 +58,12 @@ impl<'c> TransactionGuard<'c> {
     /// 1つの名前でよい。
     const SAVEPOINT: &'static str = "yunagi_tx";
 
-    fn begin(conn: &'c Connection) -> rusqlite::Result<Self> {
+    /// トランザクションを始める。外側なら `begin`（`BEGIN IMMEDIATE` など）で始め、呼び出し側の
+    /// トランザクションの中ならセーブポイントにする。
+    fn begin(conn: &'c Connection, begin: &str) -> rusqlite::Result<Self> {
         let outermost = conn.is_autocommit();
         if outermost {
-            conn.execute_batch("BEGIN IMMEDIATE")?;
+            conn.execute_batch(begin)?;
         } else {
             conn.execute_batch(&format!("SAVEPOINT {}", Self::SAVEPOINT))?;
         }
@@ -161,5 +182,32 @@ mod tests {
             in_transaction(&tx, || ensure_day(&tx, "2026-11-06")).unwrap();
         }
         assert_eq!(day::get(conn, date("2026-11-06")).unwrap(), None);
+    }
+
+    #[test]
+    fn read_transactions_see_one_point_in_time_without_taking_the_write_lock() {
+        let (db, dir) = open();
+        let conn = db.connection();
+        ensure_day(conn, "2026-11-03").unwrap();
+        // 同じデータベースへの別の接続（ロックを通さずに直接開く。テストだけ）
+        let other = Connection::open(dir.path().join("yunagi.db")).unwrap();
+        let count = || -> rusqlite::Result<i64> {
+            conn.query_row("SELECT count(*) FROM day", [], |r| r.get(0))
+        };
+        let seen = in_read_transaction(conn, || -> std::result::Result<_, StorageError> {
+            let first = count()?;
+            // 読んでいる間も、ほかの接続は待たずに書ける
+            day::ensure(
+                &other,
+                date("2026-11-04"),
+                "Asia/Tokyo",
+                at("2026-11-03T00:00:00Z"),
+            )?;
+            Ok((first, count()?))
+        })
+        .unwrap();
+        assert_eq!(seen, (1, 1));
+        assert_eq!(count().unwrap(), 2);
+        assert!(conn.is_autocommit());
     }
 }

@@ -18,8 +18,6 @@
 //! 使う）。画面の状態（保存の失敗中・入力中）は [`Agent::ui`] で受け取って判定するが、画面から
 //! それを知らせる仕組みはまだ無い。
 
-use std::collections::HashSet;
-
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
@@ -35,7 +33,7 @@ use crate::storage::table::format_time;
 use crate::storage::table::item::{self as item_table, ItemChanges};
 use crate::storage::{StorageError, Ulid, in_transaction};
 
-pub use crate::storage::table::item::{CloseReason, Item, ItemKind, ItemStatus, Origin};
+pub use crate::storage::table::item::{CarriedTo, CloseReason, Item, ItemKind, ItemStatus, Origin};
 
 /// エージェント・CLI の項目の操作（MCP ツール名。MCP・CLI 仕様書 3章）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -802,7 +800,7 @@ pub fn restore(conn: &Connection, deleted: &Deleted, now: Timestamp) -> Result<I
             if source.as_ref().map(SourceState::of) != deleted.source {
                 return Err(RestoreRefused::SourceChanged.into());
             }
-            if let Some(to) = carried_to_skipping(conn, from, Some(id))? {
+            if let Some(to) = item_table::carried_to_skipping(conn, from, Some(id))? {
                 return Err(RestoreRefused::SourceCarriedOver {
                     carried_to_id: to.id,
                     carried_to_date: to.date,
@@ -888,32 +886,11 @@ pub fn split(
 /// 項目 `id` の持ち越し先（データモデル設計書 3章 `carried_to_id`）：`carried_from_id` で `id` を
 /// 指す項目をたどり、最初に行き着いた削除されていない項目。削除されている項目は、さらにそれを
 /// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。
+///
+/// たどり方は、検索（`crate::storage::search`）の結果にも付けるので、表の層
+/// （[`item_table::carried_to`]）に置いている。
 pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    carried_to_skipping(conn, id, None)
-}
-
-/// [`carried_to`] と同じたどり方で、`skip` の項目（とその先）はたどらない。削除した持ち越し先を
-/// 戻すときに、持ち越し元がほかの項目へ持ち越されていないかを確かめるのに使う。
-fn carried_to_skipping(
-    conn: &Connection,
-    id: Ulid,
-    skip: Option<Ulid>,
-) -> Result<Option<Item>, StorageError> {
-    let mut seen: HashSet<Ulid> = [Some(id), skip].into_iter().flatten().collect();
-    let mut pending = vec![id];
-    while let Some(from) = pending.pop() {
-        for next in item_table::list_carried_from(conn, from)? {
-            // 壊れたデータで輪になっていても止まるように、一度見た項目はたどらない
-            if !seen.insert(next.id) {
-                continue;
-            }
-            if next.deleted_at.is_none() {
-                return Ok(Some(next));
-            }
-            pending.push(next.id);
-        }
-    }
-    Ok(None)
+    item_table::carried_to(conn, id)
 }
 
 // ---- 共通の部品 ----
