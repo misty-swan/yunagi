@@ -59,7 +59,7 @@ day の行は、その日に最初の書き込み（項目・ノート・振り�
 | id | TEXT PK | ULID |
 | date | TEXT FK→day | 所属する日 |
 | kind | TEXT | `todo` / `blocker` |
-| text | TEXT | 1行の本文 |
+| text | TEXT | 1行の本文（前後の空白を除いて保存する。MCP・CLI 仕様書 3章） |
 | status | TEXT | todo: `open` / `done` / `dropped`、blocker: `open` / `resolved` |
 | close_reason | TEXT NULL | `status = dropped` の理由：`dropped`（やめる）/ `split`（分割した）/ `returned_external`（外部ツールへ戻した） |
 | sort_key | TEXT | 並び順（分数インデックス） |
