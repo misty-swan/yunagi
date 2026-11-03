@@ -611,7 +611,11 @@ mod tests {
     }
 
     fn open_with(path: &Path, migrations: &[Migration]) -> Result<Database, StorageError> {
-        let lock = DbLock::acquire(path.parent().unwrap(), Duration::ZERO).unwrap();
+        let lock = DbLock::acquire(
+            &data_dir::DefaultDir::for_test(path.parent().unwrap()),
+            Duration::ZERO,
+        )
+        .unwrap();
         Database::open_with_migrations(lock, path, migrations)
     }
 
