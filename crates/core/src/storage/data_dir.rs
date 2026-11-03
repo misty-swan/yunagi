@@ -244,7 +244,7 @@ impl Config {
             let _ = fs::remove_file(&tmp);
         }
         written?;
-        sync_dir(default_dir);
+        let _ = db_copy::sync_dir(default_dir);
         Ok(())
     }
 }
@@ -453,7 +453,7 @@ fn copy_data(old_dir: &Path, new_dir: &Path, created: &mut Created) -> Result<()
         let new_db = database_path(new_dir);
         fs::rename(&moving, &new_db).map_err(|e| DataDirError::io("rename", &moving, e))?;
         created.file(new_db);
-        sync_dir(new_dir);
+        let _ = db_copy::sync_dir(new_dir);
     }
     Ok(())
 }
@@ -481,7 +481,7 @@ fn copy_tree(from: &Path, to: &Path, created: &mut Created) -> Result<(), DataDi
             copy_file_synced(&src, &dst).map_err(|e| DataDirError::io("copy", &src, e))?;
         }
     }
-    sync_dir(to);
+    let _ = db_copy::sync_dir(to);
     Ok(())
 }
 
@@ -523,13 +523,11 @@ fn copy_symlink(from: &Path, to: &Path, created: &mut Created) -> Result<(), Dat
 pub(super) fn copy_database(from: &Path, to: &Path) -> Result<(), DataDirError> {
     // 元は読み取り専用で開く（元のファイルに書かず、閉じるときに WAL を書き戻すこともしない）
     let src = Connection::open_with_flags(from, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    db_copy::copy(&src, to).map_err(|e| match e {
-        CopyError::Sqlite(e) => DataDirError::from(e),
-        CopyError::Sync(e) => DataDirError::io("sync", to, e),
-    })?;
+    db_copy::copy(&src, to)?;
     drop(src);
-    let result: String =
-        Connection::open(to)?.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    // 確かめるだけなので、写しも読み取り専用で開く（写しに書かず、横にファイルを作らない）
+    let result: String = Connection::open_with_flags(to, OpenFlags::SQLITE_OPEN_READ_ONLY)?
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if result != "ok" {
         return Err(DataDirError::CopyCorrupted { result });
     }
@@ -579,12 +577,6 @@ fn copy_file_synced(from: &Path, to: &Path) -> io::Result<()> {
     dst.sync_all()?;
     drop(dst);
     fs::set_permissions(to, permissions)
-}
-
-/// フォルダの中の名前の変更・追加をディスクに反映する（[`db_copy::sync_dir`]）。
-/// 失敗しても続ける。
-pub(super) fn sync_dir(dir: &Path) {
-    let _ = db_copy::sync_dir(dir);
 }
 
 /// 保存先の扱いが失敗した理由。
@@ -708,6 +700,19 @@ impl std::error::Error for DataDirError {
 impl From<rusqlite::Error> for DataDirError {
     fn from(e: rusqlite::Error) -> Self {
         Self::Sqlite(e)
+    }
+}
+
+impl From<CopyError> for DataDirError {
+    fn from(e: CopyError) -> Self {
+        match e {
+            CopyError::Sqlite(e) => Self::Sqlite(e),
+            CopyError::Sync { path, source } => Self::Io {
+                action: "sync",
+                path,
+                source,
+            },
+        }
     }
 }
 

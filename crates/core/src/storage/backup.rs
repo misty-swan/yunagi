@@ -23,6 +23,7 @@ use rusqlite::backup::Backup as SqliteBackup;
 use rusqlite::{Connection, OpenFlags};
 
 use super::data_dir::{self, DataDirError};
+use super::db_copy;
 use super::migration::{self, Migration};
 use super::{Database, StorageError};
 use crate::domain::logical_date::LogicalDate;
@@ -297,7 +298,7 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
         remove_with_side_files(&tmp);
         return result.map(|()| backup);
     }
-    data_dir::sync_dir(dir);
+    let _ = db_copy::sync_dir(dir);
     Ok(backup)
 }
 

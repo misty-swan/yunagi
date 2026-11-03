@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::backup::NO_PROGRESS;
 use rusqlite::{Connection, MAIN_DB};
@@ -17,8 +17,8 @@ use super::StorageError;
 pub(super) enum CopyError {
     /// 写す・1つのファイルにまとめる SQLite の操作が失敗した。
     Sqlite(rusqlite::Error),
-    /// 写したファイルをディスクに反映できなかった。
-    Sync(io::Error),
+    /// 写したファイル `path` をディスクに反映できなかった。
+    Sync { path: PathBuf, source: io::Error },
 }
 
 impl From<rusqlite::Error> for CopyError {
@@ -31,7 +31,7 @@ impl From<CopyError> for StorageError {
     fn from(e: CopyError) -> Self {
         match e {
             CopyError::Sqlite(e) => Self::Sqlite(e),
-            CopyError::Sync(e) => Self::Io(e),
+            CopyError::Sync { source, .. } => Self::Io(source),
         }
     }
 }
@@ -44,8 +44,9 @@ pub(super) fn copy(src: &Connection, to: &Path) -> Result<(), CopyError> {
     //
     // rusqlite 0.41 の Connection::backup は、SQLite が BUSY・LOCKED（使用中）を返すと、
     // 間を置いて再試行せずにそのままエラーを返す。ロックが取れないときに待つのは、
-    // 元の接続の busy_timeout（rusqlite の既定で5秒）の間だけ。再試行は足さない：
-    // 元は WAL モードなので、ほかの接続が書き込み中でも読むためのロックは待たずに取れ、
+    // SQLite が元の接続の busy_timeout（rusqlite の既定で5秒）の間だけ。再試行は足さない：
+    // 元は WAL モードなので、ほかの接続が書き込み中でも読むためのロックは待たずに取れ
+    // （WAL の復旧中などで一時的に取れないときは busy_timeout の間待つ）、
     // ほかのプロセスは yunagi.lock で締め出している
     src.backup(MAIN_DB, to, NO_PROGRESS)?;
     // 写しは元の WAL モードを引き継ぐ。WAL のままだと、閉じた後に開くたび -wal・-shm が
@@ -62,7 +63,10 @@ pub(super) fn copy(src: &Connection, to: &Path) -> Result<(), CopyError> {
         .write(true)
         .open(to)
         .and_then(|f| f.sync_all())
-        .map_err(CopyError::Sync)
+        .map_err(|source| CopyError::Sync {
+            path: to.to_path_buf(),
+            source,
+        })
 }
 
 /// フォルダの中の名前の変更・追加をディスクに反映する（電源断で消えないように）。
@@ -77,8 +81,7 @@ pub(super) fn sync_dir(dir: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use super::*;
 
@@ -130,15 +133,14 @@ mod tests {
         writer
             .execute_batch("BEGIN IMMEDIATE; INSERT INTO t VALUES (100);")
             .unwrap();
+        // 待たない設定にする。ロックを待つ必要があれば BUSY で失敗する
         let src = Connection::open(&path).unwrap();
-        src.busy_timeout(Duration::from_secs(5)).unwrap();
+        src.busy_timeout(Duration::ZERO).unwrap();
         let to = dir.path().join("copy.db");
 
-        let started = Instant::now();
+        // WAL では書き込み中でも読むためのロックが取れる
         copy(&src, &to).unwrap();
 
-        // WAL では書き込み中でも読むためのロックが取れるので、busy_timeout まで待たない
-        assert!(started.elapsed() < Duration::from_secs(1));
         // 確定していない書き込みは写らない
         let sum: i64 = Connection::open(&to)
             .unwrap()
