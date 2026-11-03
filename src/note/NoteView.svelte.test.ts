@@ -43,10 +43,12 @@ interface Core {
   sends: { text: string; kind: ItemKind; itemId: string }[];
   /** 真なら、ノートを読む・行を送る・印を求めるのに失敗する。 */
   fail: { read?: boolean; send?: boolean; marks?: boolean };
+  /** あれば、次の印の問い合わせの答えを、これが解決するまで待たせる。 */
+  marksGate: Promise<void> | null;
 }
 
 function mockCore(body: string): Core {
-  const c: Core = { calls: [], note: { body, rev: body === "" ? 0 : 1 }, gate: null, sends: [], fail: {} };
+  const c: Core = { calls: [], note: { body, rev: body === "" ? 0 : 1 }, gate: null, sends: [], fail: {}, marksGate: null };
   mockIPC(async (cmd, args) => {
     const a = args as Record<string, unknown>;
     c.calls.push({ cmd, args: a });
@@ -89,6 +91,10 @@ function mockCore(body: string): Core {
         for (const [i, t] of (a.body as string).split("\n").entries()) {
           for (const x of c.sends) if (x.text === t) out.push({ line: i + 1, kind: x.kind, itemId: x.itemId });
         }
+        // 照合した後に、答えるのを待たせる（1回だけ）
+        const gate = c.marksGate;
+        c.marksGate = null;
+        if (gate !== null) await gate;
         return out;
       }
     }
@@ -590,4 +596,43 @@ test("行の右クリックのメニューから TODO・障害へ送り、Esc �
   press({ key: "Escape" }, document.activeElement!);
   expect(q(".line-menu")).toBeNull();
   expect(view().hasFocus).toBe(true);
+});
+
+test("送信済みの印のある行の先頭で Enter を押すと、印は下へ動いた本文に付いていく", async () => {
+  const { core, view, props } = await start("前\n- 送った");
+  core.sends.push({ text: "- 送った", kind: "todo", itemId: "item-x" });
+  props.items = "item-x";
+  await until(() => sentLabels()[1] === "→ TODO");
+  // 求め直さずに、動かすだけの結果を見る
+  core.fail.marks = true;
+  view().dispatch({ changes: { from: view().state.doc.line(2).from, insert: "\n" } });
+  flushSync();
+  expect(sentLabels()).toEqual(["", "", "→ TODO"]);
+});
+
+test("その日のノートから送った項目が無ければ、印をコアに問い合わせない。古い問い合わせの答えは使わない", async () => {
+  const { core, view, props } = await start("- a");
+  await new Promise((r) => setTimeout(r, 50));
+  view().dispatch({ changes: { from: 1, insert: "b" } });
+  await new Promise((r) => setTimeout(r, 250));
+  expect(core.calls.filter((c) => c.cmd === "note_marks")).toEqual([]);
+  // 先に始めた問い合わせ（まだ送った記録が無い）が、後から始めたものより後に答えても、後のものを使う
+  let release!: () => void;
+  core.marksGate = new Promise<void>((r) => (release = r));
+  props.items = "item-x";
+  await until(() => core.calls.some((c) => c.cmd === "note_marks"));
+  core.sends.push({ text: view().state.doc.line(1).text, kind: "todo", itemId: "item-x" });
+  props.items = "item-x,item-y";
+  await until(() => sentLabels()[0] === "→ TODO");
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(sentLabels()[0]).toBe("→ TODO");
+});
+
+test("時刻付き見出しの行を同じ本文で書き換えても、時刻の飾りを残す", async () => {
+  const { view } = await start("## 10:00 定例\nメモ");
+  const line = view().state.doc.line(1);
+  view().dispatch({ changes: { from: line.from, to: line.to, insert: line.text } });
+  flushSync();
+  expect(text(qa(".note-ed .cm-line")[0].querySelector(".cm-tm"))).toBe("10:00");
 });

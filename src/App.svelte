@@ -95,9 +95,12 @@
     if (session.date !== source.date) session.show(source.date);
     shell.setMode("note");
   }
-  /** ボードの項目の並び（ノートが送信済みの印を求め直すため）。 */
+  /** その日のノートから送った項目（ノートが送信済みの印を求め直すため。送った項目はノートと同じ日に作る）。 */
   const boardItems = $derived(
-    [...(session.board?.todos ?? []), ...(session.board?.blockers ?? [])].map((bi) => bi.item.id).join(","),
+    [...(session.board?.todos ?? []), ...(session.board?.blockers ?? [])]
+      .filter((bi) => bi.item.origin === "note")
+      .map((bi) => bi.item.id)
+      .join(","),
   );
 
   // 検索パレット・設定・変更履歴・ふりかえりは、それぞれの画面の課題で開くようにする

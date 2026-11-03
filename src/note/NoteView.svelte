@@ -61,7 +61,10 @@
     narrow: boolean;
     mac: boolean;
     notice: Notice;
-    /** ボードの項目の並び（項目が増えた・消えたら、送信済みの印を求め直す）。 */
+    /**
+     * その日のノートから送った項目（行送りで作った、その日の項目の id を `,` でつないだもの）。増えた・
+     * 消えたら送信済みの印を求め直し、空なら印は無いのでコアに問い合わせない。
+     */
     items: string;
     /** 整理モードの項目の「← NOTE」から移る先（無ければ `null`）。移り終えたら `onJumped` を呼ぶ。 */
     jump: NoteSource | null;
@@ -151,15 +154,18 @@
 
   function outlineOf(state: EditorState, prev: Outline | null, tr: Transaction | null): Outline {
     let heads = prev?.heads ?? [];
-    if (prev === null || (tr !== null && tr.docChanged && touchesHeadings(tr))) {
+    const touched = prev === null || (tr !== null && tr.docChanged && touchesHeadings(tr));
+    if (touched) {
       const next = headingsOf(state);
       // 同じなら前の一覧を使う（Outline を描き直さないため）
       heads = prev !== null && sameHeads(next, prev.heads) ? prev.heads : next;
     }
     const cur = currentOf(state, heads);
     if (prev !== null && !tr?.docChanged && prev.cur === cur) return prev;
-    // 見出しも区間も変わらなければ、飾りは書き換えに合わせて動かすだけ（1文字ごとに作り直さない）
-    if (prev !== null && tr !== null && heads === prev.heads && cur === prev.cur) {
+    // 見出しの行に触れず、区間も変わらなければ、飾りは書き換えに合わせて動かすだけ（1文字ごとに作り
+    // 直さない）。見出しの行を書き換えたときは、同じ見出しになっても作り直す（書き換えた所の飾りは
+    // 動かすと消えるため）
+    if (prev !== null && tr !== null && !touched && cur === prev.cur) {
       return { heads, cur, deco: prev.deco.map(tr.changes) };
     }
     const b = new RangeSetBuilder<Decoration>();
@@ -247,6 +253,8 @@
       if (r.sent.length === 0) {
         const already = r.skipped.length > 0 && r.skipped.every((l) => l.reason === "already_sent");
         notice.show(already ? t().sendAlreadySent : t().sendNothing);
+      } else if (presence.saver === saver) {
+        sentHere = true;
       }
       refreshMarks(0);
     } catch {
@@ -266,6 +274,10 @@
   /** 読み終えた本文で、印を一度求め終えたか（`jump` は、それを待ってから移る）。 */
   let marked = $state(false);
   let marksTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 印を求めた回数（後から始めた問い合わせの答えだけを使う）。 */
+  let marksSeq = 0;
+  /** 読み終えた後に、この画面から行を送ったか（ボードを読み直して `items` に入るまでも、印を求める）。 */
+  let sentHere = false;
 
   /** `delay` の後に、いまのエディタの本文で印を求め直す（その間に打ったら、待ち直す）。 */
   function refreshMarks(delay = MARKS_DELAY_MS) {
@@ -277,16 +289,24 @@
     const v = view;
     const d = loaded;
     if (v === null || d === null) return;
+    const n = ++marksSeq;
     const doc = v.state.doc;
+    // その日のノートから送った項目が無ければ、印は無い（打つたびに本文をコアへ送らない）
+    if (items === "" && !sentHere) {
+      if (v.state.field(marksField).marks.length > 0) v.dispatch({ effects: setMarks.of([]) });
+      syncOutline(v.state);
+      marked = true;
+      return;
+    }
     try {
       const marks = await core.noteMarks(d, doc.toString());
-      // 求めている間に打った・日を移ったら、捨てる（打ったなら、その後にまた求める）
-      if (view !== v || loaded !== d || v.state.doc !== doc) return;
+      // 求めている間に打った・日を移った・後から求め直したら、捨てる（打ったなら、その後にまた求める）
+      if (n !== marksSeq || view !== v || loaded !== d || v.state.doc !== doc) return;
       v.dispatch({ effects: setMarks.of(marks) });
       syncOutline(v.state);
       marked = true;
     } catch {
-      if (view !== v || loaded !== d) return;
+      if (n !== marksSeq || view !== v || loaded !== d) return;
       // 求められなくても移る先は決める（保存済みの本文の行で移る）
       marked = true;
       refreshMarks(MARKS_RETRY_MS);
@@ -318,11 +338,12 @@
     onLoaded: (d) => {
       loaded = d;
       marked = false;
+      sentHere = false;
       refreshMarks(0);
     },
   });
 
-  // 項目が増えた・消えたら（送り先を消すと印が外れる）、印を求め直す
+  // その日のノートから送った項目が増えた・消えたら（送り先を消すと印が外れる）、印を求め直す
   $effect(() => {
     void items;
     untrack(() => refreshMarks(0));

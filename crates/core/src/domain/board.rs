@@ -282,11 +282,7 @@ pub fn get_screen_board(conn: &Connection, date: LogicalDate) -> Result<ScreenBo
         let unseen = change_log::unseen_items_by_agents(conn, date)?;
         let note_sources = note_send::source_refs(
             conn,
-            board
-                .todos
-                .iter()
-                .chain(&board.blockers)
-                .map(|bi| bi.item.id),
+            board.todos.iter().chain(&board.blockers).map(|bi| &bi.item),
         )?;
         Ok(ScreenBoard {
             board,

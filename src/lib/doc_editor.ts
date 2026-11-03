@@ -253,18 +253,22 @@ export class TextDocEditor {
    */
   refresh(d: LogicalDate, rev: number) {
     this.#latestRev = { date: d, rev };
-    void this.#pull(d);
+    void this.#pull();
   }
 
-  /** 知らされた最新の版まで読み直す（読み直している途中なら、それが読み終えてから確かめ直す）。 */
-  async #pull(d: LogicalDate) {
+  /**
+   * 知らされた最新の版（`#latestRev`）まで読み直す。読み直している途中なら、それが読み終えてから
+   * 確かめ直す（その間に別の日へ移って知らされた版も、知らされた日で読み直す）。
+   */
+  async #pull() {
     if (this.#pulling) return;
     this.#pulling = true;
     try {
       for (;;) {
         const s = this.#o.presence.saver;
         const latest = this.#latestRev;
-        if (this.view === null || s === null || s.date !== d || latest === null || latest.date !== d) return;
+        if (this.view === null || s === null || latest === null || s.date !== latest.date) return;
+        const d = latest.date;
         const pulled = this.#pulled?.saver === s ? this.#pulled.rev : 0;
         if (latest.rev <= Math.max(s.saved.rev, pulled)) return;
         try {

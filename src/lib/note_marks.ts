@@ -68,10 +68,11 @@ export const marksField = StateField.define<SentMarks>({
   update(value, tr) {
     let next = value;
     if (tr.docChanged && value.marks.length > 0) {
-      // 行の始まりの前に文字を入れても、その行に残す
+      // 行の始まりに入れた文字の後ろへ動かす（行の始まりで Enter を押したら、印は下へ動いた本文に付いて
+      // いく。文字を入れただけなら、行の途中になった位置を build がその行の始まりにそろえる）
       next = build(
         tr.state,
-        value.marks.map((m) => ({ ...m, pos: tr.changes.mapPos(m.pos, -1) })),
+        value.marks.map((m) => ({ ...m, pos: tr.changes.mapPos(m.pos, 1) })),
       );
     }
     for (const e of tr.effects) {
