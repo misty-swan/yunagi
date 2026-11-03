@@ -9,7 +9,7 @@
 //!   `updated: false` で成功し、`updated_at` も変えない。
 //! - 画面の操作（[`add`]・[`save_text`]・[`set_closed`]・[`save_resolution_note`]・[`delete`]・
 //!   [`restore`]・[`move_item`]・[`split`]）は、人の編集なので記録しない。持ち越しの確定
-//!   （[`super::carryover`]）も同じ。
+//!   （[`super::carryover`]）と行送り（[`super::note_send`]）も同じ。
 //! - どちらも、変えた欄だけを書く（item は版の番号を持たない。アーキテクチャ設計書 4.1）。
 //! - 項目を作るときは、その日の day の行が無ければ作る（[`day::ensure`]）。
 //!
@@ -604,6 +604,51 @@ pub fn add(
     })
 }
 
+/// ノートの行から項目を作る（行送り。[`super::note_send::send`] だけが使う）。`texts`（整えた本文）
+/// の順に、その日の末尾（[`Position::Last`] と同じ。同じ種類の中でも末尾になる）へ、`origin = note`
+/// で作る。人の操作なので記録しない。呼び出し側のトランザクションの中で呼ぶ。
+///
+/// 末尾のキーは、複数行を送っても読み込みと付け直しが1回で済むよう、[`key_at`] を1件ずつ呼ばずに
+/// まとめて作る（末尾は基準の項目を使わないので、位置の誤りは起きない）。末尾の後ろにまとめて
+/// 作れなければ、[`key_at`] と同じく、その日のキーを並び順を変えずに付け直して空ける。
+pub(crate) fn add_from_note(
+    conn: &Connection,
+    date: LogicalDate,
+    kind: ItemKind,
+    texts: Vec<String>,
+    tz: &TimeZone,
+    now: Timestamp,
+) -> Result<Vec<Item>, StorageError> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let items = item_table::list_by_date(conn, date)?;
+    let last = items.last().map(|i| i.sort_key.as_str());
+    let keys = match sort_key::n_between(last, None, texts.len()) {
+        Some(keys) => keys,
+        None => renumber(conn, &items, items.len(), texts.len())?,
+    };
+    day::ensure(conn, date, tz, now)?;
+    texts
+        .into_iter()
+        .zip(keys)
+        .map(|(text, sort_key)| {
+            insert_row(
+                conn,
+                NewItem {
+                    date,
+                    kind,
+                    text,
+                    sort_key,
+                    origin: Origin::Note,
+                    agent_client_id: None,
+                },
+                now,
+            )
+        })
+        .collect()
+}
+
 /// 画面で項目の本文を保存する。前後の空白を除いて今と同じなら書かない。取りやめた TODO と
 /// 持ち越し済みの項目は変えられない（操作仕様書 2章）。
 pub fn save_text(
@@ -1026,6 +1071,11 @@ struct NewItem {
 
 /// 項目を作る。その日の day の行が先に要る（呼び出し側が [`day::ensure`] で作る）。
 fn insert_new(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, ItemError> {
+    Ok(insert_row(conn, new, now)?)
+}
+
+/// [`insert_new`] の中身（読み書きの失敗だけを返す）。
+fn insert_row(conn: &Connection, new: NewItem, now: Timestamp) -> Result<Item, StorageError> {
     let item = Item {
         id: Ulid::generate(),
         date: new.date,

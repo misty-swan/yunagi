@@ -94,13 +94,16 @@ pub struct Section {
 }
 
 impl Section {
-    /// 区間の中身の行を改行でつないだもの。
-    pub fn text(&self, body: &str) -> String {
+    /// 区間の中身の行（上から順）。`body` は区間を求めた本文。
+    pub fn lines_in<'a>(&self, body: &'a str) -> impl Iterator<Item = &'a str> {
         lines(body)
             .skip(self.lines.start - 1)
             .take(self.lines.len())
-            .collect::<Vec<_>>()
-            .join("\n")
+    }
+
+    /// 区間の中身の行を改行でつないだもの。
+    pub fn text(&self, body: &str) -> String {
+        self.lines_in(body).collect::<Vec<_>>().join("\n")
     }
 }
 
