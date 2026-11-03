@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { continueList, insertTimeHeading, timeHeadingOf, timeHeadingPrefix } from "./note";
+import { blank, continueList, insertTimeHeading, timeHeadingOf, timeHeadingPrefix } from "./note";
 
 test("時刻付き見出しの判定はコアと同じ形（## の後に H:MM か HH:MM、その後は行末か空白）", () => {
   expect(timeHeadingOf("## 10:00 定例")).toEqual({ time: "10:00", title: "定例", timeFrom: 3, timeTo: 8 });
@@ -34,8 +34,23 @@ test("「- 」の行の Enter は次の行も「- 」で始め、中身のない
   expect(continueList({ from: 3, text: "  - " }, 4)).toEqual({ from: 5, to: 7, insert: "", caret: 5 });
   // CR の付いた「- 」は中身のない行とみなさず、CR を消さない
   expect(continueList({ from: 0, text: "- \r" }, 2)).toEqual({ from: 2, to: 2, insert: "\n- ", caret: 5 });
+  // カーソルが CR の前なら CR は次の行へ送られ、その行の Enter でリストを終えられる
+  expect(continueList({ from: 0, text: "- \r" }, 2)).toEqual({ from: 2, to: 2, insert: "\n- ", caret: 5 });
+  // 字下げと中身の空の判定は、コアと同じ空白の文字（全角の空白・U+0085 は空白、U+FEFF は空白でない）
+  expect(continueList({ from: 0, text: "\u3000- " }, 3)).toEqual({ from: 1, to: 3, insert: "", caret: 1 });
+  expect(continueList({ from: 0, text: "- \u0085" }, 3)).toEqual({ from: 0, to: 3, insert: "", caret: 0 });
+  expect(continueList({ from: 0, text: "\t- a" }, 4)).toEqual({ from: 4, to: 4, insert: "\n\t- ", caret: 8 });
+  expect(continueList({ from: 0, text: "- \uFEFF" }, 3)).toEqual({ from: 3, to: 3, insert: "\n- ", caret: 6 });
+  expect(continueList({ from: 0, text: "\uFEFF- a" }, 4)).toBeNull();
+  // CR は字下げに数えない（次の行へ写さない）
+  expect(continueList({ from: 0, text: "\r- a" }, 4)).toBeNull();
   // 「- 」より前のカーソルと、リストでない行はふつうの Enter
   expect(continueList({ from: 0, text: "- 買う" }, 1)).toBeNull();
   expect(continueList({ from: 0, text: "-買う" }, 3)).toBeNull();
   expect(continueList({ from: 0, text: "メモ" }, 2)).toBeNull();
+});
+
+test("空の行の判定はコアと同じ空白の文字で、CR を含む行は空とみなさない", () => {
+  for (const yes of ["", "  ", "\t", "\u3000", "\u0085", "\u00A0 "]) expect(blank(yes), JSON.stringify(yes)).toBe(true);
+  for (const no of ["\r", " \r ", "\uFEFF", "a", "- "]) expect(blank(no), JSON.stringify(no)).toBe(false);
 });

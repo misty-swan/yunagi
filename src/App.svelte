@@ -8,6 +8,7 @@
   // データベースを開くまで（とバックアップから戻した結果を確かめるまで）は、外枠の代わりに起動時の画面
   // （src/startup/）を窓全体に出す。開く処理の状態は、起動時の画面の data-startup に出す（テストに使う）。定期バックアップの失敗（backup-failed）は上部のバーの知らせに出す。
   import type { EditorView } from "@codemirror/view";
+  import type { NoteSource } from "./lib/bindings";
   import { onDestroy, untrack } from "svelte";
   import { coreEvents } from "./lib/core";
   import { t } from "./lib/i18n";
@@ -84,6 +85,21 @@
     });
   });
 
+  // ---- 項目から送り元のノートの行へ ----
+
+  /** 項目の「← NOTE」で移る先（ノートがその日を読み終えて移ったら `null` に戻す）。 */
+  let noteJump = $state<NoteSource | null>(null);
+  function openNoteSource(source: NoteSource) {
+    // 押すたびに移る（同じ行へ2回目に押したときも）
+    noteJump = { ...source };
+    if (session.date !== source.date) session.show(source.date);
+    shell.setMode("note");
+  }
+  /** ボードの項目の並び（ノートが送信済みの印を求め直すため）。 */
+  const boardItems = $derived(
+    [...(session.board?.todos ?? []), ...(session.board?.blockers ?? [])].map((bi) => bi.item.id).join(","),
+  );
+
   // 検索パレット・設定・変更履歴・ふりかえりは、それぞれの画面の課題で開くようにする
   function onCommand(_c: ShellCommand) {}
 </script>
@@ -100,7 +116,7 @@
       data-date={session.date ?? ""}
     >
       <div class="mode" hidden={shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
-        <Board {session} {save} {notice} narrow={shell.narrow} {mac} {tracker} />
+        <Board {session} {save} {notice} narrow={shell.narrow} {mac} {tracker} onOpenNoteSource={openNoteSource} />
       </div>
       <div class="mode" hidden={shell.mode !== "note"}>
         <NoteView
@@ -112,6 +128,10 @@
           visible={shell.mode === "note"}
           narrow={shell.narrow}
           {mac}
+          {notice}
+          items={boardItems}
+          jump={noteJump}
+          onJumped={() => (noteJump = null)}
           bind:view={noteView}
         />
       </div>

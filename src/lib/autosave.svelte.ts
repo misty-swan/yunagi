@@ -23,18 +23,22 @@ import type {
   LogicalDate,
   Millis,
   Position,
+  SendResult,
   Snapshot,
   StatusChange,
   TextDoc,
 } from "./bindings";
 import { core, CoreError, errorOf, type CallError } from "./core";
-import { mergeText, unsavedLines } from "./text_merge";
+import { diffLines, mergeText, splitLines, unsavedLines, type Hunk } from "./text_merge";
 
 /** まだ保存していない最初の入力から、保存を送るまでの時間（docs/design/01-architecture.md 4.1）。 */
 export const SAVE_DELAY_MS = 250;
 
 /** 保存に失敗してから再試行するまでの時間（続けて失敗するたびに次の値。最後の値を繰り返す）。 */
 export const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 10000] as const;
+
+/** ノートの行送りで、版の行き違いを取り込んで送り直す回数の上限。 */
+const SEND_ROUNDS = 5;
 
 /**
  * 内容を持ったまま再試行する失敗か。保存先の問題（`storage`）、データベースをまだ開いていない・
@@ -221,6 +225,30 @@ abstract class Saver<P> {
   }
 
   /**
+   * 送っている保存を待ってから `task` を行い、その間は保存を送らない（ノートの行送りは本文の保存を
+   * 兼ねるので、同じ本文の保存と同時に送らない）。待っている保存は `task` の後に送る。
+   */
+  protected async exclusive<T>(task: () => Promise<T>): Promise<T> {
+    while (this.#inFlight !== null) await this.#inFlight;
+    this.#clearTimer();
+    const run = task();
+    this.#inFlight = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#status.update();
+    try {
+      return await run;
+    } finally {
+      this.#inFlight = null;
+      this.settled();
+      this.#schedule();
+      if (this.#closing && !this.busy) this.#finish();
+      this.#status.update();
+    }
+  }
+
+  /**
    * 待たずにすぐ保存する（フォーカスが外れたとき、アプリが前面から外れたとき）。保存し終えたら
    * `true`、失敗したか（再試行は後ろで続く）、送り直しが上限の回数を超えて（行き違いが続いた）まだ
    * 保存していないものがあれば `false` で解決する。
@@ -376,17 +404,26 @@ export class DocSaver extends Saver<Snapshot> {
    * docs/design/01-architecture.md 4.1）。
    */
   unsavedLines(): number[] {
-    // カーソルを動かすたびに知らせ直すので、同じ本文どうしなら前の結果を使う（差分は重いため）
-    const base = this.#saved.body;
-    const editor = this.#editor.text();
-    const c = this.#unsavedCache;
-    if (c === null || c.base !== base || c.editor !== editor) {
-      this.#unsavedCache = { base, editor, lines: unsavedLines(base, editor) };
-    }
-    return [...this.#unsavedCache!.lines];
+    const d = this.diff();
+    return [...d.unsaved];
   }
 
-  #unsavedCache: { base: string; editor: string; lines: number[] } | null = null;
+  /**
+   * 最後に保存した本文からエディタの本文への行の変更（守る行を求めるのに使う）。入力やカーソルの
+   * 移動のたびに知らせ直すので、同じ本文どうしなら前の結果を使い、1文字ごとに1回だけ求める（差分は
+   * 重いため）。
+   */
+  diff(): { base: string; editor: string; hunks: readonly Hunk[]; unsaved: readonly number[] } {
+    const base = this.#saved.body;
+    const editor = this.#editor.text();
+    const c = this.#diffCache;
+    if (c !== null && c.base === base && c.editor === editor) return c;
+    const hunks = diffLines(splitLines(base), splitLines(editor));
+    this.#diffCache = { base, editor, hunks, unsaved: unsavedLines(base, editor, hunks) };
+    return this.#diffCache;
+  }
+
+  #diffCache: { base: string; editor: string; hunks: readonly Hunk[]; unsaved: readonly number[] } | null = null;
 
   protected take(): Snapshot | null {
     const body = this.#editor.text();
@@ -403,6 +440,36 @@ export class DocSaver extends Saver<Snapshot> {
     // 送り終えてから取り込む（settled）
     this.#merge({ body: r.body, rev: r.rev });
     return this.#editor.text() === this.#saved.body ? "done" : "again";
+  }
+
+  /**
+   * ノートの行送り（`core.sendNoteLines`）：エディタの本文を、もとにした版を添えて送り、本文の保存も
+   * 兼ねる。送っている保存があれば待ち、その間は保存を送らない。版が古ければ最新を取り込んでから
+   * 送り直す（取り込むと行がずれるので、送る行 `lines` は送るたびに求め直す。`null` なら送らない）。
+   * 送り直しが続いたら（上限 SEND_ROUNDS 回）、最後の結果の `stale` を返す。失敗したら投げる（送り
+   * 直さない。本文は、ふだんの自動保存が送る）。
+   */
+  sendLines(
+    kind: ItemKind,
+    lines: () => { from: number; to: number } | null,
+  ): Promise<SendResult | null> {
+    return this.exclusive(async () => {
+      let r: SendResult | null = null;
+      for (let round = 0; round < SEND_ROUNDS; round++) {
+        const range = lines();
+        if (range === null) return null;
+        const body = this.#editor.text();
+        r = await core.sendNoteLines(this.date, body, this.#saved.rev, range.from, range.to, kind);
+        if (r.result === "sent") {
+          if (r.rev >= this.#saved.rev) this.#saved = { body, rev: r.rev };
+          // 送っている間の入力は、ふだんの保存で送る
+          if (this.#editor.text() !== body) this.markPending();
+          return r;
+        }
+        if (this.#merge({ body: r.body, rev: r.rev })) this.markPending();
+      }
+      return r;
+    });
   }
 
   protected settled() {

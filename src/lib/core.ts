@@ -18,8 +18,10 @@ import {
   type ItemKind,
   type ItemOutcome,
   type LogicalDate,
+  type NoteMark,
   type Overview,
   type Position,
+  type SendResult,
   type Snapshot,
   type SplitResult,
   type Startup,
@@ -106,6 +108,14 @@ export const core = {
   /** `baseRev` はもとにした版。古ければ `{ result: "stale" }` で最新が返る。 */
   saveTextDoc: (doc: TextDoc, date: LogicalDate, body: string, baseRev: number) =>
     call<TextSave>("save_text_doc", { doc, date, body, baseRev }),
+  /**
+   * ノートの `from` 行目から `to` 行目まで（1始まり。両端を含む）を、1行ごとに `kind` の項目として送る。
+   * `body` はエディタの本文、`baseRev` はそのもとにした版。古ければ `{ result: "stale" }` で最新が返る。
+   */
+  sendNoteLines: (date: LogicalDate, body: string, baseRev: number, from: number, to: number, kind: ItemKind) =>
+    call<SendResult>("send_note_lines", { date, body, baseRev, from, to, kind }),
+  /** 本文 `body`（エディタの本文）で、送信済みの印を付ける行。 */
+  noteMarks: (date: LogicalDate, body: string) => call<NoteMark[]>("note_marks", { date, body }),
   /**
    * 入力中の状態を知らせる（変わるたびに全体を知らせ直す）。届く順が入れ替わっても古いものが
    * 残らないよう、この画面の読み込みの印と、送るたびに増える番号を付ける。

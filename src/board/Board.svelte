@@ -9,7 +9,7 @@
   import type { EditorView } from "@codemirror/view";
   import { untrack } from "svelte";
   import { ItemSaves, type ItemSaveEvents, type SaveStatus } from "../lib/autosave.svelte";
-  import type { CarriedTo, Id, ItemKind, LogicalDate } from "../lib/bindings";
+  import type { CarriedTo, Id, ItemKind, LogicalDate, NoteSource } from "../lib/bindings";
   import { BoardModel, CARRY_REVIEW_DEFAULT, type BoardNotice, type FocusTarget } from "../lib/board.svelte";
   import { boardActionOf } from "../lib/board_keys";
   import { shortDate } from "../lib/dates";
@@ -28,6 +28,7 @@
     narrow,
     mac,
     tracker,
+    onOpenNoteSource,
   }: {
     session: Session;
     save: SaveStatus;
@@ -37,6 +38,8 @@
     /** ウィンドウ幅が 900px 未満か。 */
     narrow: boolean;
     mac: boolean;
+    /** 項目の「← NOTE」：送り元のノートの行へ移る（ノートモードへ移すのは App）。 */
+    onOpenNoteSource: (source: NoteSource) => void;
   } = $props();
 
   const m = $derived(t());
@@ -164,6 +167,7 @@
       {focusReq}
       onFocus={requestFocus}
       onOpenCarried={openCarried}
+      {onOpenNoteSource}
       onActivity={activity}
       bind:region={todoRegion}
     />
@@ -176,6 +180,7 @@
       {focusReq}
       onFocus={requestFocus}
       onOpenCarried={openCarried}
+      {onOpenNoteSource}
       onActivity={activity}
       bind:region={blockerRegion}
     />

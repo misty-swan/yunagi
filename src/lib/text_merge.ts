@@ -24,6 +24,59 @@ export function splitLines(body: string): string[] {
 /** 差分を細かく求める行の数の上限（もとと相手の、共通の先頭・末尾を除いた行の数の積）。超えたら、残りを1つの置き換えとして扱う（取り込みの結果は正しいまま、まとまりが大きくなるだけ）。 */
 const DIFF_CELLS_LIMIT = 4_000_000;
 
+/**
+ * `a` と `b` の最長共通部分列の行の組（a の位置, b の位置。前から順）を、Myers の O((N+M)D) の方法で
+ * 求める（D は足した行と消した行の数）。途中の状態を覚える量が DIFF_CELLS_LIMIT を超えるほど変えた行が
+ * 多ければ、求めずに `null`。
+ */
+function myersPairs(a: string[], b: string[]): [number, number][] | null {
+  const n = a.length;
+  const m = b.length;
+  const max = n + m;
+  const off = max + 1;
+  const maxD = Math.min(max, Math.floor(DIFF_CELLS_LIMIT / (2 * max + 3)));
+  let v = new Int32Array(2 * max + 3);
+  // trace[d]：d 回目の手を指す前の、対角線 k ごとの最も進んだ x
+  const trace: Int32Array[] = [];
+  for (let d = 0; d <= maxD; d++) {
+    trace.push(v);
+    v = v.slice();
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[off + k] = x;
+      if (x >= n && y >= m) return backtrack(trace, off, n, m);
+    }
+  }
+  return null;
+}
+
+/** `myersPairs` の手を終わりからたどって、一致した行の組を求める。 */
+function backtrack(trace: Int32Array[], off: number, n: number, m: number): [number, number][] {
+  const pairs: [number, number][] = [];
+  let x = n;
+  let y = m;
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const v = trace[d];
+    const k = x - y;
+    const prevK = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? k + 1 : k - 1;
+    const prevX = d === 0 ? 0 : v[off + prevK];
+    const prevY = d === 0 ? 0 : prevX - prevK;
+    while (x > prevX && y > prevY) {
+      pairs.push([x - 1, y - 1]);
+      x--;
+      y--;
+    }
+    x = prevX;
+    y = prevY;
+  }
+  return pairs.reverse();
+}
+
 /** `base` から `other` への行の変更。重ならず、もとの行の順に並ぶ。隣り合う変更は1つにまとめる。 */
 export function diffLines(base: string[], other: string[]): Hunk[] {
   let head = 0;
@@ -38,9 +91,11 @@ export function diffLines(base: string[], other: string[]): Hunk[] {
   const a = base.slice(head, base.length - tail);
   const b = other.slice(head, other.length - tail);
   if (a.length === 0 && b.length === 0) return [];
-  // 一致する行の組（a の位置, b の位置）を、最長共通部分列で求める
-  const pairs: [number, number][] = [];
-  if (a.length > 0 && b.length > 0 && a.length * b.length <= DIFF_CELLS_LIMIT) {
+  // 一致する行の組（a の位置, b の位置）を、最長共通部分列で求める。変えた行が少なければ Myers の方法で
+  // （変えた行の数に比例する時間で）求め、多ければ表を埋めて求める
+  const myers = myersPairs(a, b);
+  const pairs: [number, number][] = myers ?? [];
+  if (myers === null && a.length > 0 && b.length > 0 && a.length * b.length <= DIFF_CELLS_LIMIT) {
     const w = b.length + 1;
     const lcs = new Uint32Array((a.length + 1) * w);
     for (let i = a.length - 1; i >= 0; i--) {
@@ -174,8 +229,12 @@ function regionLines(base: string[], start: number, end: number, hunks: SidedHun
  * もと `base` の行のうち、`editor` で書き換えたか削除した行の番号（1 始まり、昇順。もとの本文で
  * 数える）。足しただけの行は含めない（docs/design/01-architecture.md 4.1「未保存の変更がある行」）。
  */
-export function unsavedLines(base: string, editor: string): number[] {
-  return diffLines(splitLines(base), splitLines(editor)).flatMap((h) =>
+export function unsavedLines(
+  base: string,
+  editor: string,
+  hunks: readonly Hunk[] = diffLines(splitLines(base), splitLines(editor)),
+): number[] {
+  return hunks.flatMap((h) =>
     Array.from({ length: h.end - h.start }, (_, k) => h.start + k + 1),
   );
 }
@@ -186,8 +245,12 @@ export function unsavedLines(base: string, editor: string): number[] {
  * 変えていない行はもとの同じ行に、書き換えた行は書き換える前の行（まとまりの全部）にする。足した
  * だけの行は、エージェントが指定できないので含めない。結果は昇順で重ならない。
  */
-export function baseLinesOf(base: string, editor: string, lines: readonly number[]): number[] {
-  const hunks = diffLines(splitLines(base), splitLines(editor));
+export function baseLinesOf(
+  base: string,
+  editor: string,
+  lines: readonly number[],
+  hunks: readonly Hunk[] = diffLines(splitLines(base), splitLines(editor)),
+): number[] {
   const out = new Set<number>();
   for (const line of lines) {
     // エディタの 0 始まりの行 i を、変更の前から順にたどってもとの行にする

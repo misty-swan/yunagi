@@ -76,4 +76,9 @@ test("ノートの時刻付き見出しは Mod+Shift+H（キーの位置で判�
   expect(noteActionOf(key({ code: "KeyH", key: "H", metaKey: true, shiftKey: true }), false)).toBeNull();
   expect(noteActionOf(key({ code: "KeyH", key: "H", ctrlKey: true, shiftKey: true, altKey: true }), false)).toBeNull();
   expect(noteActionOf(key({ code: "KeyH", key: "H", ctrlKey: true, shiftKey: true, isComposing: true }), false)).toBeNull();
+  // 行送り（Mod+Shift+T・B）
+  expect(noteActionOf(key({ code: "KeyT", key: "T", ctrlKey: true, shiftKey: true }), false)).toBe("toTodo");
+  expect(noteActionOf(key({ code: "KeyB", key: "B", metaKey: true, shiftKey: true }), true)).toBe("toBlocker");
+  expect(noteActionOf(key({ code: "KeyT", key: "t", ctrlKey: true }), false)).toBeNull();
+  expect(noteActionOf(key({ code: "KeyX", key: "X", ctrlKey: true, shiftKey: true }), false)).toBeNull();
 });

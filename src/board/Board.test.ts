@@ -3,7 +3,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SaveStatus } from "../lib/autosave.svelte";
-import { EVENTS, type Board as BoardData, type BoardItem, type Item } from "../lib/bindings";
+import { EVENTS, type Board as BoardData, type BoardItem, type Item, type NoteSource } from "../lib/bindings";
 import { Notice } from "../lib/notice.svelte";
 import { prefs } from "../lib/prefs.svelte";
 import { startSession, type Session } from "../lib/session.svelte";
@@ -69,6 +69,7 @@ const bi = (i: Item, over: Partial<BoardItem> = {}): BoardItem => ({
   carriedTo: null,
   agentName: null,
   unseen: false,
+  noteSource: null,
   ...over,
 });
 
@@ -130,7 +131,7 @@ const $ = (sel: string) => document.querySelector<HTMLElement>(sel);
 const $$ = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
 const text = (el: Element | null) => el?.textContent?.replace(/\s+/g, " ").trim() ?? "";
 
-async function start(opts: Opts = {}, props: { narrow?: boolean } = {}) {
+async function start(opts: Opts = {}, props: { narrow?: boolean; onOpenNoteSource?: (s: NoteSource) => void } = {}) {
   const calls = mockCore(opts);
   session = startSession();
   const notice = new Notice();
@@ -138,7 +139,15 @@ async function start(opts: Opts = {}, props: { narrow?: boolean } = {}) {
   tracker = new InputTracker(save);
   app = mount(Board, {
     target: document.body,
-    props: { session, save, notice, narrow: props.narrow ?? false, mac: false, tracker },
+    props: {
+      session,
+      save,
+      notice,
+      narrow: props.narrow ?? false,
+      mac: false,
+      tracker,
+      onOpenNoteSource: props.onOpenNoteSource ?? (() => {}),
+    },
   });
   await until(() => $(".board")?.dataset.date === TODAY && $(".ref-ed .cm-content") !== null);
   return { calls, notice };
@@ -204,6 +213,28 @@ test("行の表示：件数、完了の取り消し線、解消メモ、持ち�
   expect(text(rows[4].querySelector(".agent-tag"))).toBe("Claude Code");
   expect(rows[4].querySelector(".mk-agent.lead")).not.toBeNull();
   expect(text($(".r-blk .item .memo"))).toBe("→ 聞いた");
+});
+
+test("ノートから送った項目は行末に「← NOTE」を出し、押すと送り元の行を知らせる", async () => {
+  const opened: NoteSource[] = [];
+  const source = { date: "2026-11-02", line: 3, itemId: B };
+  await start(
+    {
+      boards: {
+        [TODAY]: {
+          ...emptyBoard(TODAY),
+          todos: [bi(item(A, "送った", { origin: "note" }), { noteSource: source }), bi(item(C, "手で足した"))],
+        },
+      },
+    },
+    { onOpenNoteSource: (s) => opened.push(s) },
+  );
+  const rows = $$(".r-todo .item");
+  expect(text(rows[0].querySelector(".from-note"))).toBe("← NOTE");
+  expect(rows[0].querySelector(".from-note")?.getAttribute("aria-label")).toBe("ノートの送り元の行へ移る");
+  expect(rows[1].querySelector(".from-note")).toBeNull();
+  (rows[0].querySelector(".from-note") as HTMLElement).click();
+  expect(opened).toEqual([source]);
 });
 
 test("持ち越し済みの項目を完了にしようとすると、上部のバーへの知らせを出し、変えない", async () => {

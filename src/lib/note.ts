@@ -33,12 +33,15 @@ export function timeHeadingOf(line: string): TimeHeading | null {
   return { time: line.slice(3, timeTo), title: line.slice(timeTo).replace(EDGE_WS, ""), timeFrom: 3, timeTo };
 }
 
+const BLANK = new RegExp(`^[${WS}]*$`, "u");
+
 /**
- * 空の行か：空白だけの行も空とみなす。ただし CR を含む行は空とみなさない（CR は行の文字として残す。
- * コアの追記の決まりと同じ。データモデル設計書 3章 note）。
+ * 空の行か：空白（コアと同じ文字）だけの行も空とみなす。ただし CR を含む行は空とみなさない（CR は
+ * 行の文字として残す。コアの追記の決まりと同じ。データモデル設計書 3章 note）。振り返りのテンプレートの
+ * 挿入（src/board/ReflectionEditor.svelte）も同じ判定を使う。
  */
-function blank(text: string): boolean {
-  return !text.includes("\r") && text.trim() === "";
+export function blank(text: string): boolean {
+  return !text.includes("\r") && BLANK.test(text);
 }
 
 /** 時刻 `now` の見出しの行の始め（`## HH:MM `。続けて件名を書けるよう、空白で終える）。 */
@@ -69,18 +72,22 @@ export function insertTimeHeading(line: { from: number; text: string }, now: Dat
   return { from: to, to, insert, caret: to + insert.length };
 }
 
-const LIST_ITEM = /^(\s*)- /;
+/** 行頭の字下げに使う空白（コアと同じ文字から、CR を除いたもの。CR を次の行へ写さないため）。 */
+const INDENT_WS = WS.replace("\\t-\\r", "\\t\\u000B\\f");
+const LIST_ITEM = new RegExp(`^([${INDENT_WS}]*)- `, "u");
 
 /**
  * 「- 」で始まる行の Enter：次の行も同じ字下げの「- 」で始める。中身のない「- 」の行では「- 」だけを
- * 消し、字下げは残す（字下げの無い行は空の行になる）。
+ * 消し、字下げは残す（字下げの無い行は空の行になる）。字下げと中身の空の判定は、見出しと同じ空白の文字
+ * （コアの `char::is_whitespace`）で行い、CR を含む行は中身のない行とみなさない（CR を消さない。
+ * カーソルが CR の前なら、CR は次の行へ送られ、その行でもう一度 Enter を押せばリストを終えられる）。
  * カーソル（`at`。行の始まりからの文字の数）が「- 」より前にあるときと、リストの行でないときは `null`
  * （ふつうの Enter）。
  */
 export function continueList(line: { from: number; text: string }, at: number): Edit | null {
   const m = LIST_ITEM.exec(line.text);
   if (m === null || at < m[0].length) return null;
-  if (!line.text.includes("\r") && line.text.trim() === "-") {
+  if (blank(line.text.slice(m[0].length))) {
     const indent = m[1].length;
     return { from: line.from + indent, to: line.from + line.text.length, insert: "", caret: line.from + indent };
   }

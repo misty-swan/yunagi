@@ -510,7 +510,8 @@ fn text_doc_commands(_: &Path) {
 /// 行送り：本文を保存して項目を作り、印と送り元の行を返す（データモデル設計書 3章 note_send）。
 fn note_send_commands(_: &Path) {
     let h = Harness::opened();
-    let date = "2030-01-09";
+    // データベースはテストの間で共有するので、ほかのテストと違う日を使う
+    let date = "2030-03-02";
     let body = "## 10:00 定例\n- レート制限を調べる\n- 権限待ち\n```\nログ\n```";
     h.drain();
     let sent = h.ok(

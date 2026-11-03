@@ -44,7 +44,7 @@ function item(id: string, text: string, over: Partial<Item> = {}): Item {
 }
 
 function bi(i: Item, over: Partial<BoardItem> = {}): BoardItem {
-  return { item: i, carriedTo: null, agentName: null, unseen: false, ...over };
+  return { item: i, carriedTo: null, agentName: null, unseen: false, noteSource: null, ...over };
 }
 
 function board(todos: BoardItem[], blockers: BoardItem[] = [], date = DATE): Board {

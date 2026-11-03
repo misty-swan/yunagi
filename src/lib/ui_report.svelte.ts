@@ -41,7 +41,7 @@ export class EditorPresence {
     if (s === null) return out;
     const lines = new Set(s.unsavedLines());
     if (this.focused && active && (this.composing || now - this.lastInputAt < EDITING_MS)) {
-      for (const l of this.#cursorBaseLines(s.saved.body, this.text())) lines.add(l);
+      for (const l of this.#cursorBaseLines(s)) lines.add(l);
     }
     if (lines.size > 0) {
       out.push({ doc: s.doc, date: s.date, rev: s.saved.rev, lines: [...lines].sort((a, b) => a - b) });
@@ -50,11 +50,13 @@ export class EditorPresence {
   }
 
   /** カーソル行を、もとの本文の行番号にしたもの（入力やカーソルの移動のたびに呼ぶので、同じなら前の結果を使う）。 */
-  #cursorBaseLines(base: string, editor: string): number[] {
+  #cursorBaseLines(s: DocSaver): number[] {
+    // 差分は「未保存の変更がある行」と同じものを使う（1文字ごとに2回求めない）
+    const { base, editor, hunks } = s.diff();
     const cursor = this.cursorLines.join(",");
     const c = this.#cache;
     if (c === null || c.base !== base || c.editor !== editor || c.cursor !== cursor) {
-      this.#cache = { base, editor, cursor, lines: baseLinesOf(base, editor, this.cursorLines) };
+      this.#cache = { base, editor, cursor, lines: baseLinesOf(base, editor, this.cursorLines, hunks) };
     }
     return this.#cache!.lines;
   }
