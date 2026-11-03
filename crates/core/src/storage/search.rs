@@ -21,11 +21,14 @@
 //!   ASCII しか大文字・小文字をそろえないため）。
 //! - 論理削除した項目は出さない。
 //! - 並びは日付の新しい順。同じ日の中は TODO・障害・ノート・振り返りの順、その中は id の順。
+//! - 項目の結果には、持ち越し先（[`SearchHit::carried_to`]）を付ける（MCP・CLI 仕様書 3章「読み取り」）。
 
+use rusqlite::types::Type;
 use rusqlite::{Connection, Row, params};
 
-use super::StorageError;
+use super::table::item::{self as item_table, CarriedTo};
 use super::table::text_enum;
+use super::{StorageError, Ulid};
 use crate::domain::logical_date::LogicalDate;
 
 text_enum! {
@@ -66,6 +69,9 @@ pub struct SearchHit {
     /// 解消済みの障害の解消メモ（無ければ `None`。TODO・ノート・振り返りはいつも `None`）。
     /// 一致したのが本文か解消メモかは、使う側が切り出すときに見分ける。
     pub resolution_note: Option<String>,
+    /// 項目の持ち越し先（MCP・CLI の `carried_to_id`・`carried_to_date`）。持ち越し済みでない項目と、
+    /// ノート・振り返りは `None`。
+    pub carried_to: Option<CarriedTo>,
 }
 
 /// 3文字以上の検索語は索引で探す。
@@ -94,7 +100,19 @@ pub fn search(conn: &Connection, query: &SearchQuery<'_>) -> Result<Vec<SearchHi
         params![pattern, query.from, query.to, kinds, limit],
         from_row,
     )?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    let mut hits = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    for hit in &mut hits {
+        if matches!(hit.kind, SearchKind::Todo | SearchKind::Blocker) {
+            // 項目の ref_id は item.id なので、いつも ULID として読める
+            let id: Ulid = hit.ref_id.parse().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(1, Type::Text, Box::new(e))
+            })?;
+            hit.carried_to = item_table::carried_to(conn, id, None)?
+                .as_ref()
+                .map(CarriedTo::from);
+        }
+    }
+    Ok(hits)
 }
 
 // どちらの文も、`?1` が検索語、`?2` が期間の始め、`?3` が終わり、`?4` が種類（JSON の配列）、
@@ -204,6 +222,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<SearchHit> {
         date: row.get(2)?,
         body: row.get(3)?,
         resolution_note: row.get(4)?,
+        carried_to: None,
     })
 }
 
@@ -523,6 +542,7 @@ mod tests {
                 date: date("2026-11-02"),
                 body: "API のレート制限を調査".into(),
                 resolution_note: None,
+                carried_to: None,
             }]
         );
         // ノート・振り返りの ref_id は日付
@@ -723,6 +743,7 @@ mod tests {
                     date: date("2026-11-02"),
                     body: "本番に繋がらない".into(),
                     resolution_note: Some("DNS の設定ミスが原因".into()),
+                    carried_to: None,
                 }],
                 "{q}"
             );
@@ -1175,5 +1196,44 @@ mod tests {
             worst < Duration::from_secs(1),
             "p95 {worst:?} is over 1 second"
         );
+    }
+
+    #[test]
+    fn item_hits_carry_where_they_were_carried_over_to() {
+        // 持ち越しの決まり（たどり方）は domain::item のテストにある。ここでは、索引で探しても
+        // 元の表で探しても、項目の結果に持ち越し先が付き、ノート・振り返りには付かないことを確かめる
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let source = add(&db, "2026-11-02", ItemKind::Todo, "権限の申請を出す");
+        let d = ensure_day(&db, "2026-11-03");
+        let copy = Item {
+            carried_from_id: Some(source.id),
+            carry_count: 1,
+            ..new_item(d, ItemKind::Todo, "権限の申請を出す")
+        };
+        item::insert(conn, &copy).unwrap();
+        let other = add(&db, "2026-11-03", ItemKind::Blocker, "権限待ち");
+        save(&db, TextDoc::Note, "2026-11-03", "権限の申請");
+
+        for q in ["権限の申請", "権限"] {
+            let hits: Vec<_> = search(conn, &query(q))
+                .unwrap()
+                .into_iter()
+                .map(|h| (h.ref_id, h.carried_to))
+                .collect();
+            let mut expected = vec![(copy.id.to_string(), None)];
+            if q == "権限" {
+                expected.push((other.id.to_string(), None));
+            }
+            expected.push(("2026-11-03".to_owned(), None));
+            expected.push((
+                source.id.to_string(),
+                Some(CarriedTo {
+                    id: copy.id,
+                    date: date("2026-11-03"),
+                }),
+            ));
+            assert_eq!(hits, expected, "{q}");
+        }
     }
 }

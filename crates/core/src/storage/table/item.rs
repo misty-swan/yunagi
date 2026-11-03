@@ -2,6 +2,11 @@
 //!
 //! 種類と状態の組み合わせ（障害に `done` を付けないなど）や、持ち越し・分割の決まりは
 //! ここでは確かめない。項目の操作（`crate::domain::item`）が確かめる。
+//!
+//! ただし、持ち越し先（[`carried_to`]）は、データモデル設計書 3章の派生列 `carried_to_id` の
+//! 読み取りなので、ここに置く（ボードの読み取りと検索の結果の両方に付けるため）。
+
+use std::collections::HashSet;
 
 use jiff::Timestamp;
 use rusqlite::types::ToSql;
@@ -156,6 +161,36 @@ pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, S
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// `from` から `to` まで（両端を含む）の日の項目を、日付・並び順（`sort_key`、同じなら id）で返す。
+/// 論理削除したものは含めない。
+pub fn list_between(
+    conn: &Connection,
+    from: LogicalDate,
+    to: LogicalDate,
+) -> Result<Vec<Item>, StorageError> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM item WHERE date BETWEEN ?1 AND ?2 AND deleted_at IS NULL \
+         ORDER BY date, sort_key, id"
+    ))?;
+    let rows = stmt.query_map([from, to], from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// `before` より前で、削除されていない項目がある日を、新しい順に `limit` 日まで返す。
+pub fn dates_before(
+    conn: &Connection,
+    before: LogicalDate,
+    limit: usize,
+) -> Result<Vec<LogicalDate>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT date FROM item WHERE date < ?1 AND deleted_at IS NULL \
+         ORDER BY date DESC LIMIT ?2",
+    )?;
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let rows = stmt.query_map(params![before, limit], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// `before` より前で、削除されていない項目がある最も新しい日。無ければ `None`。
 pub fn latest_date_before(
     conn: &Connection,
@@ -176,6 +211,48 @@ pub fn list_carried_from(conn: &Connection, id: Ulid) -> Result<Vec<Item>, Stora
     ))?;
     let rows = stmt.query_map([id], from_row)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// 項目の持ち越し先の id と日付（MCP・CLI の `carried_to_id`・`carried_to_date`。MCP・CLI 仕様書 3章）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CarriedTo {
+    pub id: Ulid,
+    pub date: LogicalDate,
+}
+
+impl From<&Item> for CarriedTo {
+    fn from(item: &Item) -> Self {
+        Self {
+            id: item.id,
+            date: item.date,
+        }
+    }
+}
+
+/// 項目 `id` の持ち越し先（データモデル設計書 3章 `carried_to_id`）：`carried_from_id` で `id` を
+/// 指す項目をたどり、最初に行き着いた削除されていない項目。削除されている項目は、さらにそれを
+/// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。`skip` の項目（とその先）は
+/// たどらない（削除した持ち越し先を戻すときの確かめに使う。ふだんは `None`）。
+pub fn carried_to(
+    conn: &Connection,
+    id: Ulid,
+    skip: Option<Ulid>,
+) -> Result<Option<Item>, StorageError> {
+    let mut seen: HashSet<Ulid> = [Some(id), skip].into_iter().flatten().collect();
+    let mut pending = vec![id];
+    while let Some(from) = pending.pop() {
+        for next in list_carried_from(conn, from)? {
+            // 壊れたデータで輪になっていても止まるように、一度見た項目はたどらない
+            if !seen.insert(next.id) {
+                continue;
+            }
+            if next.deleted_at.is_none() {
+                return Ok(Some(next));
+            }
+            pending.push(next.id);
+        }
+    }
+    Ok(None)
 }
 
 /// 項目の、書き換える欄とその値（アーキテクチャ設計書 4.1「項目の保存」）。`None` の欄には
