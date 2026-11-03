@@ -1,6 +1,6 @@
 // 自動保存（要件 F-08、docs/design/01-architecture.md 4.1「自動保存」、画面設計書 3章「保存状態」）。
-// 見た目は持たない（整理モードの一覧 src/lib/board.svelte.ts と、振り返りのエディタ
-// src/board/ReflectionEditor.svelte がこれを呼ぶ）。
+// 見た目は持たない（整理モードの一覧 src/lib/board.svelte.ts と、振り返り・ノートのエディタ
+// src/lib/doc_editor.ts がこれを呼ぶ）。
 //
 // - 入力のたびに知らせると（`edited`・`edit`）、まだ保存していない最初の入力から SAVE_DELAY_MS 後に
 //   保存する。入力が続いても待ち直さない（入力中に強制終了しても、失うのは直前の短い間の入力だけに

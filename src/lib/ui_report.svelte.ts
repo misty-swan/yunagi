@@ -6,14 +6,17 @@
 //   保存した本文の行番号にして、その版（rev）を添える。日を移って片付けている途中（保存し終えるまで
 //   再試行している）の振り返りも含める。
 // - 中身が変わったときだけ送る。送るのに失敗したら、次に知らせ直すときに送り直す。
+// - `report_ui_state` は毎回全体を置き換えるので、整理モード（項目・振り返り）とノートの分を、画面全体で
+//   1つの `InputTracker` にまとめて送る（別々に送ると、互いの守る行を消し合う）。
 
-import type { DocSaver } from "./autosave.svelte";
-import type { EditorLines, UiReport } from "./bindings";
+import { untrack } from "svelte";
+import type { DocSaver, SaveStatus } from "./autosave.svelte";
+import type { EditingItem, EditorLines, UiReport } from "./bindings";
 import { EDITING_MS } from "./board.svelte";
 import { core } from "./core";
 import { baseLinesOf } from "./text_merge";
 
-/** エディタ（振り返り）の、守る行を求めるための状態。エディタの部品が書く。 */
+/** エディタ（振り返り・ノート）の、守る行を求めるための状態。エディタの部品が書く。 */
 export class EditorPresence {
   /** 表示している日の保存。 */
   saver: DocSaver | null = null;
@@ -91,3 +94,74 @@ export class UiReporter {
   }
 }
 
+
+/** 項目の入力中の欄を返すもの（整理モードの `BoardModel`）。 */
+export interface ItemsEditing {
+  editingItems(now: number, active: boolean): EditingItem[];
+  editingUntil(): number | null;
+}
+
+/**
+ * 画面全体の入力中の状態（項目・振り返り・ノート）をまとめ、変わるたびに知らせる。アプリに1つだけ作り、
+ * 整理モードとノートモードの部品が `items`・`presences` に自分の分を入れる。
+ */
+export class InputTracker {
+  /** アプリが前面にあるか。 */
+  active: boolean;
+  /** 項目の入力中の欄（整理モードの本文を出すまでは無い）。 */
+  items: ItemsEditing | null = null;
+  readonly reflection = new EditorPresence();
+  readonly note = new EditorPresence();
+  readonly #reporter: UiReporter;
+  #expiry: ReturnType<typeof setTimeout> | undefined;
+  #stopped = false;
+  #unwatch: () => void;
+
+  /** `save` の保存の状態が変わったら（保存し終えて、まだ保存していない欄が減ったら）知らせ直す。 */
+  constructor(
+    save: SaveStatus,
+    send?: (s: UiState) => Promise<unknown>,
+    active = typeof document === "undefined" || document.hasFocus(),
+  ) {
+    this.active = active;
+    this.#unwatch = $effect.root(() => {
+      $effect(() => {
+        void save.saving;
+        void save.failing;
+        untrack(this.activity);
+      });
+    });
+    this.#reporter = new UiReporter(() => {
+      const now = Date.now();
+      return {
+        editingItems: this.items?.editingItems(now, this.active) ?? [],
+        editors: [...this.reflection.editors(now, this.active), ...this.note.editors(now, this.active)],
+      };
+    }, send);
+  }
+
+  /** 入力・フォーカス・保存の状態などが変わった：知らせ直し、入力中でなくなる時刻にもう一度知らせ直す。 */
+  activity = () => {
+    if (this.#stopped) return;
+    this.#reporter.update();
+    clearTimeout(this.#expiry);
+    const now = Date.now();
+    const until = [this.items?.editingUntil() ?? null, this.reflection.editingUntil(), this.note.editingUntil()];
+    // すでに過ぎた時刻は待たない（入力中でなくなった後も、フォーカスがある間は過ぎた時刻が返るため）
+    const next = Math.min(...until.filter((u): u is number => u !== null && u > now));
+    if (Number.isFinite(next)) this.#expiry = setTimeout(this.activity, next - now + 1);
+  };
+
+  /** アプリが前面に来た・前面から外れた。 */
+  setActive(active: boolean) {
+    this.active = active;
+    this.activity();
+  }
+
+  /** 知らせ直すのをやめる（画面を閉じたとき）。 */
+  stop() {
+    this.#stopped = true;
+    this.#unwatch();
+    clearTimeout(this.#expiry);
+  }
+}

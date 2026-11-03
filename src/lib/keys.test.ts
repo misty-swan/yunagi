@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isMacPlatform, keyLabel, modEnterLabel, modShiftLabel, shellActionOf } from "./keys";
+import { isMacPlatform, keyLabel, modEnterLabel, modShiftLabel, noteActionOf, shellActionOf } from "./keys";
 
 function key(init: Partial<KeyboardEvent>) {
   return {
@@ -65,4 +65,15 @@ test("記号を Option・AltGr と打つ配列：macOS は動き、Windows・Lin
   expect(shellActionOf(key({ code: "KeyJ", key: "j", ctrlKey: true, altKey: true }), false)).toBeNull();
   // Shift で別の文字になる記号は当たらない（US 配列の Shift+[ は {）
   expect(shellActionOf(key({ code: "BracketLeft", key: "{", ctrlKey: true, shiftKey: true }), false)).toBeNull();
+});
+
+test("ノートの時刻付き見出しは Mod+Shift+H（キーの位置で判定し、変換中と Alt 付きは扱わない）", () => {
+  expect(noteActionOf(key({ code: "KeyH", key: "H", ctrlKey: true, shiftKey: true }), false)).toBe("timeHeading");
+  expect(noteActionOf(key({ code: "KeyH", key: "H", metaKey: true, shiftKey: true }), true)).toBe("timeHeading");
+  // ロシア語の配列でも同じ位置のキーで動く
+  expect(noteActionOf(key({ code: "KeyH", key: "Р", ctrlKey: true, shiftKey: true }), false)).toBe("timeHeading");
+  expect(noteActionOf(key({ code: "KeyH", key: "h", ctrlKey: true }), false)).toBeNull();
+  expect(noteActionOf(key({ code: "KeyH", key: "H", metaKey: true, shiftKey: true }), false)).toBeNull();
+  expect(noteActionOf(key({ code: "KeyH", key: "H", ctrlKey: true, shiftKey: true, altKey: true }), false)).toBeNull();
+  expect(noteActionOf(key({ code: "KeyH", key: "H", ctrlKey: true, shiftKey: true, isComposing: true }), false)).toBeNull();
 });

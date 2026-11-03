@@ -38,6 +38,8 @@ const labels = {
     toBlockers: "To Blockers",
     heading: "Time heading",
   },
+  /** ノートの右の、時刻付き見出しの一覧（画面設計書 4章）。 */
+  outline: "Outline",
   /** 整理モードの領域の見出し（画面設計書 3章「各領域の表示」）。 */
   region: { todo: "TODO", blockers: "BLOCKERS", reflection: "REFLECTION" },
   /** 領域の見出しの右の件数（`6 left`・`3 open`）。 */
@@ -189,6 +191,8 @@ export interface Messages {
   /** 振り返りのテンプレート（Mod+Shift+R）の行。 */
   reflectionTemplate: string[];
   reflectionLabel: string;
+  /** ノートのエディタの読み上げ用の名前。 */
+  noteLabel: string;
   /** 定期バックアップを作れなかったとき（`backup-failed`。画面設計書 3章「上部のバー」）。 */
   backupFailed: string;
   startup: StartupMessages;
@@ -428,6 +432,7 @@ const ja: Messages = {
   saveRejected: "変更を保存できなかったため、表示を読み込み直しました",
   reflectionTemplate: ["## 良かったこと", "- ", "", "## 詰まったこと", "- ", "", "## 明日の一手", "- "],
   reflectionLabel: "振り返り",
+  noteLabel: "ノート",
   backupFailed: "今日のバックアップを作れませんでした。自動で作り直します",
   startup: jaStartup,
 };
@@ -473,6 +478,7 @@ const en: Messages = {
   saveRejected: "Couldn't save the change, so the board was reloaded",
   reflectionTemplate: ["## Went well", "- ", "", "## Got stuck", "- ", "", "## Next step for tomorrow", "- "],
   reflectionLabel: "Reflection",
+  noteLabel: "Note",
   backupFailed: "Today's backup couldn't be made. It will be retried automatically",
   startup: enStartup,
 };

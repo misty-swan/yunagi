@@ -97,3 +97,18 @@ export function shellActionOf(e: KeyLike, mac: boolean): ShellAction | null {
   const fallback = e.altKey ? undefined : SYMBOL_POSITIONS[e.code];
   return fallback !== undefined && !e.shiftKey ? fallback : null;
 }
+
+/** ノートモードの部品が受け持つ操作（行送りは、その課題で足す）。 */
+export type NoteAction = "timeHeading";
+
+/**
+ * キーの押下が、ノートモードの操作に当たるか（Mod+Shift+H。文字のキーなので位置で判定する）。
+ * 当たらなければ `null`。
+ */
+export function noteActionOf(e: KeyLike, mac: boolean): NoteAction | null {
+  if (e.isComposing || e.keyCode === 229) return null;
+  const mod = mac ? e.metaKey : e.ctrlKey;
+  const other = mac ? e.ctrlKey : e.metaKey;
+  if (!mod || other || e.altKey || !e.shiftKey) return null;
+  return e.code === "KeyH" ? "timeHeading" : null;
+}

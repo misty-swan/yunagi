@@ -7,6 +7,7 @@ import { EVENTS, type Board as BoardData, type BoardItem, type Item } from "../l
 import { Notice } from "../lib/notice.svelte";
 import { prefs } from "../lib/prefs.svelte";
 import { startSession, type Session } from "../lib/session.svelte";
+import { InputTracker } from "../lib/ui_report.svelte";
 import Board from "./Board.svelte";
 
 const TODAY = "2026-11-03";
@@ -17,6 +18,7 @@ const D = "01JC00000000000000000000D0";
 
 let app: ReturnType<typeof mount> | undefined;
 let session: Session | undefined;
+let tracker: InputTracker | undefined;
 
 // jsdom には Range の位置が無い（CodeMirror が測るときに使う）
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
@@ -30,6 +32,7 @@ beforeEach(() => {
 afterEach(async () => {
   if (app) unmount(app);
   app = undefined;
+  tracker?.stop();
   await session?.stop();
   session = undefined;
   document.body.innerHTML = "";
@@ -131,9 +134,11 @@ async function start(opts: Opts = {}, props: { narrow?: boolean } = {}) {
   const calls = mockCore(opts);
   session = startSession();
   const notice = new Notice();
+  const save = new SaveStatus();
+  tracker = new InputTracker(save);
   app = mount(Board, {
     target: document.body,
-    props: { session, save: new SaveStatus(), notice, narrow: props.narrow ?? false, mac: false },
+    props: { session, save, notice, narrow: props.narrow ?? false, mac: false, tracker },
   });
   await until(() => $(".board")?.dataset.date === TODAY && $(".ref-ed .cm-content") !== null);
   return { calls, notice };

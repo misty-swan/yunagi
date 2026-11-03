@@ -1,4 +1,4 @@
-// 表示の設定：テーマと言語とレイアウト（要件 F-12、画面設計書 7章、デザインガイド 3章・7章）。
+// 表示の設定：テーマと言語とレイアウトとノートの書体（要件 F-12、画面設計書 7章、デザインガイド 3章・7章）。
 //
 // 設定画面（S-05）と、設定の保存（コアの setting）はまだ無い。それまでは、起動のたびに既定の値
 // （テーマは OS に合わせる、言語は OS の言語）で始める。設定画面はこの値を変え、保存した値で始める。
@@ -24,10 +24,17 @@ export function defaultLang(languages: readonly string[] = navigator.languages ?
   return "en";
 }
 
+/**
+ * ノートの書体（画面設計書 7章「表示」、デザインガイド 4章）：本文と同じ（既定）／等幅（同梱の
+ * UDEV Gothic HS）。コアの setting の `note_font`（`body` / `mono`）と同じ値。
+ */
+export type NoteFont = "body" | "mono";
+
 class Prefs {
   theme = $state<Theme>("system");
   lang = $state<Lang>(defaultLang());
   layout = $state<Layout>("A");
+  noteFont = $state<NoteFont>("body");
 }
 
 /** いまの表示の設定（画面全体で1つ）。 */
