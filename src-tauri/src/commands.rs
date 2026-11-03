@@ -365,13 +365,16 @@ pub async fn export_markdown(
     .await
 }
 
-/// データを変えても、画面に知らせない書き込みの結果（持ち越しの後回し・再表示の記録。day の行だけで、
-/// どの画面の表示も変わらない）。
-struct Unshown<T>(T);
+/// 持ち越しの後回し・再表示の記録の結果。`changed` は書いたか（ほかの窓が持ち越しの状態を読み直す
+/// ように、書いたら知らせる）。
+struct CarryoverMarked<T> {
+    value: T,
+    changed: bool,
+}
 
-impl<T> Changes for Unshown<T> {
+impl<T> Changes for CarryoverMarked<T> {
     fn changed(&self) -> bool {
-        false
+        self.changed
     }
 }
 
@@ -406,10 +409,14 @@ pub async fn carryover_candidates(core: Core<'_>) -> Result<Option<CarryoverList
 pub async fn postpone_carryover(core: Core<'_>) -> Result<(), CommandError> {
     blocking(&core, |core| {
         let today = core.today()?;
+        // 最初の時刻のまま変えないときも、書いたかをコアは返さないので、知らせる（読み直すだけで害は無い）
         core.screen_write(ScreenWrite::Operation, |conn| {
-            carryover::postpone(conn, today, &system_tz(), now()).map(Unshown)
+            carryover::postpone(conn, today, &system_tz(), now()).map(|()| CarryoverMarked {
+                value: (),
+                changed: true,
+            })
         })
-        .map(|_| ())
+        .map(|r| r.value)
     })
     .await
 }
@@ -421,9 +428,12 @@ pub async fn mark_carryover_reshown(core: Core<'_>) -> Result<bool, CommandError
     blocking(&core, |core| {
         let today = core.today()?;
         core.screen_write(ScreenWrite::Operation, |conn| {
-            carryover::mark_reshown(conn, today, now()).map(Unshown)
+            carryover::mark_reshown(conn, today, now()).map(|written| CarryoverMarked {
+                value: written,
+                changed: written,
+            })
         })
-        .map(|r| r.0)
+        .map(|r| r.value)
     })
     .await
 }

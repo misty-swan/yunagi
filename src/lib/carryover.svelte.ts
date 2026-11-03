@@ -22,9 +22,9 @@ import type {
   Item,
   LogicalDate,
 } from "./bindings";
-import { core, coreEvents, errorOf } from "./core";
+import { core, coreEvents, errorOf, keepListening } from "./core";
 
-/** 一覧を読めなかったとき・イベントを聞き始められなかったとき、やり直すまでの時間。 */
+/** 一覧を読めなかったとき、読み直すまでの時間。 */
 export const CARRY_RETRY_MS = 1000;
 
 /** 見直しの選択（分割する／やめる）。 */
@@ -124,25 +124,31 @@ export class Carryover {
   #loads = 0;
   #retry: ReturnType<typeof setTimeout> | undefined;
   #checking: Promise<void> | null = null;
+  /** 開いて、まだ保存していない入力を送っている途中（終えるまで一覧を読まない）。 */
+  #opening = false;
+  /** 開いてから一覧を一度でも読めたか（前回の日が変わったと知らせるか）。 */
+  #everLoaded = false;
   #stopped = false;
   #unlisten: UnlistenFn[] = [];
   #listening: Promise<unknown>;
 
   constructor(onOpen: () => Promise<void> | void) {
     this.#onOpen = onOpen;
+    const listen = async (register: () => Promise<UnlistenFn>) => {
+      const u = await keepListening(register, () => this.#stopped);
+      if (u !== null) this.#unlisten.push(u);
+    };
     this.#listening = Promise.all([
-      this.#keepListening(() => coreEvents.onChanged(() => void this.#refresh())),
-      this.#keepListening(() => coreEvents.onTodayChanged(() => void this.#refresh())),
+      listen(() => coreEvents.onChanged(() => void this.#refresh())),
+      listen(() => coreEvents.onTodayChanged(() => void this.#refresh())),
     ]);
   }
 
-  /** データベースを開いたとき。起動は前面に出したことに数え、後回しの再表示もここで出す。 */
-  started(): Promise<void> {
-    return this.#check(() => this.#doCheck());
-  }
-
-  /** アプリを前面に出したとき。 */
-  focused(): Promise<void> {
+  /**
+   * 出すかを確かめ、出すときは出す。データベースを開いたとき（起動は前面に出したことに数え、後回しの
+   * 再表示もここで出す）と、アプリを前面に出したときに呼ぶ。
+   */
+  check(): Promise<void> {
     return this.#check(() => this.#doCheck());
   }
 
@@ -200,8 +206,8 @@ export class Carryover {
         this.#close();
         this.pending = null;
       } else if (err.kind === "conflict" && err.reason === "previous_day_changed") {
+        // 読み直して前回の日が変わったら、#reload が「読み直しました」を出す
         await this.#reload();
-        if (this.open) this.message = "reloaded";
       } else if (err.kind === "invalid_argument") {
         this.message = "invalid";
       } else {
@@ -235,20 +241,6 @@ export class Carryover {
     for (const u of this.#unlisten.splice(0)) u();
     // 聞き始めている途中のものは、終わったところで（stopped を見て）やめる
     await this.#listening;
-  }
-
-  // 聞き始められなければ、聞き始められるまでやり直す（session.svelte.ts と同じ）
-  async #keepListening(register: () => Promise<UnlistenFn>) {
-    while (!this.#stopped) {
-      try {
-        const u = await register();
-        if (this.#stopped) u();
-        else this.#unlisten.push(u);
-        return;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, CARRY_RETRY_MS));
-      }
-    }
   }
 
   // 確かめて開く処理は1つずつ行う（起動と前面に出したのが重なったとき、パレットから開くのと
@@ -290,15 +282,20 @@ export class Carryover {
     this.returnFocus = document.activeElement;
     this.message = null;
     this.loaded = false;
+    this.#everLoaded = false;
     this.from = null;
     this.rows = [];
     this.open = true;
+    // 送り終えるまでは、changed が届いても一覧を読まない（送った保存の changed も届くため）
+    this.#opening = true;
     try {
       await this.#onOpen();
     } catch {
       // 送れなかった入力は、ふだんの自動保存が再試行する
+    } finally {
+      this.#opening = false;
     }
-    await this.#reload();
+    if (this.open) await this.#reload();
   }
 
   #close() {
@@ -311,11 +308,15 @@ export class Carryover {
     this.message = null;
   }
 
-  /** データが変わった・今日が変わったとき。 */
+  /**
+   * データが変わった・今日が変わったとき。出している間は一覧を読み直し、ほかの窓・CLI などで今日の
+   * 持ち越しを終えていたら閉じる。開いて入力を送っている途中なら、送り終えてから読むので何もしない。
+   */
   async #refresh() {
     if (this.#stopped) return;
-    if (this.open) await this.#reload();
-    else await this.#refreshPending();
+    if (!this.open) return this.#refreshPending();
+    if (this.#opening) return;
+    await this.#reload(true);
   }
 
   async #refreshPending() {
@@ -327,24 +328,40 @@ export class Carryover {
     }
   }
 
-  /** 一覧を読み直す（後から始めたものの答えだけを使う）。読めなければ間を空けて読み直す。 */
-  async #reload() {
+  /**
+   * 一覧を読み直す（後から始めたものの答えだけを使う）。`checkDone` なら、持ち越しの状態も読み、
+   * 持ち越しを終えていたら閉じる。読めなければ、確定できなくして（古い一覧のまま確定しないため）
+   * 知らせ、間を空けて読み直す。
+   */
+  async #reload(checkDone = false) {
     clearTimeout(this.#retry);
     const n = ++this.#loads;
     let list: CarryoverList | null;
+    let status: CarryoverStatus | null | undefined;
     try {
-      list = await core.carryoverCandidates();
+      [list, status] = await Promise.all([
+        core.carryoverCandidates(),
+        checkDone ? core.carryoverStatus() : Promise.resolve(undefined),
+      ]);
     } catch {
       if (n !== this.#loads || !this.open || this.#stopped) return;
+      this.loaded = false;
       this.message = "loadFailed";
       this.#retry = setTimeout(() => {
-        if (n === this.#loads && this.open && !this.#stopped) void this.#reload();
+        if (n === this.#loads && this.open && !this.#stopped) void this.#reload(checkDone);
       }, CARRY_RETRY_MS);
       return;
     }
     if (n !== this.#loads || !this.open) return;
+    // 持ち越す項目があるのに状態が無い（null）のは、今日の持ち越しを終えたとき
+    if (status === null && list !== null && list.items.length > 0) {
+      this.#close();
+      this.pending = null;
+      return;
+    }
     if (this.message === "loadFailed") this.message = null;
-    const wasLoaded = this.loaded;
+    const hadList = this.#everLoaded;
+    this.#everLoaded = true;
     this.loaded = true;
     if (list === null) {
       // 前回の日が無くなった（前の日の項目・ノートが消された）
@@ -352,8 +369,8 @@ export class Carryover {
       this.rows = [];
       return;
     }
-    const fresh = !wasLoaded || this.from !== list.from;
-    if (fresh && wasLoaded) this.message = "reloaded";
+    const fresh = this.from !== list.from;
+    if (fresh && hadList) this.message = "reloaded";
     this.from = list.from;
     this.reviewThreshold = list.reviewThreshold;
     this.rows = mergeRows(this.rows, list, fresh);

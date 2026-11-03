@@ -149,7 +149,7 @@ function confirmed(calls: { cmd: string; args: Record<string, unknown> }[]) {
 
 test("初回表示で開き、見出し・TODO と障害・回数・見直しの選択肢を出す。開いたときは全部にチェック", async () => {
   const { carry, onOpen } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => $("[data-carryover]") !== null && $$("li[data-carry-row]").length === 3);
   expect(onOpen).toHaveBeenCalledTimes(1);
   expect(text($(".ph .label"))).toBe("CARRY OVER");
@@ -171,7 +171,7 @@ test("初回表示で開き、見出し・TODO と障害・回数・見直しの
 
 test("j/k・↑/↓ で移り、Space でチェックを外し、Enter で選んだものを持ち越して閉じる", async () => {
   const { carry, calls } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => document.activeElement === check(A));
   press(check(A), "j");
   await until(() => document.activeElement === check(B));
@@ -194,7 +194,7 @@ test("j/k・↑/↓ で移り、Space でチェックを外し、Enter で選ん
 
 test("見直しの「分割する」で子を入力でき、どのボタンでも反映する。「やめる」はもう一度押すと外す", async () => {
   const { carry, calls } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   const split = $(`li[data-carry-row="${A}"] [data-carry-review="split"]`)!;
   split.click();
@@ -242,7 +242,7 @@ test("見直しの「分割する」で子を入力でき、どのボタンで�
 
 test("「すべて持ち越す」", async () => {
   const { carry, calls } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   check(B).click();
   $("[data-act='all']")!.click();
@@ -252,7 +252,7 @@ test("「すべて持ち越す」", async () => {
 
 test("Esc で後回しにして閉じる。次に前面に出したとき1回だけ再表示し、以後はパレットから開く", async () => {
   const { carry, calls, fake } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => document.activeElement === check(A));
   press(check(A), "Escape");
   await until(() => $("[data-carryover]") === null);
@@ -260,18 +260,18 @@ test("Esc で後回しにして閉じる。次に前面に出したとき1回だ
   expect(confirmed(calls)).toEqual([]);
 
   fake.status = { from: FROM, prompt: "reshow_on_focus" };
-  await carry.focused();
+  await carry.check();
   await until(() => $("[data-carryover]") !== null);
   expect(calls.filter((c) => c.cmd === "mark_carryover_reshown")).toHaveLength(1);
   $("[data-act='later']")!.click();
   await until(() => $("[data-carryover]") === null);
 
   // 再表示を記録できなかった（記録済み）ときは出さない
-  await carry.focused();
+  await carry.check();
   flushSync();
   expect($("[data-carryover]")).toBeNull();
   fake.status = { from: FROM, prompt: "on_request" };
-  await carry.focused();
+  await carry.check();
   flushSync();
   expect($("[data-carryover]")).toBeNull();
   expect(carry.pending).toEqual({ from: FROM, prompt: "on_request" });
@@ -281,7 +281,7 @@ test("Esc で後回しにして閉じる。次に前面に出したとき1回だ
 
 test("持ち越しが残っていなければ出さず、パレットからも開かない", async () => {
   const { carry } = await start(defaultFake({ status: null }));
-  await carry.started();
+  await carry.check();
   await carry.openOnRequest();
   flushSync();
   expect($("[data-carryover]")).toBeNull();
@@ -290,7 +290,7 @@ test("持ち越しが残っていなければ出さず、パレットからも�
 
 test("出している間にデータが変わったら読み直す：外れた項目は選択ごと捨て、加わった項目はチェック無しで加える", async () => {
   const { carry, fake, calls } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   $(`li[data-carry-row="${A}"] [data-carry-review="split"]`)!.click();
   check(B).click();
@@ -318,7 +318,7 @@ test("出している間にデータが変わったら読み直す：外れた�
 test("前回の日が変わっていたら確定せずに読み直し、知らせる。確定に失敗したら閉じずに知らせる", async () => {
   const fake = defaultFake({ confirmError: { kind: "conflict", reason: "previous_day_changed", previousDay: "2026-11-02" } });
   const { carry } = await start(fake);
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   fake.list = { from: "2026-11-02", reviewThreshold: 3, items: [{ item: item(D, "新しい日", { date: "2026-11-02" }), review: false }] };
   check(A).click();
@@ -339,7 +339,7 @@ test("前回の日が変わっていたら確定せずに読み直し、知ら�
 
 test("ほかで持ち越しを終えていたら閉じる", async () => {
   const { carry } = await start(defaultFake({ confirmError: { kind: "conflict", reason: "carryover_done" } }));
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   $("[data-act='all']")!.click();
   await until(() => $("[data-carryover]") === null);
@@ -350,7 +350,7 @@ test("出している間は、ほかの画面のキー（window で受けるも�
   const seen = vi.fn();
   window.addEventListener("keydown", seen);
   try {
-    await carry.started();
+    await carry.check();
     await until(() => document.activeElement === check(A));
     press(check(A), "k", { ctrlKey: true });
     press(check(A), "z", { ctrlKey: true });
@@ -369,7 +369,7 @@ test("出している間は、ほかの画面のキー（window で受けるも�
 test("英語の文言", async () => {
   prefs.lang = "en";
   const { carry } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   expect(text($("#carry-title"))).toBe("Left on 10.28 Wed");
   expect($$(".actions .btn").map((b) => b.firstChild?.textContent)).toEqual([
@@ -384,7 +384,7 @@ test("一覧を読めなければ知らせて読み直し、読み終えるま�
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     const { carry, calls } = await start(defaultFake({ listFailures: 1 }));
-    void carry.started();
+    void carry.check();
     await until(() => text($(".message")) === "一覧を読めませんでした。読み直しています。");
     expect(text($("#carry-title"))).toBe("読み込んでいます");
     expect(($("[data-act='selected']") as HTMLButtonElement).disabled).toBe(true);
@@ -403,7 +403,7 @@ test("一覧を読めなければ知らせて読み直し、読み終えるま�
 
 test("前回の日が無くなったら空にし、確定のボタンで閉じる", async () => {
   const { carry, fake, calls } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   fake.list = null;
   fake.status = null;
@@ -422,7 +422,7 @@ test("閉じると、開く直前にフォーカスのあった所へ戻す", as
   const before = document.createElement("button");
   document.body.append(before);
   before.focus();
-  await carry.started();
+  await carry.check();
   await until(() => document.activeElement === check(A));
   press(check(A), "Escape");
   await until(() => $("[data-carryover]") === null && document.activeElement === before);
@@ -430,7 +430,7 @@ test("閉じると、開く直前にフォーカスのあった所へ戻す", as
 
 test("選んでいた行が読み直しで消えたら、同じ位置の行へ選択とフォーカスを移す", async () => {
   const { carry, fake } = await start();
-  await carry.started();
+  await carry.check();
   await until(() => document.activeElement === check(A));
   press(check(A), "j");
   await until(() => document.activeElement === check(B));
@@ -445,7 +445,7 @@ test("背後にフォーカスがあっても、Esc で後回し、Enter で選�
   const { carry, calls } = await start();
   const outside = document.createElement("button");
   document.body.append(outside);
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   outside.focus();
   press(outside, "Escape");
@@ -462,7 +462,7 @@ test("背後にフォーカスがあっても、Esc で後回し、Enter で選�
 
 test("前面に出したのとパレットから開くのが重なっても、1回だけ開き、再表示の記録も1回", async () => {
   const { carry, calls } = await start(defaultFake({ status: { from: FROM, prompt: "reshow_on_focus" } }));
-  await Promise.all([carry.focused(), carry.openOnRequest(), carry.focused()]);
+  await Promise.all([carry.check(), carry.openOnRequest(), carry.check()]);
   await until(() => $$("li[data-carry-row]").length === 3);
   expect(calls.filter((c) => c.cmd === "mark_carryover_reshown")).toHaveLength(1);
   expect(calls.filter((c) => c.cmd === "carryover_candidates")).toHaveLength(1);
@@ -470,9 +470,50 @@ test("前面に出したのとパレットから開くのが重なっても、1�
 
 test("見直しの選択をコアが受け付けなかったら、閉じずに知らせる", async () => {
   const { carry } = await start(defaultFake({ confirmError: { kind: "invalid_argument", reason: "multiline_text" } }));
-  await carry.started();
+  await carry.check();
   await until(() => $$("li[data-carry-row]").length === 3);
   $("[data-act='all']")!.click();
   await until(() => text($(".message")) === "見直しの選択を受け付けられませんでした。選び直せます。");
+  expect($("[data-carryover]")).not.toBeNull();
+});
+
+test("開いて入力を送り終えるまでは、changed が届いても一覧を読まない", async () => {
+  const calls = mockCore(defaultFake());
+  let flushed!: () => void;
+  carry = new Carryover(() => new Promise<void>((resolve) => (flushed = resolve)));
+  app = mount(CarryoverPanel, { target: document.body, props: { carry } });
+  await new Promise((r) => setTimeout(r, 0));
+  const opened = carry.check();
+  await until(() => $("[data-carryover]") !== null && flushed !== undefined);
+  // 送った保存の changed
+  await emit(EVENTS.changed, { by: "screen" });
+  await new Promise((r) => setTimeout(r, 0));
+  flushSync();
+  expect(calls.filter((c) => c.cmd === "carryover_candidates")).toHaveLength(0);
+  expect(($("[data-act='selected']") as HTMLButtonElement).disabled).toBe(true);
+  flushed();
+  await opened;
+  await until(() => $$("li[data-carry-row]").length === 3);
+  expect(calls.filter((c) => c.cmd === "carryover_candidates")).toHaveLength(1);
+});
+
+test("出している間に、ほかで今日の持ち越しを終えたら閉じる", async () => {
+  const { carry, fake } = await start();
+  await carry.check();
+  await until(() => $$("li[data-carry-row]").length === 3);
+  fake.status = null;
+  await emit(EVENTS.changed, { by: "agent" });
+  await until(() => $("[data-carryover]") === null);
+  expect(carry.pending).toBeNull();
+});
+
+test("修飾キー付きの Enter では確定しない", async () => {
+  const { carry, calls } = await start();
+  await carry.check();
+  await until(() => document.activeElement === check(A));
+  press(check(A), "Enter", { ctrlKey: true });
+  press(check(A), "Enter", { shiftKey: true });
+  press(check(A), "Enter", { altKey: true });
+  expect(confirmed(calls)).toEqual([]);
   expect($("[data-carryover]")).not.toBeNull();
 });

@@ -62,6 +62,8 @@
   // （前の日の項目の本文・完了を送る前の内容で持ち越さないため）
   const carry = new Carryover(async () => {
     const flushed = save.flushAll();
+    // ノートモードから移るときは、閉じた後に、隠れたノートではなく整理モードで前にフォーカスのあった所へ戻す
+    if (shell.mode !== "board") carry.returnFocus = boardFocus;
     shell.setMode("board");
     const today = session.today;
     if (today !== null && session.showing !== today) session.show(today);
@@ -73,7 +75,7 @@
   $effect(() => {
     if (!ready || carryStarted) return;
     carryStarted = true;
-    untrack(() => void carry.started());
+    untrack(() => void carry.check());
   });
 
   // アプリが前面から外れたら、まだ保存していない入力をすぐ送り、入力中を終える
@@ -85,7 +87,7 @@
   // 前面に出したら、入力中に戻し、持ち越しを出すかを確かめる（日付が変わった後・後回しの1回だけの再表示）
   function onWindowFocus() {
     tracker.setActive(true);
-    if (ready) void carry.focused();
+    if (ready) void carry.check();
   }
 
   // ---- モードを移るときのフォーカス ----

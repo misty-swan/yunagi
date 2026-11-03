@@ -139,6 +139,33 @@ export const core = {
     call<null>("report_ui_state", { state: { ...state, session: PAGE_SESSION, seq: ++reportSeq } }),
 };
 
+/** イベントを聞き始められなかったとき、やり直すまでの時間。 */
+export const LISTEN_RETRY_MS = 1000;
+
+/**
+ * イベントを聞き始める。聞き始められなければ、`stopped()` になるまでやり直す（失敗するたびに
+ * `onError`）。聞き始めたら、聞くのをやめる関数で解決する。聞き始めた時点で `stopped()` なら、すぐに
+ * やめて `null` で解決する。
+ */
+export async function keepListening(
+  register: () => Promise<UnlistenFn>,
+  stopped: () => boolean,
+  onError?: (e: unknown) => void,
+): Promise<UnlistenFn | null> {
+  while (!stopped()) {
+    try {
+      const u = await register();
+      if (!stopped()) return u;
+      u();
+      return null;
+    } catch (e) {
+      onError?.(e);
+      await new Promise((resolve) => setTimeout(resolve, LISTEN_RETRY_MS));
+    }
+  }
+  return null;
+}
+
 /** コアのイベントを聞く。戻り値の関数で聞くのをやめる。 */
 export const coreEvents = {
   onStartup: (cb: (p: Startup) => void): Promise<UnlistenFn> =>

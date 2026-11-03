@@ -138,8 +138,9 @@
       void carry.postpone();
       return;
     }
-    // ボタンの上の Enter はそのボタンを押す
-    if (e.key === "Enter" && target.tagName !== "BUTTON") {
+    // ボタンの上の Enter はそのボタンを押す。修飾キー付きの Enter（Mod+Enter など）では確定しない
+    // （まだ取り消せないため。画面設計書 11章）
+    if (e.key === "Enter" && plain && !e.shiftKey && target.tagName !== "BUTTON") {
       e.preventDefault();
       if (!e.repeat) void carry.confirm("selected");
       return;
@@ -166,7 +167,8 @@
     e.stopPropagation();
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Escape") void carry.postpone();
-    else if (e.key === "Enter" && !e.repeat) void carry.confirm("selected");
+    else if (e.key === "Enter" && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey)
+      void carry.confirm("selected");
     else focusRow(selIndex);
   }
 

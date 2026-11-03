@@ -644,16 +644,21 @@ fn carryover_commands(_: &Path) {
     );
 
     // 後回し（Esc）の後は、次に前面に出したとき1回だけ再表示し、以後はパレットから開く。
-    // どちらも day の行だけなので、画面には知らせない
+    // 後回しと、再表示を記録したときは知らせる（ほかの窓が持ち越しの状態を読み直す）
     h.ok("postpone_carryover", json!({}));
+    assert_eq!(h.next_event(), changed_by("screen"));
     assert_eq!(
         h.ok("carryover_status", json!({}))["prompt"],
         "reshow_on_focus"
     );
     assert_eq!(h.ok("mark_carryover_reshown", json!({})), json!(true));
+    assert_eq!(h.next_event(), changed_by("screen"));
+    // 記録済みなら書かず、知らせない
     assert_eq!(h.ok("mark_carryover_reshown", json!({})), json!(false));
+    h.assert_no_event();
     assert_eq!(h.ok("carryover_status", json!({}))["prompt"], "on_request");
     h.ok("postpone_carryover", json!({}));
+    assert_eq!(h.next_event(), changed_by("screen"));
     assert_eq!(h.ok("carryover_status", json!({}))["prompt"], "on_request");
     h.assert_no_event();
 
