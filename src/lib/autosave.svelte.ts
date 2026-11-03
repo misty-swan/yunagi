@@ -25,11 +25,11 @@ import type {
   StatusChange,
   TextDoc,
 } from "./bindings";
-import { core, CoreError, type CallError } from "./core";
+import { core, CoreError, errorOf, type CallError } from "./core";
 import { mergeText, unsavedLines } from "./text_merge";
 
 /** まだ保存していない最初の入力から、保存を送るまでの時間（docs/design/01-architecture.md 4.1）。 */
-export const SAVE_DELAY_MS = 300;
+export const SAVE_DELAY_MS = 250;
 
 /** 保存に失敗してから再試行するまでの時間（続けて失敗するたびに次の値。最後の値を繰り返す）。 */
 export const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 10000] as const;
@@ -41,10 +41,6 @@ export const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 10000] as const;
  */
 export function isRetryable(e: CallError): boolean {
   return e.kind === "storage" || e.kind === "not_ready" || e.kind === "internal";
-}
-
-function toCallError(e: unknown): CallError {
-  return e instanceof CoreError ? e.error : { kind: "bad_request", message: String(e) };
 }
 
 /** 保存の状態（画面設計書 3章「上部のバー」の保存状態）。 */
@@ -111,6 +107,8 @@ abstract class Saver<P> {
   #failures = 0;
   #failure: CallError | null = null;
   #closed = false;
+  /** 閉じるのを、保存し終えるまで待っている（`close`）。 */
+  #closing = false;
 
   constructor(status: SaveStatus) {
     this.#status = status;
@@ -125,6 +123,10 @@ abstract class Saver<P> {
   protected abstract putBack(p: P): void;
   /** 再試行しない失敗。内容は捨てる。 */
   protected abstract reject(p: P, e: CallError): void;
+  /** 内容を持ったまま再試行する失敗か。 */
+  protected retryable(e: CallError): boolean {
+    return isRetryable(e);
+  }
   /** 送り終えた後（成功・失敗とも）。 */
   protected settled(): void {}
 
@@ -190,13 +192,16 @@ abstract class Saver<P> {
         this.#failure = null;
         if (sent === "again") this.markPending(true);
       } catch (e) {
-        const error = toCallError(e);
-        if (isRetryable(error)) {
+        const error = errorOf(e);
+        if (this.retryable(error)) {
           this.putBack(p);
           this.#failures++;
           this.#failure = error;
           this.#pendingSince ??= since;
         } else {
+          // 再試行しない失敗の後は、再試行の待ちと「保存できていません」を続けない（内容は捨てた）
+          this.#failures = 0;
+          this.#failure = null;
           this.reject(p, error);
         }
       }
@@ -206,6 +211,7 @@ abstract class Saver<P> {
     this.#inFlight = null;
     this.settled();
     this.#schedule();
+    if (this.#closing && !this.busy) this.#finish();
     this.#status.update();
   }
 
@@ -227,8 +233,21 @@ abstract class Saver<P> {
     }
   }
 
-  /** 使うのをやめる（日付を移ったときなど）。まだ保存していないものは先に `flush` する。 */
-  close() {
+  /**
+   * 使うのをやめる（日付を移ったときなど）。まだ保存していないものは先に送る。保存に失敗して
+   * いれば、保存し終えるまで再試行を続けてから片付ける（入力を捨てないため）。保存し終えて片付けたら
+   * `true`、再試行を続けているなら `false` で解決する。
+   */
+  async close(): Promise<boolean> {
+    this.#closing = true;
+    await this.flush();
+    if (this.busy) return false;
+    this.#finish();
+    return true;
+  }
+
+  #finish() {
+    if (this.#closed) return;
     this.#closed = true;
     this.#clearTimer();
     this.#status.remove(this);
@@ -307,8 +326,17 @@ export class DocSaver extends Saver<Snapshot> {
    * docs/design/01-architecture.md 4.1）。
    */
   unsavedLines(): number[] {
-    return unsavedLines(this.#saved.body, this.#editor.text());
+    // カーソルを動かすたびに知らせ直すので、同じ本文どうしなら前の結果を使う（差分は重いため）
+    const base = this.#saved.body;
+    const editor = this.#editor.text();
+    const c = this.#unsavedCache;
+    if (c === null || c.base !== base || c.editor !== editor) {
+      this.#unsavedCache = { base, editor, lines: unsavedLines(base, editor) };
+    }
+    return [...this.#unsavedCache!.lines];
   }
+
+  #unsavedCache: { base: string; editor: string; lines: number[] } | null = null;
 
   protected take(): Snapshot | null {
     const body = this.#editor.text();
@@ -321,8 +349,8 @@ export class DocSaver extends Saver<Snapshot> {
       if (r.rev >= this.#saved.rev) this.#saved = { body: p.body, rev: r.rev };
       return "done";
     }
-    // 行き違い：取り込んでから、すぐ保存し直す
-    this.#deferred = null;
+    // 行き違い：取り込んでから、すぐ保存し直す。送っている間に届いた、これより新しい最新は、
+    // 送り終えてから取り込む（settled）
     this.#merge({ body: r.body, rev: r.rev });
     return this.#editor.text() === this.#saved.body ? "done" : "again";
   }
@@ -337,9 +365,17 @@ export class DocSaver extends Saver<Snapshot> {
     // 本文はエディタにあるので、戻すものは無い
   }
 
+  /**
+   * 本文の保存の失敗は、どれも内容を持ったまま再試行する（送り直して成功しない失敗は、本文の保存には
+   * 無いはずで、あれば画面の不具合。捨てると、エディタに残った本文が保存されないまま「保存済み」に
+   * 見えるため、「保存できていません」を出し続ける）。
+   */
+  protected retryable(): boolean {
+    return true;
+  }
+
   protected reject() {
-    // 本文の保存には、送り直して成功しない失敗は無い（形の誤りは画面の不具合）。本文はエディタに
-    // 残るので、次の入力でまた送る
+    // retryable がいつも true なので呼ばれない
   }
 }
 
@@ -414,8 +450,8 @@ class ItemSaver extends Saver<ItemPatch> {
 
   protected take(): ItemPatch | null {
     if (isEmptyPatch(this.#pending)) return null;
-    // 作る前は、本文が入るまで送らない（本文の無い項目は作らない）
-    if (this.id === null && this.#pending.text === undefined) return null;
+    // 作る前は、本文が入るまで送らない（本文の無い項目は作らない。空白だけも空とみなす）
+    if (this.id === null && (this.#pending.text ?? "").trim() === "") return null;
     const p = this.#pending;
     this.#pending = {};
     this.#sendingPatch = p;
@@ -439,6 +475,16 @@ class ItemSaver extends Saver<ItemPatch> {
     return "done";
   }
 
+  /**
+   * 作る（`addItem`）ときは、保存先の問題（`storage`。トランザクションは取り消してある）と、まだ
+   * 開いていない（`not_ready`）ときだけ再試行する。`internal` は書き込みが済んだかが分からず、
+   * 作り直すと項目が2つになりうるので、再試行せずに知らせる（画面はボードを読み込み直す）。
+   */
+  protected retryable(e: CallError): boolean {
+    if (this.id === null) return e.kind === "storage" || e.kind === "not_ready";
+    return isRetryable(e);
+  }
+
   protected putBack(p: ItemPatch) {
     this.#pending = mergePatch(p, this.#pending);
   }
@@ -451,7 +497,7 @@ class ItemSaver extends Saver<ItemPatch> {
     this.#sendingPatch = null;
   }
 
-  /** 送るまで待っているものを、待たずに保存する。 */
+  /** 送るのを待っている欄があるか。 */
   hasPending() {
     return !isEmptyPatch(this.#pending);
   }
@@ -520,10 +566,13 @@ export class ItemSaves {
 
   /**
    * その項目の保存を待ってから `op` を行う（削除・並べ替え・分割など、保存と順が入れ替わると困る
-   * 操作）。作れていない項目なら `CoreError`（`not_found`）。
+   * 操作）。保存に失敗して再試行している間は、`op` を行わずにその失敗の `CoreError` を投げる
+   * （まだ保存していない入力の前の本文で分割・削除しないため）。作れていない項目なら `not_found`。
    */
   async run<T>(key: string, op: (id: Id) => Promise<T>): Promise<T> {
     await this.flush(key);
+    const s = this.#savers.get(key);
+    if (s?.failure) throw new CoreError(s.failure);
     const id = this.idOf(key);
     if (id === null) throw new CoreError({ kind: "not_found" });
     return op(id);
@@ -539,11 +588,14 @@ export class ItemSaves {
     );
   }
 
-  /** 保存を待っているものが無い項目の待ち行列を片付ける（表示している日を移ったときなど）。 */
+  /**
+   * 保存を待っているものが無い項目の待ち行列を片付ける（表示している日を移ったときなど）。仮の名前で
+   * 作った項目は、画面がその名前を使い続けうるので残す（片付けると、仮の名前を ID とみなしてしまう）。
+   */
   prune() {
     for (const [key, s] of this.#savers) {
-      if (!s.busy && !s.hasPending() && s.id !== null) {
-        s.close();
+      if (!s.busy && !s.hasPending() && s.id === key) {
+        void s.close();
         this.#savers.delete(key);
       }
     }

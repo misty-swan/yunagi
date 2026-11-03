@@ -32,7 +32,7 @@ use yunagi_core::storage::{Database, DbLock, data_dir};
 const CHILD_ENV: &str = "YUNAGI_CRASH_TEST_CHILD";
 
 /// 画面の自動保存の待ち（`src/lib/autosave.svelte.ts` の `SAVE_DELAY_MS`）。
-const SAVE_DELAY: Duration = Duration::from_millis(300);
+const SAVE_DELAY: Duration = Duration::from_millis(250);
 /// 失ってよい入力の長さ（テスト計画書 4.1）。
 const MAX_LOSS: Duration = Duration::from_millis(500);
 /// 1文字を打つ間隔。

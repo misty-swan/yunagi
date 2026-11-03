@@ -305,3 +305,105 @@ test("送り直しても成功しない失敗は再試行せず、知らせる",
   expect(status.failing).toBe(false);
   expect(status.saving).toBe(false);
 });
+
+test("再試行の後の、再試行しない失敗では「保存できていません」を終え、次の入力はふつうに送る", async () => {
+  let n = 0;
+  const calls = mockCore(() => {
+    n++;
+    if (n === 1) throw { kind: "storage", detail: "x" };
+    if (n === 2) throw { kind: "not_found" };
+    return { updated: true, item: item("b") };
+  });
+  const status = new SaveStatus();
+  const items = new ItemSaves(status);
+  items.editText(ID, "a");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(status.failing).toBe(true);
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]);
+  expect(calls).toHaveLength(2);
+  expect(status.failing).toBe(false);
+  items.editText(ID, "b");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(calls).toHaveLength(3);
+});
+
+test("行き違いの応答を待つ間に届いた、より新しい最新も取り込む", async () => {
+  let release: (() => void) | undefined;
+  const calls = mockCore(async (_cmd, args): Promise<TextSave> => {
+    if (args.baseRev === 1) {
+      await new Promise<void>((r) => (release = r));
+      return { result: "stale", body: "a\nx", rev: 2 };
+    }
+    return { result: "saved", rev: 4, updated: true };
+  });
+  const ed = editor("a");
+  const saver = new DocSaver(new SaveStatus(), "note", DATE, { body: "a", rev: 1 }, ed);
+  ed.value = "mine\na";
+  saver.edited();
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  saver.absorb({ body: "a\nx\ny", rev: 3 });
+  release!();
+  await saver.flush();
+  expect(ed.value).toBe("mine\na\nx\ny");
+  expect(calls.at(-1)!.args).toMatchObject({ body: "mine\na\nx\ny", baseRev: 3 });
+  expect(saver.saved).toEqual({ body: "mine\na\nx\ny", rev: 4 });
+});
+
+test("閉じるときは先に保存し、失敗していれば保存し終えるまで再試行を続ける", async () => {
+  let fail = true;
+  const calls = mockCore((): TextSave => {
+    if (fail) throw { kind: "storage", detail: "x" };
+    return { result: "saved", rev: 2, updated: true };
+  });
+  const status = new SaveStatus();
+  const ed = editor("a");
+  const saver = new DocSaver(status, "note", DATE, { body: "a", rev: 1 }, ed);
+  ed.value = "ab";
+  saver.edited();
+  expect(await saver.close()).toBe(false);
+  expect(status.failing).toBe(true);
+  fail = false;
+  await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[1]);
+  expect(calls.at(-1)!.args.body).toBe("ab");
+  expect(status.failing).toBe(false);
+  expect(status.saving).toBe(false);
+});
+
+test("保存に失敗している間は、削除などの操作を行わない", async () => {
+  mockCore(() => {
+    throw { kind: "storage", detail: "x" };
+  });
+  const items = new ItemSaves(new SaveStatus());
+  items.editText(ID, "a");
+  const op = vi.fn(async () => "deleted");
+  const e = await items.run(ID, op).catch((e) => e);
+  expect(e.error.kind).toBe("storage");
+  expect(op).not.toHaveBeenCalled();
+});
+
+test("作る前は、本文が空白だけなら送らず、作るときの internal は再試行しない", async () => {
+  const calls = mockCore(() => {
+    throw { kind: "internal", detail: "x" };
+  });
+  const status = new SaveStatus();
+  const rejected: string[] = [];
+  const items = new ItemSaves(status, { rejected: (_k, e) => rejected.push(e.kind) });
+  items.create("tmp", { date: DATE, kind: "todo", position: { at: "last" } }, "a");
+  items.editText("tmp", "  ");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(calls).toHaveLength(0);
+  items.editText("tmp", "b");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + RETRY_DELAYS_MS[0] * 2);
+  expect(calls).toHaveLength(1);
+  expect(rejected).toEqual(["internal"]);
+  expect(status.failing).toBe(false);
+});
+
+test("片付けても、仮の名前で作った項目は残す", async () => {
+  mockCore((cmd) => (cmd === "add_item" ? item("a") : { updated: true, item: item("a") }));
+  const items = new ItemSaves(new SaveStatus());
+  items.create("tmp", { date: DATE, kind: "todo", position: { at: "last" } }, "a");
+  await items.flush("tmp");
+  items.prune();
+  expect(items.idOf("tmp")).toBe(ID);
+});

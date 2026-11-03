@@ -44,6 +44,11 @@ export class CoreError extends Error {
   }
 }
 
+/** `core` のコマンドが投げたものの中身（`CoreError` でなければ `bad_request` として扱う）。 */
+export function errorOf(e: unknown): CallError {
+  return e instanceof CoreError ? e.error : { kind: "bad_request", message: String(e) };
+}
+
 function toCallError(e: unknown): CallError {
   if (typeof e === "object" && e !== null && "kind" in e) return e as CommandError;
   return { kind: "bad_request", message: String(e) };

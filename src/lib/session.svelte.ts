@@ -7,7 +7,7 @@
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { Board, LogicalDate, Startup } from "./bindings";
-import { core, coreEvents, CoreError, type CallError } from "./core";
+import { core, coreEvents, errorOf, type CallError } from "./core";
 
 export interface Session {
   /** 開く処理の状態。問い合わせる前は `null`。 */
@@ -40,7 +40,7 @@ export function startSession(): Session {
   const unlisten: UnlistenFn[] = [];
 
   const fail = (e: unknown) => {
-    error = e instanceof CoreError ? e.error : { kind: "bad_request", message: String(e) };
+    error = errorOf(e);
   };
 
   async function load(date?: LogicalDate) {
