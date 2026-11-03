@@ -1,12 +1,15 @@
-//! 日付の行（day）を作る（docs/design/02-data-model.md 3章 day）。
+//! 日付の行（day）を作る（docs/design/02-data-model.md 3章 day）。項目かノートのある日を求める
+//! （[`days_with_items_or_note`]。前回の日とサイドバーの Recent の日）。
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
 use crate::domain::logical_date::{LogicalDate, time_zone_record};
-use crate::storage::StorageError;
 use crate::storage::table::day;
+use crate::storage::table::item as item_table;
+use crate::storage::table::text_doc::{self, TextDoc};
+use crate::storage::{StorageError, in_read_transaction};
 
 /// 論理日付 `date` の day の行が無ければ、端末のタイムゾーン `tz` を記録して作る。作ったら `true`。
 /// すでにあれば何も変えずに `false`（`tz` と作成時刻は最初に作ったときのまま）。
@@ -25,6 +28,40 @@ pub fn ensure(
     now: Timestamp,
 ) -> Result<bool, StorageError> {
     day::ensure(conn, date, &time_zone_record(tz, now), now)
+}
+
+/// `before` より前で、削除されていない項目か、空白以外の文字を含むノートがある日を、新しい順に
+/// `limit` 日まで返す（データモデル設計書 3章 item の「前回の日」の決まり。振り返りだけの日は
+/// 含めない）。持ち越しの前回の日（`crate::domain::carryover::previous_day`）とサイドバーの Recent
+/// （`crate::domain::board::recent_days`）が、同じ決まりで日を選ぶように、ここで求める。
+///
+/// 項目とノートは同じ時点の内容を読む。
+pub fn days_with_items_or_note(
+    conn: &Connection,
+    before: LogicalDate,
+    limit: usize,
+) -> Result<Vec<LogicalDate>, StorageError> {
+    in_read_transaction(conn, || {
+        // 項目のある日とノートのある日を、それぞれ新しい順に `limit` 日まで読み、合わせて新しい順に切る
+        let mut days = item_table::dates_before(conn, before, limit)?;
+        // 項目のある日が `limit` 日あれば、その最も古い日より前のノートは入らないので読まない
+        let after = if days.len() == limit {
+            days.last().copied()
+        } else {
+            None
+        };
+        days.extend(text_doc::nonblank_dates(
+            conn,
+            TextDoc::Note,
+            before,
+            after,
+            limit,
+        )?);
+        days.sort_unstable_by(|a, b| b.cmp(a));
+        days.dedup();
+        days.truncate(limit);
+        Ok(days)
+    })
 }
 
 #[cfg(test)]

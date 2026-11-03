@@ -881,18 +881,6 @@ pub fn split(
     })
 }
 
-// ---- 持ち越し ----
-
-/// 項目 `id` の持ち越し先（データモデル設計書 3章 `carried_to_id`）：`carried_from_id` で `id` を
-/// 指す項目をたどり、最初に行き着いた削除されていない項目。削除されている項目は、さらにそれを
-/// 指す項目へたどる。行き着かなければ `None`（持ち越し済みでない）。
-///
-/// たどり方は、検索（`crate::storage::search`）の結果にも付けるので、表の層
-/// （[`item_table::carried_to`]）に置いている。
-pub fn carried_to(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    item_table::carried_to(conn, id)
-}
-
 // ---- 共通の部品 ----
 
 /// 削除されていない項目を読む。無ければ [`ItemError::NotFound`]。
@@ -944,7 +932,7 @@ fn check_not_dropped(item: &Item) -> Result<(), ItemError> {
 
 /// 持ち越し済みの項目なら [`Conflict::CarriedOver`]。
 fn check_not_carried(conn: &Connection, item: &Item) -> Result<(), ItemError> {
-    match carried_to(conn, item.id)? {
+    match item_table::carried_to(conn, item.id)? {
         Some(to) => Err(Conflict::CarriedOver {
             carried_to_id: to.id,
             carried_to_date: to.date,
@@ -1255,6 +1243,7 @@ mod tests {
     use crate::storage::Database;
     use crate::storage::table::agent_client::CLI_ID;
     use crate::storage::table::day as day_table;
+    use crate::storage::table::item::carried_to;
     use crate::storage::table::test_support::{at, date, fail_change_log_inserts};
 
     fn tokyo() -> TimeZone {

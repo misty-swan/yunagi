@@ -13,6 +13,7 @@ use std::ops::{Add, AddAssign};
 
 use rusqlite::Connection;
 
+use super::day;
 use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
@@ -138,15 +139,13 @@ pub struct WeekCounts {
 /// 古い順。
 pub fn week_days(date: LogicalDate) -> [LogicalDate; 5] {
     // 月曜は 0、日曜は 6。0001-01-01 は月曜、9999-12-31 は金曜なので、週の5日はいつも暦の中にある
-    let from_monday = date.as_date().weekday().to_monday_zero_offset();
-    let monday = (0..from_monday).fold(date, |d, _| {
-        d.yesterday().expect("Monday of a week is in the calendar")
-    });
-    let mut day = monday;
-    std::array::from_fn(|i| {
-        if i > 0 {
-            day = day.tomorrow().expect("Friday of a week is in the calendar");
-        }
+    let from_monday = i32::from(date.as_date().weekday().to_monday_zero_offset());
+    let mut offset = -from_monday;
+    std::array::from_fn(|_| {
+        let day = date
+            .add_days(offset)
+            .expect("Monday to Friday of a week is in the calendar");
+        offset += 1;
         day
     })
 }
@@ -262,7 +261,7 @@ fn board_items(
     let mut todos = Vec::new();
     let mut blockers = Vec::new();
     for item in items {
-        let carried_to = carried.get(&item.id).map(CarriedTo::from);
+        let carried_to = carried.get(&item.id).copied();
         let list = match item.kind {
             ItemKind::Todo => &mut todos,
             ItemKind::Blocker => &mut blockers,
@@ -278,7 +277,8 @@ fn board_items(
 pub const RECENT_DAYS: usize = 7;
 
 /// サイドバーの Recent に並べる日：今日 `today` と、今日より前で、削除されていない項目か、空白以外の
-/// 文字を含むノートがある日（前回の日と同じ決まり。データモデル設計書 3章 item）を、新しい順に、
+/// 文字を含むノートがある日（前回の日と同じ決まり。データモデル設計書 3章 item。
+/// [`day::days_with_items_or_note`]）を、新しい順に、
 /// 今日を含めて `limit` 日まで。今日は、項目もノートも無くてもいつも先頭に入る（`limit` が 0 なら空）。
 /// 今日より後の日（先の日付に足した項目など）は入れない。振り返りだけの日も入れない。
 pub fn recent_days(
@@ -289,22 +289,7 @@ pub fn recent_days(
     let Some(before) = limit.checked_sub(1) else {
         return Ok(Vec::new());
     };
-    // 項目のある日とノートのある日を、それぞれ新しい順に `before` 日まで読み、合わせて新しい順に切る
-    // （2つを同じ時点の内容で読む）
-    let mut days = in_read_transaction(conn, || {
-        let mut days = item_table::dates_before(conn, today, before)?;
-        days.extend(text_doc::nonblank_dates(
-            conn,
-            TextDoc::Note,
-            today,
-            None,
-            before,
-        )?);
-        Ok::<_, StorageError>(days)
-    })?;
-    days.sort_unstable_by(|a, b| b.cmp(a));
-    days.dedup();
-    days.truncate(before);
+    let mut days = day::days_with_items_or_note(conn, today, before)?;
     days.insert(0, today);
     Ok(days)
 }

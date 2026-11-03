@@ -23,6 +23,7 @@
 //! - 並びは日付の新しい順。同じ日の中は TODO・障害・ノート・振り返りの順、その中は id の順。
 //! - 項目の結果には、持ち越し先（[`SearchHit::carried_to`]）を付ける（MCP・CLI 仕様書 3章「読み取り」）。
 
+use rusqlite::types::Type;
 use rusqlite::{Connection, Row, params};
 
 use super::table::item::{self as item_table, CarriedTo};
@@ -108,7 +109,7 @@ pub fn search(conn: &Connection, query: &SearchQuery<'_>) -> Result<Vec<SearchHi
         let ids: Vec<Ulid> = item_ids.iter().flatten().copied().collect();
         let carried = item_table::carried_to_many(conn, &ids)?;
         for (hit, id) in hits.iter_mut().zip(item_ids) {
-            hit.carried_to = id.and_then(|id| carried.get(&id)).map(CarriedTo::from);
+            hit.carried_to = id.and_then(|id| carried.get(&id)).copied();
         }
         Ok(hits)
     })
@@ -217,14 +218,19 @@ const LIKE_SQL: &str = with_body!(
 /// 結果の1行と、項目なら項目の id（持ち越し先を読むため）。
 fn from_row(row: &Row<'_>) -> rusqlite::Result<(SearchHit, Option<Ulid>)> {
     let kind: SearchKind = row.get(0)?;
+    let ref_id: String = row.get(1)?;
     // 項目の ref_id は item.id なので、ULID として読む（ノート・振り返りは日付）
     let item_id = match kind {
-        SearchKind::Todo | SearchKind::Blocker => Some(row.get(1)?),
+        SearchKind::Todo | SearchKind::Blocker => {
+            Some(ref_id.parse::<Ulid>().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(1, Type::Text, Box::new(e))
+            })?)
+        }
         SearchKind::Note | SearchKind::Reflection => None,
     };
     let hit = SearchHit {
         kind,
-        ref_id: row.get(1)?,
+        ref_id,
         date: row.get(2)?,
         body: row.get(3)?,
         resolution_note: row.get(4)?,

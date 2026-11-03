@@ -25,13 +25,13 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
-use super::item::{self, carried_to};
+use super::item;
 use super::note_body::{self, Section};
 use super::text_doc::{self, ScreenSave, Snapshot, TextDoc};
 use crate::domain::logical_date::LogicalDate;
 use crate::storage::table::item::{self as item_table, Item, ItemKind, ItemStatus};
 use crate::storage::table::note_send::{self as note_send_table, NoteSend};
-use crate::storage::{StorageError, Ulid, in_transaction};
+use crate::storage::{StorageError, Ulid, in_read_transaction, in_transaction};
 
 // ---- 指紋 ----
 
@@ -623,7 +623,16 @@ pub struct RequestContext {
 
 /// 項目 `item_id` の依頼文の書き出しの文脈。ノートから来ていない項目（[`source_line`] が `None`）
 /// は `None`（「Context」と「Related blockers」の節を省く）。
+///
+/// 送り元・印・項目・持ち越し先は、同じ時点の内容を読む。
 pub fn request_context(
+    conn: &Connection,
+    item_id: Ulid,
+) -> Result<Option<RequestContext>, StorageError> {
+    in_read_transaction(conn, || read_request_context(conn, item_id))
+}
+
+fn read_request_context(
     conn: &Connection,
     item_id: Ulid,
 ) -> Result<Option<RequestContext>, StorageError> {
@@ -659,17 +668,25 @@ pub fn request_context(
 /// 削除されていない項目 `id` の、最後の持ち越し先（持ち越していなければその項目）。項目が無いか
 /// 削除されていれば `None`。
 fn latest_carried(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
-    let Some(mut item) = item_table::get(conn, id)?.filter(|i| i.deleted_at.is_none()) else {
+    let live = |id| -> Result<Option<Item>, StorageError> {
+        Ok(item_table::get(conn, id)?.filter(|i| i.deleted_at.is_none()))
+    };
+    let Some(item) = live(id)? else {
         return Ok(None);
     };
-    let mut visited = HashSet::from([item.id]);
-    while let Some(next) = carried_to(conn, item.id)? {
+    let mut last = item.id;
+    let mut visited = HashSet::from([last]);
+    while let Some(next) = item_table::carried_to(conn, last)? {
         if !visited.insert(next.id) {
             break;
         }
-        item = next;
+        last = next.id;
     }
-    Ok(Some(item))
+    if last == item.id {
+        return Ok(Some(item));
+    }
+    // 持ち越し先は削除されていない項目（同じ時点の内容で読んだばかり）
+    live(last)
 }
 
 #[cfg(test)]
