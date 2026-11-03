@@ -16,9 +16,13 @@ use std::fmt;
 /// use yunagi_core::error::ErrorChain;
 /// use yunagi_core::storage::StorageError;
 ///
-/// let err = StorageError::from(std::io::Error::other("disk full"));
-/// assert_eq!(err.to_string(), "file error");
-/// assert_eq!(ErrorChain(&err).to_string(), "file error: disk full");
+/// let err = StorageError::Io {
+///     action: "write",
+///     path: "/d/yunagi.db".into(),
+///     source: std::io::Error::other("disk full"),
+/// };
+/// assert_eq!(err.to_string(), "could not write /d/yunagi.db");
+/// assert_eq!(ErrorChain(&err).to_string(), "could not write /d/yunagi.db: disk full");
 /// ```
 pub struct ErrorChain<'a>(pub &'a (dyn Error + 'static));
 

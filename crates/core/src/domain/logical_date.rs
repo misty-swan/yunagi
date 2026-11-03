@@ -237,7 +237,11 @@ impl FromStr for DateSpec {
 ///
 /// 次のうち最初に当てはまる形にする。どれも [`parse_time_zone_record`] で読み戻せる。
 ///
-/// 1. IANA の名前が取れれば、その名前（`Asia/Tokyo`、`UTC`）。
+/// 1. IANA の名前が取れれば、その名前（`Asia/Tokyo`、`UTC`）。zoneinfo の中の別の版のフォルダ
+///    （`posix/`・`right/`。`/etc/localtime` が `/usr/share/zoneinfo/posix/Asia/Tokyo` へのリンクのときなど）
+///    の名前は、接頭辞を除いた名前にする（ほかの環境のタイムゾーンデータベースには、接頭辞の付いた
+///    名前が無いことがあるため）。除いた名前がタイムゾーンデータベースに無ければ、4 と同じく
+///    瞬間 `at` の UTC からのずれにする。
 /// 2. POSIX 形式の TZ 指定（環境変数 `TZ=JST-9` など）なら、その文字列を jiff が整えた形
 ///    （`JST-9`、`EST5EDT,M3.2.0,M11.1.0`）。
 /// 3. UTC からのずれが固定なら、そのずれ（`+09:00`。秒まであれば `-00:44:30`）。
@@ -251,10 +255,32 @@ impl FromStr for DateSpec {
 /// ときの代わり。`TimeZone::unknown()` は `Etc/Unknown` になる（[`TimeZone::try_system`] は返さない）。
 pub fn time_zone_record(tz: &TimeZone, at: Timestamp) -> String {
     static PRINTER: DateTimePrinter = DateTimePrinter::new();
-    PRINTER.time_zone_to_string(tz).unwrap_or_else(|_| {
+    let offset_at = || {
         PRINTER
             .time_zone_to_string(&TimeZone::fixed(tz.to_offset(at)))
             .expect("a fixed offset time zone is always printable")
+    };
+    if let Some(name) = tz.iana_name()
+        && let Some(rest) = strip_zoneinfo_variant(name)
+    {
+        // TimeZone::get は大文字・小文字を区別せず、データベースでの書き方の名前を返す
+        return match TimeZone::get(rest) {
+            Ok(zone) => zone.iana_name().unwrap_or(rest).to_owned(),
+            Err(_) => offset_at(),
+        };
+    }
+    PRINTER
+        .time_zone_to_string(tz)
+        .unwrap_or_else(|_| offset_at())
+}
+
+/// zoneinfo の中の別の版のフォルダ（`posix/`・`right/`）の名前から、接頭辞を除いた名前。
+/// 接頭辞が無ければ `None`。大文字・小文字は区別しない（IANA の名前の引き方と同じ）。
+fn strip_zoneinfo_variant(name: &str) -> Option<&str> {
+    ["posix/", "right/"].iter().find_map(|prefix| {
+        name.get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .map(|_| &name[prefix.len()..])
     })
 }
 
@@ -826,23 +852,7 @@ mod tests {
         // zoneinfo の外にコピーした TZif ファイルは、名前の無いタイムゾーンとして読まれる
         let dir = tempfile::tempdir().unwrap();
         let unnamed = dir.path().join("localtime");
-        // ほかのテストの `tz("Asia/Tokyo")` などと同じく、システムのタイムゾーンデータを使う。
-        // 探す場所は jiff と同じ（環境変数 TZDIR、なければ決まったフォルダ）
-        let source = std::env::var_os("TZDIR")
-            .map(std::path::PathBuf::from)
-            .into_iter()
-            .chain(
-                [
-                    "/usr/share/zoneinfo",
-                    "/usr/share/lib/zoneinfo",
-                    "/etc/zoneinfo",
-                ]
-                .map(std::path::PathBuf::from),
-            )
-            .map(|dir| dir.join("America/New_York"))
-            .find(|path| path.is_file())
-            .expect("needs the system tzdata (America/New_York)");
-        std::fs::copy(&source, &unnamed).unwrap();
+        std::fs::copy(system_tzif_path("America/New_York"), &unnamed).unwrap();
         for (tz_env, named, expected) in [
             ("Asia/Tokyo", true, "Asia/Tokyo"),
             ("JST-9", false, "JST-9"),
@@ -863,6 +873,53 @@ mod tests {
                 "TZ={tz_env}\n{stdout}\n{}",
                 String::from_utf8_lossy(&out.stderr)
             );
+        }
+    }
+
+    /// システムのタイムゾーンデータの、`name` の TZif ファイルのパス。ほかのテストの
+    /// `tz("Asia/Tokyo")` などと同じく、システムのタイムゾーンデータを前提にする。
+    /// 探す場所は jiff と同じ（環境変数 TZDIR、なければ決まったフォルダ）。
+    #[cfg(unix)]
+    fn system_tzif_path(name: &str) -> std::path::PathBuf {
+        std::env::var_os("TZDIR")
+            .map(std::path::PathBuf::from)
+            .into_iter()
+            .chain(
+                [
+                    "/usr/share/zoneinfo",
+                    "/usr/share/lib/zoneinfo",
+                    "/etc/zoneinfo",
+                ]
+                .map(std::path::PathBuf::from),
+            )
+            .map(|dir| dir.join(name))
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| panic!("needs the system tzdata ({name})"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zoneinfo_variant_folders_are_recorded_without_their_prefix() {
+        let at = ts("2026-07-01T00:00:00Z");
+        let data = std::fs::read(system_tzif_path("America/New_York")).unwrap();
+        for (name, expected) in [
+            ("posix/America/New_York", "America/New_York"),
+            ("right/America/New_York", "America/New_York"),
+            ("POSIX/america/new_york", "America/New_York"),
+            // 接頭辞を除いた名前が無ければ、その瞬間のずれ（夏時間）
+            ("posix/Not/A_Zone", "-04:00"),
+            // 接頭辞でなければ、そのまま
+            ("posixrules", "posixrules"),
+        ] {
+            let zone = TimeZone::tzif(name, &data).unwrap();
+            assert_eq!(zone.iana_name(), Some(name));
+            let record = time_zone_record(&zone, at);
+            assert_eq!(record, expected, "{name}");
+            // 記録した名前は、接頭辞の無い名前として読み戻せる
+            if record != "posixrules" {
+                let restored = parse_time_zone_record(&record).unwrap();
+                assert_eq!(restored.to_datetime(at), zone.to_datetime(at));
+            }
         }
     }
 

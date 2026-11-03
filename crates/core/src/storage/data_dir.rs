@@ -8,7 +8,9 @@
 //! - 保存先（`data_dir`）には `yunagi.db` と `backups/` を置く。保存先は `config.json` に
 //!   記録する。`config.json` が無ければ、既定ディレクトリを保存先とする（[`resolve_data_dir`]）。
 //! - 保存先の変更は [`change_data_dir`] で行う。データベースを移してから `config.json` を
-//!   書き換え、途中で失敗しても元のデータが残る。
+//!   書き換え、途中で失敗しても元のデータが残る。今の保存先にデータベースが無ければ断る。
+//! - データベースのある既存のフォルダを、データを移さずに保存先にする（選び直す）のは
+//!   [`use_existing_data_dir`] で行う。中身を確かめてから `config.json` に記録する。
 
 use std::ffi::OsString;
 use std::fmt;
@@ -17,10 +19,10 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-use super::DbLock;
 use super::db_copy::{self, CopyError};
+use super::{DbLock, db_files, migration};
 
 /// 設定ファイルの名前。既定ディレクトリに置く。
 pub const CONFIG_FILE_NAME: &str = "config.json";
@@ -29,8 +31,6 @@ pub const DATABASE_FILE_NAME: &str = "yunagi.db";
 /// バックアップを置くフォルダの名前。保存先に置く。
 pub const BACKUPS_DIR_NAME: &str = "backups";
 
-/// SQLite が WAL モードでデータベースの横に作るファイルの接尾辞。
-const SIDE_FILE_SUFFIXES: [&str; 2] = ["-wal", "-shm"];
 /// 移動中のデータベースの一時的な名前（移し終えてから `yunagi.db` に名前を変える）。
 const MOVING_FILE_NAME: &str = "yunagi.db.moving";
 
@@ -171,11 +171,10 @@ pub fn backups_dir(data_dir: &Path) -> PathBuf {
 /// `config.json` の中身。
 ///
 /// このアプリが知らない項目（新しい版で足されたもの）は `other` に入れたまま書き戻し、消さない。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// 保存先。絶対パス。
     pub data_dir: PathBuf,
-    #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -223,6 +222,11 @@ impl Config {
 
     /// 既定ディレクトリ `default_dir` に `config.json` を書く（フォルダが無ければ作る）。
     ///
+    /// 保存先が既定ディレクトリ（シンボリックリンクを辿った実体どうしで比べる）なら、`data_dir` の
+    /// 項目を書かない（無ければ既定ディレクトリを保存先とする。絶対パスを書くと、既定ディレクトリ
+    /// ごと移したとき（新しい端末への引っ越しなど）に古いパスを指してしまうため。
+    /// アーキテクチャ設計書 6.3）。
+    ///
     /// 一時ファイルに書いてディスクに反映してから名前を変えるので、途中で失敗しても
     /// 元の `config.json` は壊れない。
     pub fn save(&self, default_dir: &DefaultDir) -> Result<(), DataDirError> {
@@ -231,11 +235,20 @@ impl Config {
             .map_err(|e| DataDirError::io("create directory", default_dir, e))?;
         let path = default_dir.join(CONFIG_FILE_NAME);
         let tmp = default_dir.join(format!("{CONFIG_FILE_NAME}.tmp"));
-        let mut text =
-            serde_json::to_string_pretty(self).map_err(|source| DataDirError::InvalidConfig {
-                path: path.clone(),
-                source,
-            })?;
+        let invalid = |source| DataDirError::InvalidConfig {
+            path: path.clone(),
+            source,
+        };
+        let mut stored = self.other.clone();
+        if resolve(&self.data_dir) == resolve(default_dir) {
+            stored.remove("data_dir");
+        } else {
+            stored.insert(
+                "data_dir".to_owned(),
+                serde_json::to_value(&self.data_dir).map_err(invalid)?,
+            );
+        }
+        let mut text = serde_json::to_string_pretty(&stored).map_err(invalid)?;
         text.push('\n');
         let written = write_synced(&tmp, text.as_bytes())
             .and_then(|()| fs::rename(&tmp, &path))
@@ -267,20 +280,27 @@ pub struct ChangeReport {
 ///
 /// 手順（途中で失敗しても元のデータが残るように、元のファイルは最後まで消さない）：
 ///
-/// 1. `new_dir` を確かめる。絶対パスでないとき、`..`・`.` を含むとき、`config.json` に書けない（UTF-8 でない）とき、
-///    今の保存先と同じとき、今の保存先の `backups/` の中のとき、すでにデータベース
-///    （`yunagi.db` とその `-wal`・`-shm`）か、空でない `backups/` があるときは断る。
+/// 1. `new_dir` を確かめる。絶対パスでないとき、`..`・`.` を含むとき、`config.json` に書けない
+///    （UTF-8 でない）とき、今の保存先と同じとき、今の保存先の `backups/` の中の
+///    とき、すでにデータベースの跡（中身のある `yunagi.db`・`-wal`・`-journal`、`yunagi.db` の
+///    シンボリックリンク）か、空でない `backups/` があるときは断る。
+///    今の保存先に中身のあるデータベースが無いとき（[`DataDirError::NoDatabase`]）も、何も変えずに断る。
 /// 2. `new_dir` を作り、`backups/` を写す。
 /// 3. データベースを SQLite のオンラインバックアップで一時ファイルに写し（WAL にだけある
 ///    書き込みも含めて写る）、整合性を確かめてから `yunagi.db` に名前を変える。
 /// 4. `config.json` に `new_dir` を記録する。ここで新しい保存先に切り替わる。
-/// 5. 元の保存先のデータベースと `backups/` を消す。消せなかったものは
+/// 5. 元の保存先のデータベース（とその横のファイル）と `backups/` を消す。消せなかったものは
 ///    [`ChangeReport::leftovers`] で返す（失敗にはしない）。
 ///
 /// 4 より前に失敗したら、2・3 で作ったものを消してからエラーを返す。元の保存先と
 /// `config.json` には触れていない。プロセスが途中で止まった場合も元のデータは残り、
 /// `config.json` は元の保存先を指したまま（新しい保存先に残ったものは 1 の確認で断られるので、
 /// 消してからやり直す）。
+///
+/// 今の保存先にデータベースが無いとき（[`super::OpenError::NotFound`] のとき）に、データベースのある
+/// 別のフォルダを保存先にするのは [`use_existing_data_dir`]、新しく作るのは [`super::Database::create`]
+/// で行う（アーキテクチャ設計書 6章）。移すものが無いのに記録だけを変えると、元の保存先に残った
+/// `-wal`（同期の途中で本体がまだ届いていないものなど）を、5 で消してしまうため。
 ///
 /// `yunagi.lock` のロック `lock` を持ち、データベースを閉じてから呼ぶ（アーキテクチャ設計書
 /// 6章）。移している間に別のプロセスがデータベースに書くと、その書き込みは新しい保存先に
@@ -296,21 +316,7 @@ pub struct ChangeReport {
 ///   データベースはコアの外で開かない。
 pub fn change_data_dir(lock: &DbLock, new_dir: &Path) -> Result<ChangeReport, DataDirError> {
     let default_dir = lock.default_dir();
-    if !new_dir.is_absolute() {
-        return Err(DataDirError::NotAbsolute(new_dir.to_path_buf()));
-    }
-    // `..` は、まだ無いフォルダの後にあると実体を求められず、下の「同じフォルダ」
-    // 「backups/ の中」の確認をすり抜ける（作った後で元の保存先を指し、元のデータを消してしまう）
-    if new_dir
-        .components()
-        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
-    {
-        return Err(DataDirError::NotNormalized(new_dir.to_path_buf()));
-    }
-    // JSON の文字列は UTF-8 なので、写し終えてから記録で失敗しないよう、先に確かめる
-    if new_dir.to_str().is_none() {
-        return Err(DataDirError::NotUtf8(new_dir.to_path_buf()));
-    }
+    check_new_dir(new_dir)?;
     let mut config = Config::load(default_dir)?;
     let old_dir = config.data_dir.clone();
     let new_real = resolve(new_dir);
@@ -321,6 +327,12 @@ pub fn change_data_dir(lock: &DbLock, new_dir: &Path) -> Result<ChangeReport, Da
     // 新しい保存先も消してしまう
     if new_real.starts_with(resolve(&backups_dir(&old_dir))) {
         return Err(DataDirError::InsideBackups(new_dir.to_path_buf()));
+    }
+    let old_db = database_path(&old_dir);
+    let has_db =
+        db_files::has_database(&old_db).map_err(|e| DataDirError::io("read", &old_db, e))?;
+    if !has_db {
+        return Err(DataDirError::NoDatabase(old_db));
     }
     check_target(new_dir)?;
 
@@ -339,12 +351,104 @@ pub fn change_data_dir(lock: &DbLock, new_dir: &Path) -> Result<ChangeReport, Da
     })
 }
 
+/// 保存先を、データベースのある既存のフォルダ `dir` に変える。データは移さず、中身を確かめてから
+/// `config.json` に記録するだけ（アーキテクチャ設計書 6章・6.3「保存先を選び直す」）。
+///
+/// 今の保存先にデータベースが見つからないとき（[`super::OpenError::NotFound`]）に、データベースの
+/// ある別のフォルダ（同期フォルダの場所が変わった、ドライブの名前が変わったなど）を指し直すのに使う。
+/// [`change_data_dir`] は移動先にデータベースがあると断るので、こちらを使う。今の保存先のファイルには
+/// 触れない（データベースが残っていても消さない）。
+///
+/// 確かめること（通らなければ、何も変えずにエラーを返す）：
+///
+/// 1. `dir` が保存先として書ける形（絶対パスで、`..`・`.` を含まず、UTF-8 で表せる）で、フォルダである。
+/// 2. `dir` に中身のある `yunagi.db` がある（[`DataDirError::NoDatabase`]）。
+/// 3. それを読み取り専用で開け、整合性の確認が通り（[`DataDirError::DatabaseCorrupted`]）、
+///    スキーマの番号が 1 以上（[`DataDirError::NotYunagiDatabase`]）で、このアプリの知る範囲にある
+///    （[`DataDirError::UnsupportedSchema`]）。ファイルには書かない。
+///
+/// `dir` が既定ディレクトリ（の実体）なら、`config.json` から `data_dir` の項目を消す（既定ディレクトリの
+/// 絶対パスを書くと、既定ディレクトリごと移したときに古いパスを指してしまうため。[`Config::save`]）。
+///
+/// [`change_data_dir`] と同じく、`yunagi.lock` のロック `lock` を持ち、データベースを閉じてから呼ぶ
+/// （記録した後は、同じロックで [`super::Database::open`] を呼べば `dir` のデータベースを開く）。
+pub fn use_existing_data_dir(lock: &DbLock, dir: &Path) -> Result<(), DataDirError> {
+    let default_dir = lock.default_dir();
+    check_new_dir(dir)?;
+    if !dir.is_dir() {
+        return Err(DataDirError::NotADirectory(dir.to_path_buf()));
+    }
+    let db = database_path(dir);
+    if !db_files::has_database(&db).map_err(|e| DataDirError::io("read", &db, e))? {
+        return Err(DataDirError::NoDatabase(db));
+    }
+    inspect_database(&db)?;
+    let mut config = Config::load(default_dir)?;
+    config.data_dir = dir.to_path_buf();
+    config.save(default_dir)
+}
+
+/// 保存先にするパス `dir` が、`config.json` に書ける形かを確かめる：絶対パスで、`..`・`.` を含まず、
+/// UTF-8 で表せる。
+fn check_new_dir(dir: &Path) -> Result<(), DataDirError> {
+    if !dir.is_absolute() {
+        return Err(DataDirError::NotAbsolute(dir.to_path_buf()));
+    }
+    // `..` は、まだ無いフォルダの後にあると実体を求められず、change_data_dir の「同じフォルダ」
+    // 「backups/ の中」の確認をすり抜ける（作った後で元の保存先を指し、元のデータを消してしまう）
+    if dir
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
+        return Err(DataDirError::NotNormalized(dir.to_path_buf()));
+    }
+    // JSON の文字列は UTF-8 なので、写し終えてから記録で失敗しないよう、先に確かめる
+    if dir.to_str().is_none() {
+        return Err(DataDirError::NotUtf8(dir.to_path_buf()));
+    }
+    Ok(())
+}
+
+/// `db` を読み取り専用で開き、Yunagi のデータベースとして開けるかを確かめる（ファイルには書かない）。
+fn inspect_database(db: &Path) -> Result<(), DataDirError> {
+    let read_error = |source| DataDirError::Inspect {
+        path: db.to_path_buf(),
+        source,
+    };
+    let conn =
+        Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(read_error)?;
+    let result: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(read_error)?;
+    if result != "ok" {
+        return Err(DataDirError::DatabaseCorrupted {
+            path: db.to_path_buf(),
+            result,
+        });
+    }
+    let found: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(read_error)?;
+    let supported = migration::MIGRATIONS.last().map_or(0, |m| m.version);
+    if found == 0 {
+        // 空のデータベースや別のアプリのもの。開くと、そこに空の Yunagi のデータベースを作ってしまう
+        return Err(DataDirError::NotYunagiDatabase(db.to_path_buf()));
+    }
+    if found < 0 || found > i64::from(supported) {
+        return Err(DataDirError::UnsupportedSchema {
+            path: db.to_path_buf(),
+            found,
+            supported,
+        });
+    }
+    Ok(())
+}
+
 /// 移動先に、上書きしてしまうデータが無いことを確かめる。
 fn check_target(new_dir: &Path) -> Result<(), DataDirError> {
-    for path in database_files(new_dir) {
-        if path.symlink_metadata().is_ok() {
-            return Err(DataDirError::TargetHasDatabase(path));
-        }
+    // データベースの跡（中身のある yunagi.db・-wal・-journal、シンボリックリンク、調べられないもの）
+    if let Some(trace) = db_files::find_trace(&database_path(new_dir)) {
+        return Err(DataDirError::TargetHasDatabase(trace));
     }
     let backups = backups_dir(new_dir);
     match fs::read_dir(&backups) {
@@ -358,22 +462,6 @@ fn check_target(new_dir: &Path) -> Result<(), DataDirError> {
         Err(e) => return Err(DataDirError::io("read directory", &backups, e)),
     }
     Ok(())
-}
-
-/// `data_dir` のデータベースのファイル（本体と `-wal`・`-shm`）。
-fn database_files(data_dir: &Path) -> Vec<PathBuf> {
-    with_side_files(&database_path(data_dir))
-}
-
-/// データベースのファイル `db` と、その `-wal`・`-shm`。
-fn with_side_files(db: &Path) -> Vec<PathBuf> {
-    let mut files = vec![db.to_path_buf()];
-    for suffix in SIDE_FILE_SUFFIXES {
-        let mut name = db.as_os_str().to_os_string();
-        name.push(suffix);
-        files.push(PathBuf::from(name));
-    }
-    files
 }
 
 /// 移動の途中で作ったもの。失敗したときに、作った順の逆に消す。
@@ -440,21 +528,19 @@ fn copy_data(old_dir: &Path, new_dir: &Path, created: &mut Created) -> Result<()
         copy_tree(&old_backups, &backups_dir(new_dir), created)?;
     }
 
-    let old_db = database_path(old_dir);
-    if old_db.exists() {
-        let moving = new_dir.join(MOVING_FILE_NAME);
-        // 写しは1つのファイルにまとめるが、SQLite が途中で横に作る -wal・-shm も、
-        // 失敗したときに消すよう記録する。前に止まった移動の残りがあれば消す
-        for path in with_side_files(&moving) {
-            let _ = fs::remove_file(&path);
-            created.file(path);
-        }
-        copy_database(&old_db, &moving)?;
-        let new_db = database_path(new_dir);
-        fs::rename(&moving, &new_db).map_err(|e| DataDirError::io("rename", &moving, e))?;
-        created.file(new_db);
-        let _ = db_copy::sync_dir(new_dir);
+    // データベースがあることは change_data_dir が確かめてある
+    let moving = new_dir.join(MOVING_FILE_NAME);
+    // 写しは1つのファイルにまとめるが、SQLite が途中で横に作るファイルも、
+    // 失敗したときに消すよう記録する。前に止まった移動の残りがあれば消す
+    for path in db_files::with_side_files(&moving) {
+        let _ = fs::remove_file(&path);
+        created.file(path);
     }
+    copy_database(&database_path(old_dir), &moving)?;
+    let new_db = database_path(new_dir);
+    fs::rename(&moving, &new_db).map_err(|e| DataDirError::io("rename", &moving, e))?;
+    created.file(new_db);
+    let _ = db_copy::sync_dir(new_dir);
     Ok(())
 }
 
@@ -519,25 +605,18 @@ fn copy_symlink(from: &Path, to: &Path, created: &mut Created) -> Result<(), Dat
     }
 }
 
-/// データベース `from` を `to` に写し（[`db_copy::copy`]）、写したものの整合性を確かめる。
+/// データベース `from` を `to` に写す（[`db_copy::copy`]。写したものの整合性も確かめ、失敗したら
+/// 作りかけの `to` とその横のファイルを消す）。
 pub(super) fn copy_database(from: &Path, to: &Path) -> Result<(), DataDirError> {
     // 元は読み取り専用で開く（元のファイルに書かず、閉じるときに WAL を書き戻すこともしない）
     let src = Connection::open_with_flags(from, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    db_copy::copy(&src, to)?;
-    drop(src);
-    // 確かめるだけなので、写しも読み取り専用で開く（写しに書かず、横にファイルを作らない）
-    let result: String = Connection::open_with_flags(to, OpenFlags::SQLITE_OPEN_READ_ONLY)?
-        .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if result != "ok" {
-        return Err(DataDirError::CopyCorrupted { result });
-    }
-    Ok(())
+    Ok(db_copy::copy(&src, to)?)
 }
 
 /// 移し終えた後で、元の保存先のデータベースと `backups/` を消す。消せなかったものを返す。
 fn remove_old_data(old_dir: &Path) -> Vec<PathBuf> {
     let mut leftovers = Vec::new();
-    for path in database_files(old_dir) {
+    for path in db_files::with_side_files(&database_path(old_dir)) {
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -611,8 +690,30 @@ pub enum DataDirError {
     TargetHasBackups(PathBuf),
     /// データベースを写すときに SQLite の操作が失敗した。
     Sqlite(rusqlite::Error),
-    /// 写したデータベースの整合性の確認（`integrity_check`）が通らなかった。
+    /// 写したデータベースの整合性の確認（`integrity_check`）が通らなかった。ふつうは元が壊れている。
     CopyCorrupted { result: String },
+    /// `path` に中身のあるデータベースが無い（保存先の変更では今の保存先に、選び直しでは選んだ
+    /// フォルダに）。何も変えていない。
+    NoDatabase(PathBuf),
+    /// 選んだ保存先が無いか、フォルダでない。
+    NotADirectory(PathBuf),
+    /// 選んだ保存先のデータベース `path` を読めなかった（SQLite のデータベースでないなど）。
+    Inspect {
+        path: PathBuf,
+        source: rusqlite::Error,
+    },
+    /// 選んだ保存先のデータベース `path` の整合性の確認（`integrity_check`）が通らなかった。
+    DatabaseCorrupted { path: PathBuf, result: String },
+    /// 選んだ保存先のデータベース `path` が、Yunagi のデータベースではない（スキーマの番号が 0。
+    /// 空のデータベースや別のアプリのもの）。
+    NotYunagiDatabase(PathBuf),
+    /// 選んだ保存先のデータベース `path` のスキーマの番号 `found` を、このアプリが知らない
+    /// （ふつうは新しい版で作られたもの。`supported` まで知っている）。
+    UnsupportedSchema {
+        path: PathBuf,
+        found: i64,
+        supported: u32,
+    },
 }
 
 impl DataDirError {
@@ -679,6 +780,32 @@ impl fmt::Display for DataDirError {
                     "the copied database failed the integrity check: {result}"
                 )
             }
+            Self::NoDatabase(path) => {
+                write!(f, "no Yunagi database found at {}", path.display())
+            }
+            Self::NotADirectory(path) => {
+                write!(f, "{} does not exist or is not a folder", path.display())
+            }
+            Self::Inspect { path, .. } => {
+                write!(f, "could not read the database {}", path.display())
+            }
+            Self::DatabaseCorrupted { path, result } => write!(
+                f,
+                "the database {} failed the integrity check: {result}",
+                path.display()
+            ),
+            Self::NotYunagiDatabase(path) => {
+                write!(f, "{} is not a Yunagi database", path.display())
+            }
+            Self::UnsupportedSchema {
+                path,
+                found,
+                supported,
+            } => write!(
+                f,
+                "the database {} has schema version {found}, which this app does not support (supports up to {supported})",
+                path.display()
+            ),
         }
     }
 }
@@ -689,6 +816,7 @@ impl std::error::Error for DataDirError {
             Self::Io { source, .. } => Some(source),
             Self::InvalidConfig { source, .. } => Some(source),
             Self::Sqlite(e) => Some(e),
+            Self::Inspect { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -704,11 +832,16 @@ impl From<CopyError> for DataDirError {
     fn from(e: CopyError) -> Self {
         match e {
             CopyError::Sqlite(e) => Self::Sqlite(e),
-            CopyError::Sync { path, source } => Self::Io {
-                action: "sync",
+            CopyError::Io {
+                action,
+                path,
+                source,
+            } => Self::Io {
+                action,
                 path,
                 source,
             },
+            CopyError::Corrupted { result, .. } => Self::CopyCorrupted { result },
         }
     }
 }
@@ -764,6 +897,13 @@ mod tests {
             default,
             root,
         }
+    }
+
+    /// 既定ディレクトリにデータベース（閉じたもの）を作った [`dirs`]。
+    fn dirs_with_db() -> Dirs {
+        let d = dirs();
+        drop(make_db_with_wal(&d.default));
+        d
     }
 
     /// `dir` に、WAL にだけ書き込みが残ったデータベースを作り、開いたままの接続を返す。
@@ -878,7 +1018,7 @@ mod tests {
 
     #[test]
     fn config_without_data_dir_means_default_dir() {
-        let d = dirs();
+        let d = dirs_with_db();
         fs::write(d.default.join(CONFIG_FILE_NAME), r#"{"theme": "dark"}"#).unwrap();
         assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
         // 保存先を変えても、ほかの項目は残る
@@ -949,7 +1089,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinks_in_backups_are_copied_as_links() {
-        let d = dirs();
+        let d = dirs_with_db();
         let outside = d.root.join("archive");
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("old.db"), b"archived").unwrap();
@@ -971,7 +1111,7 @@ mod tests {
 
     #[test]
     fn read_only_backups_are_copied_with_their_permissions() {
-        let d = dirs();
+        let d = dirs_with_db();
         fs::create_dir(backups_dir(&d.default)).unwrap();
         let file = backups_dir(&d.default).join("a.db");
         fs::write(&file, b"backup").unwrap();
@@ -990,7 +1130,7 @@ mod tests {
     #[test]
     fn unreadable_target_backups_is_not_treated_as_empty() {
         use std::os::unix::fs::PermissionsExt;
-        let d = dirs();
+        let d = dirs_with_db();
         let new_dir = d.root.join("new");
         let backups = backups_dir(&new_dir);
         fs::create_dir_all(&backups).unwrap();
@@ -1012,7 +1152,7 @@ mod tests {
     fn source_database_is_not_modified() {
         let d = dirs();
         let conn = make_db_with_wal(&d.default);
-        let wal = with_side_files(&database_path(&d.default))[1].clone();
+        let wal = db_files::with_side_files(&database_path(&d.default))[1].clone();
         let before = fs::read(&wal).unwrap();
         // 記録で失敗させ、元が残る場合に、元の WAL が書き戻されていないことを確かめる
         fs::create_dir(d.default.join("config.json.tmp")).unwrap();
@@ -1046,7 +1186,7 @@ mod tests {
 
     #[test]
     fn change_uses_the_config_of_the_locked_default_dir() {
-        let d = dirs();
+        let d = dirs_with_db();
         let new_dir = d.root.join("new");
         change_data_dir(&d.lock(), &new_dir).unwrap();
         // config.json はロックを取った既定ディレクトリに書かれ、ロックファイルもそこに残る。
@@ -1074,12 +1214,230 @@ mod tests {
     }
 
     #[test]
-    fn change_without_database_only_records() {
+    fn change_without_database_is_refused_and_keeps_its_traces() {
         let d = dirs();
-        let new_dir = d.root.join("empty");
-        d.change(&new_dir).unwrap();
-        assert!(new_dir.is_dir());
-        assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
+        // 本体はまだ届いていないが、-wal と backups/ がある（同期の途中など）
+        let wal = db_files::side_files(&database_path(&d.default))[0].clone();
+        fs::write(&wal, b"kept in wal").unwrap();
+        fs::create_dir(backups_dir(&d.default)).unwrap();
+        fs::write(backups_dir(&d.default).join("a.db"), b"backup").unwrap();
+        // 中身の無い yunagi.db も、移すデータベースではない
+        for body in [None, Some(&b""[..])] {
+            if let Some(body) = body {
+                fs::write(database_path(&d.default), body).unwrap();
+            }
+            let new_dir = d.root.join("empty");
+            let err = d.change(&new_dir);
+            assert!(
+                matches!(&err, Err(DataDirError::NoDatabase(p)) if *p == database_path(&d.default)),
+                "{err:?}"
+            );
+            assert!(!new_dir.exists());
+            assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
+            assert!(!d.default.join(CONFIG_FILE_NAME).exists());
+            assert_eq!(fs::read(&wal).unwrap(), b"kept in wal");
+            assert_eq!(
+                fs::read(backups_dir(&d.default).join("a.db")).unwrap(),
+                b"backup"
+            );
+        }
+    }
+
+    #[test]
+    fn changing_back_to_the_default_dir_removes_the_entry() {
+        let d = dirs_with_db();
+        fs::write(d.default.join(CONFIG_FILE_NAME), r#"{"theme": "dark"}"#).unwrap();
+        let other = d.root.join("other");
+        d.change(&other).unwrap();
+        d.change(&d.default).unwrap();
+        // 既定ディレクトリの絶対パスは書かない（既定ディレクトリごと移しても、古いパスを指さない）
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap())
+                .unwrap();
+        assert_eq!(saved, serde_json::json!({ "theme": "dark" }));
+        assert_eq!(read_note(&d.default), "kept in wal");
+    }
+
+    // --- 保存先を選び直す（use_existing_data_dir） ---
+
+    /// `dir` に、番号 `user_version` で表のあるデータベースを作る。
+    fn plain_db(dir: &Path, user_version: i64) {
+        fs::create_dir_all(dir).unwrap();
+        let conn = Connection::open(database_path(dir)).unwrap();
+        conn.execute_batch("CREATE TABLE note(body TEXT); INSERT INTO note VALUES ('elsewhere');")
+            .unwrap();
+        conn.pragma_update(None, "user_version", user_version)
+            .unwrap();
+    }
+
+    #[test]
+    fn use_existing_data_dir_records_a_folder_with_a_database() {
+        let d = dirs();
+        // 今の保存先は見つからない（同期フォルダの場所が変わったなど）
+        let missing = d.root.join("old-sync/Yunagi");
+        fs::write(
+            d.default.join(CONFIG_FILE_NAME),
+            serde_json::json!({ "data_dir": missing, "theme": "dark" }).to_string(),
+        )
+        .unwrap();
+        // 別の場所で作った本物のデータベースを、選ぶフォルダに置く
+        let found = d.root.join("new-sync/Yunagi");
+        fs::create_dir_all(&found).unwrap();
+        {
+            let other = TempDir::new().unwrap();
+            let lock =
+                DbLock::acquire(&DefaultDir::for_test(other.path()), Duration::ZERO).unwrap();
+            let db = Database::open(lock).unwrap();
+            db.connection()
+                .execute(
+                    r#"INSERT INTO setting (key, value) VALUES ('found', '"elsewhere"')"#,
+                    [],
+                )
+                .unwrap();
+            db.close().unwrap();
+            fs::copy(database_path(other.path()), database_path(&found)).unwrap();
+        }
+        let before = fs::read(database_path(&found)).unwrap();
+
+        use_existing_data_dir(&d.lock(), &found).unwrap();
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), found);
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap())
+                .unwrap();
+        assert_eq!(saved["theme"], "dark");
+        // 確かめただけで、選んだデータベースには書いていない。読み取り専用で開いても SQLite は
+        // WAL モードのデータベースの横に -wal・-shm を作るが、-wal は空のまま（跡にならない）
+        assert_eq!(fs::read(database_path(&found)).unwrap(), before);
+        assert_eq!(
+            db_files::find_trace(&database_path(&found)),
+            Some(database_path(&found))
+        );
+        let wal = &db_files::side_files(&database_path(&found))[0];
+        assert!(fs::metadata(wal).map_or(true, |m| m.len() == 0));
+        // 記録したので、同じロックで開くと選んだデータベースを開く
+        let db = Database::open(d.lock()).unwrap();
+        let value: String = db
+            .connection()
+            .query_row("SELECT value FROM setting WHERE key = 'found'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, "\"elsewhere\"");
+    }
+
+    #[test]
+    fn use_existing_data_dir_reads_writes_still_in_the_wal() {
+        let d = dirs();
+        let found = d.root.join("found");
+        // 開いたままの接続：本体には表が無く、WAL にだけある
+        let conn = make_db_with_wal(&found);
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        use_existing_data_dir(&d.lock(), &found).unwrap();
+        drop(conn);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), found);
+    }
+
+    #[test]
+    fn use_existing_data_dir_of_the_default_dir_removes_the_entry() {
+        let d = dirs_with_db();
+        fs::write(
+            d.default.join(CONFIG_FILE_NAME),
+            serde_json::json!({ "data_dir": d.root.join("gone") }).to_string(),
+        )
+        .unwrap();
+        // 既定ディレクトリのデータベースは番号 0 の表なので、Yunagi の番号を付ける
+        Connection::open(database_path(&d.default))
+            .unwrap()
+            .pragma_update(None, "user_version", 1)
+            .unwrap();
+        use_existing_data_dir(&d.lock(), &d.default).unwrap();
+        assert_eq!(
+            fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap(),
+            "{}\n"
+        );
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
+    }
+
+    #[test]
+    fn use_existing_data_dir_refuses_folders_it_cannot_open() {
+        let d = dirs();
+        let config = d.default.join(CONFIG_FILE_NAME);
+        let recorded = d.root.join("recorded");
+        fs::write(
+            &config,
+            serde_json::json!({ "data_dir": recorded }).to_string(),
+        )
+        .unwrap();
+        let before = fs::read(&config).unwrap();
+        let refuse = |dir: &Path| {
+            let err = use_existing_data_dir(&d.lock(), dir).unwrap_err();
+            assert_eq!(fs::read(&config).unwrap(), before, "{err:?}");
+            err
+        };
+
+        assert!(matches!(
+            refuse(Path::new("relative")),
+            DataDirError::NotAbsolute(_)
+        ));
+        assert!(matches!(
+            refuse(&d.root.join("a/../b")),
+            DataDirError::NotNormalized(_)
+        ));
+        let missing = d.root.join("missing");
+        assert!(matches!(refuse(&missing), DataDirError::NotADirectory(_)));
+        assert!(!missing.exists());
+
+        // フォルダはあるが、データベースが無い（-wal・backups/ だけ、中身の無い yunagi.db）
+        let empty = d.root.join("empty");
+        fs::create_dir_all(backups_dir(&empty)).unwrap();
+        fs::write(empty.join("yunagi.db-wal"), b"wal").unwrap();
+        assert!(matches!(refuse(&empty), DataDirError::NoDatabase(_)));
+        fs::write(database_path(&empty), b"").unwrap();
+        assert!(matches!(refuse(&empty), DataDirError::NoDatabase(_)));
+
+        let garbage = d.root.join("garbage");
+        fs::create_dir(&garbage).unwrap();
+        fs::write(
+            database_path(&garbage),
+            b"not a database at all, just some text",
+        )
+        .unwrap();
+        assert!(matches!(refuse(&garbage), DataDirError::Inspect { .. }));
+
+        let other_app = d.root.join("other-app");
+        plain_db(&other_app, 0);
+        assert!(matches!(
+            refuse(&other_app),
+            DataDirError::NotYunagiDatabase(_)
+        ));
+
+        let newer = d.root.join("newer");
+        plain_db(&newer, 99);
+        assert!(matches!(
+            refuse(&newer),
+            DataDirError::UnsupportedSchema { found: 99, .. }
+        ));
+
+        let corrupted = d.root.join("corrupted");
+        plain_db(&corrupted, 1);
+        {
+            let conn = Connection::open(database_path(&corrupted)).unwrap();
+            for i in 0..200 {
+                conn.execute("INSERT INTO note VALUES (?1)", [format!("row {i:0>100}")])
+                    .unwrap();
+            }
+        }
+        let mut bytes = fs::read(database_path(&corrupted)).unwrap();
+        let page_size = usize::from(u16::from_be_bytes([bytes[16], bytes[17]]));
+        for b in &mut bytes[page_size + 8..] {
+            *b = 0xA5;
+        }
+        fs::write(database_path(&corrupted), &bytes).unwrap();
+        assert!(matches!(
+            refuse(&corrupted),
+            DataDirError::DatabaseCorrupted { .. } | DataDirError::Inspect { .. }
+        ));
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), recorded);
     }
 
     #[test]
@@ -1192,6 +1550,31 @@ mod tests {
             fs::read(database_path(&d.default)).unwrap(),
             b"this is not a database"
         );
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
+    }
+
+    #[test]
+    fn corrupted_database_is_not_moved() {
+        let d = dirs_with_db();
+        // 索引の定義を書き換えて、整合性の確認だけが通らないようにする（ページはそのまま写る）
+        {
+            let conn = Connection::open(database_path(&d.default)).unwrap();
+            conn.execute_batch(
+                "CREATE INDEX note_body ON note (body);
+                 PRAGMA writable_schema = ON;
+                 UPDATE sqlite_schema SET sql = 'CREATE INDEX note_body ON note (length(body))'
+                     WHERE name = 'note_body';
+                 PRAGMA writable_schema = OFF;",
+            )
+            .unwrap();
+        }
+        let new_dir = d.root.join("new");
+        let err = d.change(&new_dir);
+        assert!(
+            matches!(err, Err(DataDirError::CopyCorrupted { .. })),
+            "{err:?}"
+        );
+        assert!(!new_dir.exists());
         assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
     }
 

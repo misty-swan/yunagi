@@ -23,9 +23,9 @@ use rusqlite::backup::Backup as SqliteBackup;
 use rusqlite::{Connection, OpenFlags};
 
 use super::data_dir::{self, DataDirError};
-use super::db_copy;
 use super::migration::{self, Migration};
 use super::{Database, StorageError};
+use super::{db_copy, db_files};
 use crate::domain::logical_date::LogicalDate;
 use crate::error::ErrorChain;
 
@@ -296,7 +296,7 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
         .map_err(BackupError::Copy)
         .and_then(|()| fs::rename(&tmp, &path).map_err(|e| BackupError::io("rename", &tmp, e)));
     if result.is_err() {
-        remove_with_side_files(&tmp);
+        db_files::remove_with_side_files(&tmp);
         return result.map(|()| backup);
     }
     let _ = db_copy::sync_dir(dir);
@@ -316,23 +316,13 @@ fn remove_stale_temp_files(dir: &Path) {
         let Some((stem, side)) = name.split_once(TEMP_SUFFIX) else {
             continue;
         };
-        let ours = matches!(side, "" | "-journal" | "-wal" | "-shm")
+        let ours = (side.is_empty() || db_files::SIDE_SUFFIXES.contains(&side))
             && parse(Path::new(&format!("{stem}{EXTENSION}"))).is_some_and(|b| {
                 matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore)
             });
         if ours {
             let _ = fs::remove_file(entry.path());
         }
-    }
-}
-
-/// ファイルと、SQLite がその横に作るファイルを消す（無ければ何もしない）。
-fn remove_with_side_files(path: &Path) {
-    let _ = fs::remove_file(path);
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let mut side = path.as_os_str().to_os_string();
-        side.push(suffix);
-        let _ = fs::remove_file(PathBuf::from(side));
     }
 }
 

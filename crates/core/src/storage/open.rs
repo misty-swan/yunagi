@@ -9,14 +9,12 @@
 //! - 新しく作るのは [`Database::create`] で明示する。
 
 use std::fmt;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use super::backup::{self, BackupKind};
 use super::data_dir::{self, DataDirError};
 use super::migration::Migration;
-use super::{Database, DbLock, StorageError};
+use super::{Database, DbLock, StorageError, db_files};
 
 /// 開くのか、新しく作るのか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,17 +52,19 @@ impl Database {
             return Err(not_found(path, data_dir));
         }
         let exists = has_database(&path)?;
+        // 中身のある yunagi.db が無いときは、データベースを置いたことがある跡
+        // （宛先の無いシンボリックリンク、中身のある -wal・-journal）を db_files::find_trace で探す
         let create = match intent {
             Intent::Open if exists => false,
             Intent::Open => {
-                if customized || trace_of_database(&path).is_some() || has_backups(&data_dir) {
+                if customized || db_files::find_trace(&path).is_some() || has_backups(&data_dir) {
                     return Err(not_found(path, data_dir));
                 }
                 true
             }
             Intent::Create if exists => return Err(OpenError::AlreadyExists(path)),
             Intent::Create => {
-                if let Some(trace) = trace_of_database(&path) {
+                if let Some(trace) = db_files::find_trace(&path) {
                     return Err(OpenError::AlreadyExists(trace));
                 }
                 true
@@ -81,46 +81,11 @@ impl Database {
     }
 }
 
-/// `path` に中身のあるデータベースがあるか。
-///
-/// 0 バイトのファイルは無いものとみなす（同期の途中で中身がまだ届いていないファイルや、
-/// 初めて作る途中で止まったもの）。SQLite は 0 バイトのファイルを空のデータベースとして開くため、
-/// 区別しないと空のデータベースを作るのと同じことになる。
-/// 調べられない（権限が無いなど）ときは、そのエラーを返す（あるとも無いとも決めない）。
+/// `path` に中身のあるデータベースがあるか（[`db_files::has_database`]）。
+/// 調べられないときは、そのエラーを返す。
 fn has_database(path: &Path) -> Result<bool, StorageError> {
-    match fs::metadata(path) {
-        Ok(m) => Ok(!(m.is_file() && m.len() == 0)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(StorageError::Io(e)),
-    }
+    db_files::has_database(path).map_err(|e| StorageError::io("read", path, e))
 }
-
-/// `yunagi.db`（`db_path`）が無いときに残っている、データベースを置いたことがある跡：
-///
-/// - 宛先の無い `yunagi.db` のシンボリックリンク（リンク先のドライブを繋いでいないなど）。
-///   作ると、SQLite がリンク先に作ってしまう。
-/// - 中身のある `-wal`・`-journal`。作ると、SQLite が新しいデータベースに写し込んでしまう
-///   （0 バイトのものは SQLite が使わないので、跡とみなさない。`-shm` は SQLite が作り直すので見ない）。
-///
-/// 調べられない（権限が無いなど）ものは、跡とみなす（黙って作らない）。
-fn trace_of_database(db_path: &Path) -> Option<PathBuf> {
-    if db_path.is_symlink() {
-        return Some(db_path.to_path_buf());
-    }
-    JOURNAL_SUFFIXES.iter().find_map(|suffix| {
-        let mut name = db_path.as_os_str().to_os_string();
-        name.push(suffix);
-        let side = PathBuf::from(name);
-        match fs::symlink_metadata(&side) {
-            Ok(m) if m.is_file() && m.len() == 0 => None,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            _ => Some(side),
-        }
-    })
-}
-
-/// SQLite がデータベースの横に作る、書き込みの途中の内容を持つファイルの接尾辞。
-const JOURNAL_SUFFIXES: [&str; 2] = ["-wal", "-journal"];
 
 /// 保存先 `data_dir` の `backups/` に、データベースがあった証拠になるバックアップがあるか。
 ///
@@ -234,6 +199,7 @@ impl From<StorageError> for OpenError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::Duration;
 
     use super::super::data_dir::{
