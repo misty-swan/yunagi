@@ -218,7 +218,7 @@ pub(crate) mod test_support {
     pub fn open() -> (Database, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let lock = DbLock::acquire(&DefaultDir::for_test(dir.path()), Duration::ZERO).unwrap();
-        let db = Database::open(lock, dir.path().join("yunagi.db")).unwrap();
+        let db = Database::open(lock).unwrap();
         (db, dir)
     }
 
