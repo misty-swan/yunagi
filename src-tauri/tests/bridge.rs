@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 12] = [
+    let tests: [(&str, Test); 13] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -52,6 +52,10 @@ fn main() {
         ("item_commands", item_commands),
         ("text_doc_commands", text_doc_commands),
         ("overview_counts", overview_counts),
+        (
+            "export_markdown_writes_one_file_per_day",
+            export_markdown_writes_one_file_per_day,
+        ),
         (
             "agent_writes_use_the_same_events_and_the_screen_state",
             agent_writes_use_the_same_events_and_the_screen_state,
@@ -536,6 +540,59 @@ fn overview_counts(_: &Path) {
             .iter()
             .all(|d| d["date"] != date)
     );
+}
+
+/// Markdown 書き出し：日ごとのファイルを選んだフォルダに書き、パスを返す。データは変えないので
+/// `changed` は出ない（アーキテクチャ設計書 6.4）。
+fn export_markdown_writes_one_file_per_day(_: &Path) {
+    let h = Harness::opened();
+    h.add_todo("2030-02-01", "書き出す");
+    h.ok(
+        "save_text_doc",
+        json!({ "doc": "note", "date": "2030-02-03", "body": "メモ", "baseRev": 0 }),
+    );
+    h.drain();
+    let out = tempfile::tempdir().unwrap();
+    let dir = out.path().to_str().unwrap();
+
+    // 逆の期間でもよく、書き出すものが無い日（2030-02-02）は書かない
+    let paths = h.ok(
+        "export_markdown",
+        json!({ "from": "2030-02-03", "to": "2030-02-01", "dir": dir }),
+    );
+    let first = out.path().join("2030-02-01.md");
+    let third = out.path().join("2030-02-03.md");
+    assert_eq!(
+        paths,
+        json!([first.to_str().unwrap(), third.to_str().unwrap()])
+    );
+    assert_eq!(
+        std::fs::read_to_string(&first).unwrap(),
+        "# 2030-02-01\n\n## TODO\n\n- [ ] 書き出す\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&third).unwrap(),
+        "# 2030-02-03\n\n## Notes\n\nメモ\n"
+    );
+    assert!(!out.path().join("2030-02-02.md").exists());
+    h.assert_no_event();
+
+    // 何も無い期間は空
+    assert_eq!(
+        h.ok(
+            "export_markdown",
+            json!({ "from": "2031-01-01", "to": "2031-01-01", "dir": dir })
+        ),
+        json!([])
+    );
+    // 書けないときは storage（無いフォルダ・相対パス）
+    for bad in [out.path().join("無い").to_str().unwrap(), "relative"] {
+        let err = h.err(
+            "export_markdown",
+            json!({ "from": "2030-02-01", "to": "2030-02-01", "dir": bad }),
+        );
+        assert_eq!(err["kind"], "storage", "{bad}");
+    }
 }
 
 /// エージェントの書き込みも `changed` で知らせる。画面が知らせた入力中の欄は、エージェントの判定に

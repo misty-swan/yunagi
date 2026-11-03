@@ -8,10 +8,11 @@
 // コアのエラー（`ItemError` など）は大きいが、1回の呼び出しで1度返すだけなので、箱に入れても得が無い
 #![allow(clippy::result_large_err)]
 
+use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::{board, item, text_doc};
+use yunagi_core::domain::{board, export, item, text_doc};
 
 use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
 use crate::types::{
@@ -218,6 +219,31 @@ pub async fn save_text_doc(
                 Err(e) => Err(CommandError::from(e)),
             }
         })
+    })
+    .await
+}
+
+/// `from` から `to` まで（両端を含む。逆でもよい）の日ごとの Markdown を、フォルダ `dir`（利用者が
+/// 選んだ、ある絶対パスのフォルダ）に `YYYY-MM-DD.md` として書き出し、書いたファイルのパスを日付の順に
+/// 返す（アーキテクチャ設計書 6.4）。書き出すものが無い日は書かない（何も無ければ空）。
+///
+/// 書けなかったとき（フォルダが無い・絶対パスでない・書き込めないなど）は `Storage`（`detail` に
+/// ファイルのパス・置き換え終えたファイルの数・原因）。読み取りと同じく、保存の失敗中（アーキテクチャ
+/// 設計書 4.1）には数えない。書き出し先の誤りを別の種類にするかは、画面を作るときに決める（画面設計書
+/// 11章）。
+#[tauri::command]
+pub async fn export_markdown(
+    core: Core<'_>,
+    from: Date,
+    to: Date,
+    dir: String,
+) -> Result<Vec<String>, CommandError> {
+    blocking(&core, move |core| {
+        // データベースを使うのは読む間だけにし、文字列にしてファイルを書く間はほかのコマンドを待たせない
+        let boards = core.read(|conn| export::read_between(conn, from.0, to.0))?;
+        let paths = export::write_files(Path::new(&dir), boards.into_days())
+            .map_err(|e| CommandError::storage(&e))?;
+        Ok(paths.iter().map(|p| p.display().to_string()).collect())
     })
     .await
 }
