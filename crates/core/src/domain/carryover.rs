@@ -107,8 +107,12 @@ fn open_items(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, Storage
 }
 
 /// その日に持ち越しの対象（未完了・未解消で、まだ持ち越し済みでない項目）が1件でもあるか。
-/// 前面に出すたびに呼ばれるので、項目は id だけを読む。
+/// 前面に出すたびに呼ばれるので、まず一度も持ち越していない項目を1件だけ探し、無いときだけ
+/// 持ち越し先をたどる（項目は id だけを読む）。
 fn has_pending(conn: &Connection, date: LogicalDate) -> Result<bool, StorageError> {
+    if item_table::has_open_without_copies(conn, date)? {
+        return Ok(true);
+    }
     let ids = item_table::open_ids_by_date(conn, date)?;
     let carried = item_table::carried_to_many(conn, &ids)?;
     Ok(ids.iter().any(|id| !carried.contains_key(id)))

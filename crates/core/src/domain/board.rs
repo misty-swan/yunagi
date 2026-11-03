@@ -140,11 +140,13 @@ pub struct WeekCounts {
 pub fn week_days(date: LogicalDate) -> [LogicalDate; 5] {
     // 月曜は 0、日曜は 6。0001-01-01 は月曜、9999-12-31 は金曜なので、週の5日はいつも暦の中にある
     let from_monday = i32::from(date.as_date().weekday().to_monday_zero_offset());
-    std::array::from_fn(|i| {
-        // i は 0〜4
-        date.add_days(i as i32 - from_monday)
-            .expect("Monday to Friday of a week is in the calendar")
-    })
+    let mut days = [date; 5];
+    for (offset, day) in (-from_monday..).zip(&mut days) {
+        *day = date
+            .add_days(offset)
+            .expect("Monday to Friday of a week is in the calendar");
+    }
+    days
 }
 
 /// `date` を含む週（[`week_days`]）の日ごとの件数と合計。
@@ -674,6 +676,28 @@ mod tests {
             recent_days(conn, today, 2).unwrap(),
             ["2026-11-03", "2026-10-28"].map(date)
         );
+    }
+
+    #[test]
+    fn days_with_items_or_note_skip_notes_only_when_enough_days_have_items() {
+        // 項目は 10/25・10/27、ノートは 10/24・10/25・10/26
+        let (db, _dir) = open();
+        let conn = db.connection();
+        todo(conn, "2026-10-25", "項目");
+        todo(conn, "2026-10-27", "項目");
+        for d in ["2026-10-24", "2026-10-25", "2026-10-26"] {
+            write(conn, TextDoc::Note, d, "ノート");
+        }
+        let days = |limit| day::days_with_items_or_note(conn, date("2026-11-03"), limit).unwrap();
+        // 項目のある日が上限の数だけあっても、その間のノートの日（10/26）は入る
+        assert_eq!(days(2), ["2026-10-27", "2026-10-26"].map(date));
+        // 項目のある日が上限より少なければ、それより前のノートの日（10/24）も入る。同じ日は1回
+        assert_eq!(
+            days(4),
+            ["2026-10-27", "2026-10-26", "2026-10-25", "2026-10-24"].map(date)
+        );
+        assert_eq!(days(5).len(), 4);
+        assert!(days(0).is_empty());
     }
 
     #[test]

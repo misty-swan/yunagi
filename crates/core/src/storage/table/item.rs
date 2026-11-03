@@ -152,6 +152,23 @@ pub fn get(conn: &Connection, id: Ulid) -> Result<Option<Item>, StorageError> {
     .optional()?)
 }
 
+/// id が `ids` のどれかの行（id ごと）。論理削除したものも返す。無い id は入れない。1回だけ読む。
+pub fn get_many(conn: &Connection, ids: &[Ulid]) -> Result<HashMap<Ulid, Item>, StorageError> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM item WHERE id IN (SELECT value FROM json_each(?1))"
+    ))?;
+    let rows = stmt.query_map([json_ids(ids)], from_row)?;
+    rows.map(|r| r.map(|item| (item.id, item)))
+        .collect::<rusqlite::Result<_>>()
+        .map_err(Into::into)
+}
+
+/// id の並びを JSON の配列にする（SQL の中で json_each で開き、文を件数によらず1つにするため）。
+fn json_ids(ids: &[Ulid]) -> String {
+    serde_json::to_string(&ids.iter().map(Ulid::to_string).collect::<Vec<_>>())
+        .expect("a list of strings is always serialized")
+}
+
 /// その日の項目を並び順（`sort_key`、同じなら id）で返す。論理削除したものは含めない。
 pub fn list_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Item>, StorageError> {
     let mut stmt = conn.prepare_cached(&format!(
@@ -169,6 +186,18 @@ pub fn open_ids_by_date(conn: &Connection, date: LogicalDate) -> Result<Vec<Ulid
     )?;
     let rows = stmt.query_map([date], |r| r.get(0))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// その日に、未完了の TODO か未解消の障害（`status = open`。論理削除したものは除く）のうち、
+/// `carried_from_id` でそれを指す項目（削除したものを含む）が1件も無いものがあるか。あれば、その項目は
+/// 持ち越し済みでない（[`carried_to`] が `None`）。1件見つかったら止める。
+pub fn has_open_without_copies(conn: &Connection, date: LogicalDate) -> Result<bool, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM item AS i WHERE i.date = ?1 AND i.status = 'open' \
+         AND i.deleted_at IS NULL \
+         AND NOT EXISTS (SELECT 1 FROM item AS c WHERE c.carried_from_id = i.id))",
+    )?;
+    Ok(stmt.query_row([date], |r| r.get(0))?)
 }
 
 /// `from` から `to` まで（両端を含む）の日の項目を、日付・並び順（`sort_key`、同じなら id）で返す。
@@ -236,6 +265,36 @@ pub fn carried_to_many(
     ids: &[Ulid],
 ) -> Result<HashMap<Ulid, CarriedTo>, StorageError> {
     walk_carried_to(conn, ids, None)
+}
+
+/// 項目 `ids` それぞれの、最後の持ち越し先：[`carried_to`] を、行き着く項目が無くなるまで繰り返した
+/// 先（A→B→C と持ち越して、どれも削除されていなければ、A の最後の持ち越し先は C）。持ち越し済みの
+/// 項目だけを入れる。1回ごとに [`carried_to_many`] でまとめて読む。
+pub fn last_carried_many(
+    conn: &Connection,
+    ids: &[Ulid],
+) -> Result<HashMap<Ulid, CarriedTo>, StorageError> {
+    let mut last: HashMap<Ulid, CarriedTo> = HashMap::new();
+    // 壊れたデータで輪になっていても止まるように、元ごとに一度通った項目は通らない
+    let mut visited: HashSet<(Ulid, Ulid)> = ids.iter().map(|&id| (id, id)).collect();
+    // （元, 今いる項目）
+    let mut frontier: Vec<(Ulid, Ulid)> = ids.iter().map(|&id| (id, id)).collect();
+    while !frontier.is_empty() {
+        let nodes: Vec<Ulid> = frontier.iter().map(|&(_, node)| node).collect();
+        let next = carried_to_many(conn, &nodes)?;
+        frontier.retain_mut(|(origin, node)| {
+            let Some(&to) = next.get(node) else {
+                return false;
+            };
+            if !visited.insert((*origin, to.id)) {
+                return false;
+            }
+            last.insert(*origin, to);
+            *node = to.id;
+            true
+        });
+    }
+    Ok(last)
 }
 
 /// [`carried_to`]・[`carried_to_many`] のたどり方。`ids` の各項目から、持ち越しの1段ずつ、まとめて読む。
@@ -306,14 +365,11 @@ struct Link {
 /// `carried_from_id` で `ids` のどれかを指す項目（id の順）。論理削除したものも含める。
 /// たどるのに要る列だけを読む。
 fn list_links_from(conn: &Connection, ids: &[Ulid]) -> Result<Vec<Link>, StorageError> {
-    // id は JSON の配列で渡し、SQL の中で json_each で開く（文を件数によらず1つにするため）
-    let ids = serde_json::to_string(&ids.iter().map(Ulid::to_string).collect::<Vec<_>>())
-        .expect("a list of strings is always serialized");
     let mut stmt = conn.prepare_cached(
         "SELECT carried_from_id, id, date, deleted_at IS NULL FROM item \
          WHERE carried_from_id IN (SELECT value FROM json_each(?1)) ORDER BY id",
     )?;
-    let rows = stmt.query_map([ids], |r| {
+    let rows = stmt.query_map([json_ids(ids)], |r| {
         Ok(Link {
             from: r.get(0)?,
             to: CarriedTo {
@@ -736,6 +792,57 @@ mod tests {
                 .id,
             d1.id
         );
+    }
+
+    #[test]
+    fn batch_reads_for_carried_items() {
+        // A（11/01）→ B（11/02）→ C（11/03）、B は削除。D（11/02）は持ち越していない。
+        // E（11/02）→ F（11/03）、F は削除（E を指す項目はあるが、持ち越し済みでない）
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let days = ["2026-11-01", "2026-11-02", "2026-11-03"].map(|d| ensure_day(&db, d));
+        let carried = |date, from: &Item| Item {
+            carried_from_id: Some(from.id),
+            ..todo(date, &from.text, "a")
+        };
+        let a = todo(days[0], "A", "a");
+        let b = carried(days[1], &a);
+        let c = carried(days[2], &b);
+        let d = todo(days[1], "D", "b");
+        let e = todo(days[1], "E", "c");
+        let f = carried(days[2], &e);
+        for item in [&a, &b, &c, &d, &e, &f] {
+            insert(conn, item).unwrap();
+        }
+        let t = at("2026-11-03T05:00:00Z");
+        assert!(soft_delete(conn, b.id, t).unwrap());
+        assert!(soft_delete(conn, f.id, t).unwrap());
+
+        // get_many は削除したものも返し、無い id は入れない
+        let many = get_many(conn, &[a.id, b.id, Ulid::generate()]).unwrap();
+        assert_eq!(many.len(), 2);
+        assert_eq!(many[&b.id].deleted_at, Some(t));
+        assert!(get_many(conn, &[]).unwrap().is_empty());
+
+        // 最後の持ち越し先：A と B は C、C・D・E は持ち越し済みでない
+        let last = last_carried_many(conn, &[a.id, b.id, c.id, d.id, e.id]).unwrap();
+        let mut found: Vec<_> = last.iter().map(|(from, to)| (*from, to.id)).collect();
+        found.sort();
+        let mut expected = vec![(a.id, c.id), (b.id, c.id)];
+        expected.sort();
+        assert_eq!(found, expected);
+        assert_eq!(last[&a.id].date, days[2]);
+
+        // 11/02 には一度も持ち越していない D がある。D を完了すると、残る E は指す項目（削除した F）がある
+        assert!(has_open_without_copies(conn, days[1]).unwrap());
+        let done = ItemChanges {
+            status: Some(ItemStatus::Done),
+            ..ItemChanges::default()
+        };
+        assert!(update_fields(conn, d.id, &done, t).unwrap());
+        assert!(!has_open_without_copies(conn, days[1]).unwrap());
+        assert_eq!(open_ids_by_date(conn, days[1]).unwrap(), [e.id]);
+        assert!(has_open_without_copies(conn, days[2]).unwrap()); // C
     }
 
     #[test]
