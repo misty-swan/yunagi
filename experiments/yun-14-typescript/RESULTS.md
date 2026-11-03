@@ -20,6 +20,9 @@ npx svelte-check --tsconfig ./tsconfig.json
 npm i -D typescript@6.0.3 @typescript/native@npm:typescript@7.0.2 svelte@5.57.3 svelte-check@4.7.8 @tsconfig/svelte@5.0.8
 npx svelte-check --tsconfig ./tsconfig.json --tsgo
 
+# D：B と同じ依存で、--tsgo の代わりに --tsgo-experimental-api を付ける（YUN-31 で追加）
+npx svelte-check --tsconfig ./tsconfig.json --tsgo-experimental-api
+
 # C：TypeScript 7 だけ（版の食い違いの検査を外して入れる）
 npm i -D --legacy-peer-deps typescript@7.0.2 svelte@5.57.3 svelte-check@4.7.8 @tsconfig/svelte@5.0.8
 npx svelte-check --tsconfig ./tsconfig.json
@@ -33,6 +36,7 @@ npx svelte-check --tsconfig ./tsconfig.json
 | --- | --- |
 | A：TypeScript 6.0.3 だけ | 2件とも見つけた（0.9 秒） |
 | B：6.0.3 と 7.0.2、`--tsgo` | 2件とも見つけた（1.2 秒）。変換したファイルをディスクに書き出す試験的な方式 |
+| D：6.0.3 と 7.0.2、`--tsgo-experimental-api`（2026-11-03） | 2件とも見つけた（0.7 秒）。TypeScript 7 の試験的な API を使う方式で、`svelte-check` 自身が「試験的な機能で、予告なく壊れうる」と示している |
 | C：7.0.2 だけ | svelte-check が起動時に止まる。「6 系と 7 系の両方を入れ、`--tsgo` を付けよ」と表示 |
 
 TypeScript 5 系は試していない。svelte-check 4.7.8 が依存の宣言（peerDependencies）で対応を示しているのは `^5.0.0 || ^6.0.0`。
