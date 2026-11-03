@@ -205,6 +205,7 @@ mod tests {
     use super::super::data_dir::{
         CONFIG_FILE_NAME, DefaultDir, backups_dir, change_data_dir, database_path, resolve_data_dir,
     };
+    use super::super::test_util::names;
     use super::*;
 
     /// 一時フォルダの下の既定ディレクトリ。
@@ -263,16 +264,6 @@ mod tests {
         db.connection()
             .query_row("SELECT body FROM t", [], |r| r.get(0))
             .unwrap()
-    }
-
-    /// `dir` の中の名前の一覧（並べたもの）。
-    fn names(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort();
-        names
     }
 
     fn not_found(result: Result<Database, OpenError>) -> DatabaseNotFound {

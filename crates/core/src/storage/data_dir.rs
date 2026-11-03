@@ -22,7 +22,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 
 use super::db_copy::{self, CopyError};
-use super::{DbLock, db_files, migration};
+use super::{DbLock, StorageError, db_files, migration};
 
 /// 設定ファイルの名前。既定ディレクトリに置く。
 pub const CONFIG_FILE_NAME: &str = "config.json";
@@ -411,19 +411,47 @@ fn check_new_dir(dir: &Path) -> Result<(), DataDirError> {
 
 /// `db` を開き、Yunagi のデータベースとして開けるかを確かめる。
 ///
-/// 作らない形の読み書きで開く（無いファイルを作らない）。読み取り専用で開くと、書き込みの途中で
-/// 止まったデータベース（中身のある `-journal` が残ったもの）を SQLite が巻き戻せずに読めず、
-/// [`super::Database::open`] なら開ける正しいデータベースを断ってしまうため。そのため、SQLite が開く
-/// ときに行う復旧（`-journal` の巻き戻し）と、閉じるときの `-wal` の書き戻しは起きうる
-/// （[`super::Database::open`] で開いたときと同じ）。表やスキーマの番号には書かない。閉じるときに
-/// SQLite が横の `-wal`・`-shm` を片付けるので、断ったときにも横にファイルを残さない。
+/// まず読み取り専用で開いて確かめる（断るときにも、選んだデータベースに書かない。別の端末の新しい版が
+/// 使っているもの（同期の途中の `-wal` があるもの）を書き換えないように）。読み取り専用で開くと
+/// SQLite が WAL モードのデータベースの横に空の `-wal`・`-shm` を作ることがあるので、もともと無く、
+/// 閉じた後も `-wal` が空なら消す（同期フォルダに残さない）。
+///
+/// 書き込みの途中で止まったデータベース（中身のある `-journal` が残ったもの）は、読み取り専用では
+/// SQLite が巻き戻せずに読めない（[`super::Database::open`] なら開ける正しいデータベースを断ってしまう）。
+/// そのときだけ、作らない形の読み書きで開き直して確かめる。このとき SQLite は開くときに `-journal` を
+/// 巻き戻す（どの版の SQLite も、開けば必ず行う復旧）が、表とスキーマの番号には書かない。
 fn inspect_database(db: &Path) -> Result<(), DataDirError> {
+    let [wal, shm, _] = db_files::side_files(db);
+    let existed = wal.symlink_metadata().is_ok() || shm.symlink_metadata().is_ok();
+    let result = inspect_with(db, OpenFlags::SQLITE_OPEN_READ_ONLY);
+    if !existed && fs::metadata(&wal).map_or(true, |m| m.len() == 0) {
+        let _ = fs::remove_file(&wal);
+        let _ = fs::remove_file(&shm);
+    }
+    match result {
+        Err(DataDirError::Inspect { source, .. }) if needs_rollback(&source) => {
+            let mut flags = OpenFlags::default();
+            flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
+            inspect_with(db, flags)
+        }
+        result => result,
+    }
+}
+
+/// 読み取り専用の接続では、残った `-journal` を巻き戻せずに読めなかった失敗か。
+fn needs_rollback(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(f, _) if f.extended_code == rusqlite::ffi::SQLITE_READONLY_ROLLBACK
+    )
+}
+
+/// `db` を `flags` で開き、整合性とスキーマの番号を確かめる（[`inspect_database`]）。
+fn inspect_with(db: &Path, flags: OpenFlags) -> Result<(), DataDirError> {
     let read_error = |source| DataDirError::Inspect {
         path: db.to_path_buf(),
         source,
     };
-    let mut flags = OpenFlags::default();
-    flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
     let conn = Connection::open_with_flags(db, flags).map_err(read_error)?;
     let result: String = conn
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
@@ -434,22 +462,21 @@ fn inspect_database(db: &Path) -> Result<(), DataDirError> {
             result,
         });
     }
-    let found: i64 = conn
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(read_error)?;
-    let supported = migration::MIGRATIONS.last().map_or(0, |m| m.version);
-    if found == 0 {
+    // 開く・復元するときと同じ範囲の確認（migration::check_supported）
+    match migration::check_supported(&conn, migration::MIGRATIONS) {
         // 空のデータベースや別のアプリのもの。開くと、そこに空の Yunagi のデータベースを作ってしまう
-        return Err(DataDirError::NotYunagiDatabase(db.to_path_buf()));
+        Ok(0) => Err(DataDirError::NotYunagiDatabase(db.to_path_buf())),
+        Ok(_) => Ok(()),
+        Err(StorageError::UnsupportedSchema { found, supported }) => {
+            Err(DataDirError::UnsupportedSchema {
+                path: db.to_path_buf(),
+                found,
+                supported,
+            })
+        }
+        Err(StorageError::Sqlite(e)) => Err(read_error(e)),
+        Err(other) => unreachable!("check_supported only reads the schema version: {other:?}"),
     }
-    if found < 0 || found > i64::from(supported) {
-        return Err(DataDirError::UnsupportedSchema {
-            path: db.to_path_buf(),
-            found,
-            supported,
-        });
-    }
-    Ok(())
 }
 
 /// 移動先に、上書きしてしまうデータが無いことを確かめる。
@@ -707,7 +734,8 @@ pub enum DataDirError {
     /// データベースを写すときに SQLite の操作が失敗した。
     Sqlite(rusqlite::Error),
     /// 写したデータベースの整合性の確認（`integrity_check`）が通らなかった。ふつうは元が壊れている。
-    CopyCorrupted { result: String },
+    /// `path` は写した元のデータベース（元が分からないときは、作ろうとした写し）。
+    CopyCorrupted { path: PathBuf, result: String },
     /// `path` に中身のあるデータベースが無い（保存先の変更では今の保存先に、選び直しでは選んだ
     /// フォルダに）。何も変えていない。
     NoDatabase(PathBuf),
@@ -791,12 +819,11 @@ impl fmt::Display for DataDirError {
                 path.display()
             ),
             Self::Sqlite(_) => write!(f, "database error while copying"),
-            Self::CopyCorrupted { result } => {
-                write!(
-                    f,
-                    "the copied database failed the integrity check: {result}"
-                )
-            }
+            Self::CopyCorrupted { path, result } => write!(
+                f,
+                "the copy of the database {} failed the integrity check: {result}",
+                path.display()
+            ),
             Self::NoDatabase(path) => {
                 write!(f, "no Yunagi database found at {}", path.display())
             }
@@ -858,7 +885,7 @@ impl From<CopyError> for DataDirError {
                 path,
                 source,
             },
-            CopyError::Corrupted { result, .. } => Self::CopyCorrupted { result },
+            CopyError::Corrupted { path, result } => Self::CopyCorrupted { path, result },
         }
     }
 }
@@ -1324,7 +1351,7 @@ mod tests {
         assert_eq!(saved["theme"], "dark");
         // 確かめただけで、選んだデータベースには書いておらず、横にファイルも残さない
         assert_eq!(fs::read(database_path(&found)).unwrap(), before);
-        assert_eq!(names_in(&found), [DATABASE_FILE_NAME]);
+        assert_eq!(super::super::test_util::names(&found), [DATABASE_FILE_NAME]);
         // 記録したので、同じロックで開くと選んだデータベースを開く
         let db = Database::open(d.lock()).unwrap();
         let value: String = db
@@ -1334,16 +1361,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(value, "\"elsewhere\"");
-    }
-
-    /// `dir` の中の名前の一覧（並べたもの）。
-    fn names_in(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort();
-        names
     }
 
     #[test]
@@ -1480,12 +1497,31 @@ mod tests {
             .unwrap()
             .pragma_update(None, "journal_mode", "WAL")
             .unwrap();
-        assert_eq!(names_in(&newer), [DATABASE_FILE_NAME]);
+        assert_eq!(super::super::test_util::names(&newer), [DATABASE_FILE_NAME]);
         assert!(matches!(
             refuse(&newer),
             DataDirError::UnsupportedSchema { found: 99, .. }
         ));
-        assert_eq!(names_in(&newer), [DATABASE_FILE_NAME]);
+        assert_eq!(super::super::test_util::names(&newer), [DATABASE_FILE_NAME]);
+        // 別の端末の新しい版が書いている途中（-wal に中身がある）でも、断るときに書き換えない
+        let writer = Connection::open(database_path(&newer)).unwrap();
+        writer.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        writer
+            .execute("INSERT INTO note VALUES ('in the wal')", [])
+            .unwrap();
+        let wal = db_files::side_files(&database_path(&newer))[0].clone();
+        let (db_before, wal_before) = (
+            fs::read(database_path(&newer)).unwrap(),
+            fs::read(&wal).unwrap(),
+        );
+        assert!(!wal_before.is_empty());
+        assert!(matches!(
+            refuse(&newer),
+            DataDirError::UnsupportedSchema { found: 99, .. }
+        ));
+        assert_eq!(fs::read(database_path(&newer)).unwrap(), db_before);
+        assert_eq!(fs::read(&wal).unwrap(), wal_before);
+        drop(writer);
 
         let corrupted = d.root.join("corrupted");
         plain_db(&corrupted, 1);
@@ -1496,12 +1532,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let mut bytes = fs::read(database_path(&corrupted)).unwrap();
-        let page_size = usize::from(u16::from_be_bytes([bytes[16], bytes[17]]));
-        for b in &mut bytes[page_size + 8..] {
-            *b = 0xA5;
-        }
-        fs::write(database_path(&corrupted), &bytes).unwrap();
+        super::super::test_util::corrupt_pages(&database_path(&corrupted));
         assert!(matches!(
             refuse(&corrupted),
             DataDirError::DatabaseCorrupted { .. } | DataDirError::Inspect { .. }

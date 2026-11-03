@@ -340,6 +340,40 @@ mod tests {
             Some(&json_text),
             &format!("invalid config file /d/config.json: {json_text}"),
         );
+        check(
+            &DataDirError::CopyCorrupted {
+                path: "/d/yunagi.db".into(),
+                result: "row 3 missing from index".into(),
+            },
+            "the copy of the database /d/yunagi.db failed the integrity check: row 3 missing from index",
+            None,
+            "the copy of the database /d/yunagi.db failed the integrity check: row 3 missing from index",
+        );
+        check(
+            &DataDirError::NoDatabase("/d/yunagi.db".into()),
+            "no Yunagi database found at /d/yunagi.db",
+            None,
+            "no Yunagi database found at /d/yunagi.db",
+        );
+        check(
+            &DataDirError::Inspect {
+                path: "/d/yunagi.db".into(),
+                source: rusqlite::Error::InvalidQuery,
+            },
+            "could not read the database /d/yunagi.db",
+            Some("Query is not read-only"),
+            "could not read the database /d/yunagi.db: Query is not read-only",
+        );
+        check(
+            &DataDirError::UnsupportedSchema {
+                path: "/d/yunagi.db".into(),
+                found: 9,
+                supported: 3,
+            },
+            "the database /d/yunagi.db has schema version 9, which this app does not support (supports up to 3)",
+            None,
+            "the database /d/yunagi.db has schema version 9, which this app does not support (supports up to 3)",
+        );
         let sqlite = sqlite_err().to_string();
         check(
             &DataDirError::Sqlite(sqlite_err()),

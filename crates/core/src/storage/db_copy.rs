@@ -56,7 +56,17 @@ impl From<CopyError> for StorageError {
 /// 整合性を確かめてから、ディスクに反映する。`to` は新しく作るファイル（一時ファイル）にする。
 ///
 /// 失敗したら、作りかけの `to` と、SQLite がその横に作ったファイル（`-journal` など）を消す。
+/// `to` かその横のファイルがすでにあれば、何も書かずに断る（自分で作っていないものを消さないように）。
 pub(super) fn copy(src: &Connection, to: &Path) -> Result<(), CopyError> {
+    // 失敗したときに消すのは、ここで作ったものだけにする。すでにあるもの（とその横のファイル）には
+    // 書かずに断る（呼び出し側は空いている名前を選ぶ）
+    if db_files::any_exists(to) {
+        return Err(CopyError::Io {
+            action: "create",
+            path: to.to_path_buf(),
+            source: io::ErrorKind::AlreadyExists.into(),
+        });
+    }
     let result = copy_verified(src, to);
     if result.is_err() {
         db_files::remove_with_side_files(to);
@@ -123,6 +133,7 @@ pub(super) fn sync_dir(dir: &Path) -> io::Result<()> {
 mod tests {
     use std::time::Duration;
 
+    use super::super::test_util::{corrupt_pages, names};
     use super::*;
 
     /// WAL モードで、本体に書き戻していない書き込みを持つデータベースを作る。
@@ -143,16 +154,6 @@ mod tests {
             .collect()
     }
 
-    /// `dir` の中の名前の一覧。
-    fn names(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = fs::read_dir(dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort();
-        names
-    }
-
     /// 2ページ目以降を壊したデータベースを作る（見出しは残すので、SQLite のファイルとしては開ける）。
     fn corrupted_database(path: &Path) -> Connection {
         {
@@ -163,12 +164,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let mut bytes = fs::read(path).unwrap();
-        let page_size = usize::from(u16::from_be_bytes([bytes[16], bytes[17]]));
-        for b in &mut bytes[page_size + 8..] {
-            *b = 0xA5;
-        }
-        fs::write(path, &bytes).unwrap();
+        corrupt_pages(path);
         Connection::open(path).unwrap()
     }
 
@@ -217,6 +213,28 @@ mod tests {
         assert!(matches!(copy(&src, &to), Err(CopyError::Sqlite(_))));
         assert!(!dir.path().join("missing").exists());
         assert_eq!(names(dir.path()), ["src.db", "src.db-shm", "src.db-wal"]);
+    }
+
+    #[test]
+    fn an_existing_target_is_not_overwritten_or_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = wal_database(&dir.path().join("src.db"));
+        let to = dir.path().join("copy.db.tmp");
+        let journal = db_files::side_files(&to)[2].clone();
+        fs::write(&journal, b"someone else's").unwrap();
+        let err = copy(&src, &to).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CopyError::Io {
+                    action: "create",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), b"someone else's");
+        assert!(!to.exists());
     }
 
     #[test]

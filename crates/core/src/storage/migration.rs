@@ -192,7 +192,8 @@ fn apply(conn: &mut Connection, m: &Migration) -> rusqlite::Result<()> {
 /// 写したものの整合性を確かめ（[`db_copy::copy`]）、通らなければ [`StorageError::BackupCorrupted`]
 /// を返す（壊れたバックアップでは、失敗したときに戻せないので、マイグレーションを始めない）。
 /// 失敗したら、作りかけの一時ファイルとその横のファイルを消す。
-/// 前回に中断して残った一時ファイル（とその横のファイル）は、ここで消す。
+/// 前回に中断して残った一時ファイル（とその横のファイル）は、ここで消す（消せなければ残し、
+/// 一時ファイルには空いている名前を選ぶ）。
 fn create_backup(
     conn: &Connection,
     backup_dir: &Path,
@@ -201,14 +202,15 @@ fn create_backup(
 ) -> Result<PathBuf, StorageError> {
     fs::create_dir_all(backup_dir)
         .map_err(|e| StorageError::io("create directory", backup_dir, e))?;
-    remove_stale_temp_files(backup_dir)?;
+    remove_stale_temp_files(backup_dir);
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     let stem = format!("pre-migration-v{from}-to-v{to}-{secs}");
     let mut path = backup_dir.join(format!("{stem}.db"));
     let mut n = 1;
-    while path.exists() {
+    // 一時ファイル（とその横のファイル）の名前も空いているものを選ぶ（消せずに残ったものに書かない）
+    while path.symlink_metadata().is_ok() || db_files::any_exists(&path.with_extension("db.tmp")) {
         n += 1;
         path = backup_dir.join(format!("{stem}-{n}.db"));
     }
@@ -242,22 +244,10 @@ fn restore(conn: &mut Connection, backup: &Path) -> Result<(), StorageError> {
 }
 
 /// 書きかけのまま残ったバックアップの一時ファイル（`pre-migration-*.db.tmp`）と、SQLite が
-/// その横に作るファイル（`-journal` など）を消す。
-fn remove_stale_temp_files(backup_dir: &Path) -> Result<(), StorageError> {
-    let read_error = |e| StorageError::io("read directory", backup_dir, e);
-    for entry in fs::read_dir(backup_dir).map_err(read_error)? {
-        let path = entry.map_err(read_error)?.path();
-        let is_temp = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix("pre-migration-"))
-            .and_then(|n| n.split_once(".db.tmp"))
-            .is_some_and(|(_, side)| side.is_empty() || db_files::SIDE_SUFFIXES.contains(&side));
-        if is_temp {
-            fs::remove_file(&path).map_err(|e| StorageError::io("remove", &path, e))?;
-        }
-    }
-    Ok(())
+/// その横に作るファイル（`-journal` など）を消す（[`db_files::remove_stale_temp_files`]。
+/// 消せないものは残して続ける。マイグレーションを止めない）。
+fn remove_stale_temp_files(backup_dir: &Path) {
+    db_files::remove_stale_temp_files(backup_dir, |name| name.starts_with("pre-migration-"));
 }
 
 #[cfg(test)]

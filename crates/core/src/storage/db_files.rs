@@ -35,15 +35,17 @@ fn side_file(db: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// `db` に中身のあるデータベースがあるか（シンボリックリンクは辿る）。
+/// `db` に中身のあるデータベースがあるか（シンボリックリンクは辿る）。中身のあるファイルだけを
+/// あるとみなす。
 ///
 /// 0 バイトのファイルは無いものとみなす（同期の途中で中身がまだ届いていないファイルや、
 /// 初めて作る途中で止まったもの）。SQLite は 0 バイトのファイルを空のデータベースとして開くため、
-/// 区別しないと空のデータベースを作るのと同じことになる。
+/// 区別しないと空のデータベースを作るのと同じことになる。ファイルでないもの（同じ名前のフォルダ
+/// など）もデータベースではない（開く・作るときは [`find_trace`] が跡とみなして断る）。
 /// 調べられない（権限が無いなど）ときは、そのエラーを返す（あるとも無いとも決めない）。
 pub(super) fn has_database(db: &Path) -> io::Result<bool> {
     match fs::metadata(db) {
-        Ok(m) => Ok(!(m.is_file() && m.len() == 0)),
+        Ok(m) => Ok(m.is_file() && m.len() > 0),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
@@ -73,6 +75,38 @@ pub(super) fn find_trace(db: &Path) -> Option<PathBuf> {
             _ => Some(side),
         }
     })
+}
+
+/// ファイル `db` か、その横のファイルのどれかがあるか（シンボリックリンクは辿らない。調べられない
+/// ものもあるとみなす）。新しく作る一時ファイルの名前が空いているかを確かめるのに使う。
+pub(super) fn any_exists(db: &Path) -> bool {
+    with_side_files(db).iter().any(
+        |path| !matches!(fs::symlink_metadata(path), Err(e) if e.kind() == io::ErrorKind::NotFound),
+    )
+}
+
+/// 写しの途中の一時ファイルの名前の接尾辞（書き終えてから `.db` に名前を変える）。
+pub(super) const TEMP_SUFFIX: &str = ".db.tmp";
+
+/// `dir` に残った一時ファイル（`<名前>.db.tmp`）と、SQLite がその横に作るファイル（`-journal` など）
+/// のうち、`ours` が `<名前>.db` について真を返すものを消す。中断で残ったものを片付けるのに使う。
+///
+/// 消せないもの・`dir` を読めないときは、そのままにして続ける（残っていても、次に作る一時ファイルは
+/// 空いている名前を選ぶので、作るのを止めない）。
+pub(super) fn remove_stale_temp_files(dir: &Path, ours: impl Fn(&str) -> bool) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some((stem, side)) = name.split_once(TEMP_SUFFIX) else {
+            continue;
+        };
+        if (side.is_empty() || SIDE_SUFFIXES.contains(&side)) && ours(&format!("{stem}.db")) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// ファイル `db` と、その横のファイルを消す（無いものは飛ばす。消せなくても続ける）。
@@ -126,9 +160,13 @@ mod tests {
         fs::write(&db, b"x").unwrap();
         assert_eq!(find_trace(&db), Some(db.clone()));
         assert!(has_database(&db).unwrap());
+        assert!(any_exists(&db));
 
         remove_with_side_files(&db);
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(!any_exists(&db));
+        fs::write(side_file(&db, "-shm"), b"").unwrap();
+        assert!(any_exists(&db));
     }
 
     #[cfg(unix)]
@@ -147,5 +185,42 @@ mod tests {
         let db = dir.path().join("yunagi.db");
         fs::create_dir(&db).unwrap();
         assert_eq!(find_trace(&db), Some(db.clone()));
+        assert!(!has_database(&db).unwrap());
+    }
+
+    #[test]
+    fn removes_only_matching_temp_files_and_their_side_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = [
+            "a.db.tmp",
+            "a.db.tmp-journal",
+            "a.db.tmp-wal",
+            "a.db.tmp-shm",
+            "a.db.tmp.old",
+            "a.db",
+            "b.db.tmp",
+        ];
+        for name in names {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        // 消せないもの（中身のあるフォルダ）があっても、ほかは消す
+        fs::create_dir(dir.path().join("a.db.tmp-x")).unwrap();
+        fs::create_dir_all(dir.path().join("a2.db.tmp/inner")).unwrap();
+        remove_stale_temp_files(dir.path(), |n| n.starts_with('a'));
+        let mut left: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "a.db",
+                "a.db.tmp-x",
+                "a.db.tmp.old",
+                "a2.db.tmp",
+                "b.db.tmp"
+            ]
+        );
     }
 }
