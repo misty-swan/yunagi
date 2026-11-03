@@ -335,3 +335,96 @@ test("ドラッグで、同じ種類の中の好きな位置へ動かせ、取�
   await model.settled();
   expect(texts(model)).toEqual(["a", "b", "c"]);
 });
+
+test("作る前の行を分けても、新しい行の入力は新しい行に、元の行の入力は元の行に入る", async () => {
+  const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+  let created = 0;
+  const { model } = setup((cmd, args) => {
+    calls.push({ cmd, args });
+    if (cmd === "add_item") return item(created++ === 0 ? A : NEW, args.text as string);
+    if (cmd === "split_item") {
+      return { original: item(A, args.first as string), created: item(NEW, args.second as string) };
+    }
+    return { updated: true, item: item(args.id as string, "x") };
+  });
+  model.load(board([]));
+  const f = model.add("todo", null)!;
+  model.editText(f.key, "foo bar");
+  const g = model.splitAt(f.key, 4)!;
+  model.editText(g.key, "baz");
+  model.editText(f.key, "fooo ");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS * 2);
+  expect(texts(model)).toEqual(["fooo ", "baz"]);
+  // 分割を送っている間の入力は、分割の後に、それぞれの項目の保存として送る
+  const saves = calls.filter((c) => c.cmd === "save_item").map((c) => c.args);
+  expect(saves).toContainEqual({ id: A, fields: { text: "fooo " } });
+  expect(saves).toContainEqual({ id: NEW, fields: { text: "baz" } });
+  expect(saves.some((a) => a.id === A && (a.fields as { text?: string }).text === "baz")).toBe(false);
+});
+
+test("分割をやり直しても、やり直しの履歴は残る", async () => {
+  const { model } = setup((cmd, args) => {
+    if (cmd === "split_item") return { original: item(A, args.first as string), created: item(NEW, args.second as string) };
+    if (cmd === "delete_item") return { id: NEW, source: null };
+    return { updated: true, item: item(A, "a") };
+  });
+  model.load(board([bi(item(A, "設計を読む")), bi(item(B, "b"))]));
+  model.splitAt(A, 2);
+  await vi.advanceTimersByTimeAsync(0);
+  model.setFocus({ key: B, field: "text" });
+  model.editText(B, "bb");
+  await model.undo();
+  await model.undo();
+  await model.settled();
+  expect(texts(model)).toEqual(["設計を読む", "b"]);
+  await model.redo();
+  expect(texts(model)).toEqual(["設計", "を読む", "b"]);
+  expect(model.canRedo).toBe(true);
+  await model.redo();
+  expect(texts(model)).toEqual(["設計", "を読む", "bb"]);
+});
+
+test("送り直しても成功しない失敗で分割を捨てたら、2行の本文をつないで元の項目に送る", async () => {
+  const { model, calls } = setup((cmd) => {
+    if (cmd === "split_item") throw { kind: "internal", detail: "x" };
+    return { updated: true, item: item(A, "a") };
+  });
+  model.load(board([bi(item(A, "設計を読む"))]));
+  model.splitAt(A, 2);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  expect(texts(model)).toEqual(["設計を読む"]);
+  expect(sent(calls).at(-1)).toEqual(["save_item", { id: A, fields: { text: "設計を読む" } }]);
+});
+
+test("削除を送り終える前に取り消しても、送り終えてから戻す", async () => {
+  let release: () => void = () => {};
+  const { model, calls } = setup(async (cmd) => {
+    if (cmd === "delete_item") {
+      await new Promise<void>((r) => (release = r));
+      return { id: A, source: null };
+    }
+    if (cmd === "restore_item") return item(A, "a");
+    return null;
+  });
+  model.load(board([bi(item(A, "a"))]));
+  model.remove(A);
+  const undo = model.undo();
+  await vi.advanceTimersByTimeAsync(0);
+  release();
+  await undo;
+  expect(sent(calls).map((c) => c[0])).toEqual(["delete_item", "restore_item"]);
+});
+
+test("画面で作った行が、読み込みに2回続けて出てこなければ、ほかで消されたものとして消す", async () => {
+  const { model } = setup(() => item(NEW, "新しい"));
+  model.load(board([bi(item(A, "a"))]));
+  const f = model.add("todo", A)!;
+  model.editText(f.key, "新しい");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  // 作る前に始まった読み込み（1回目）では残す
+  model.load(board([bi(item(A, "a"))]));
+  expect(texts(model)).toEqual(["a", "新しい"]);
+  model.load(board([bi(item(A, "a"))]));
+  expect(texts(model)).toEqual(["a"]);
+});

@@ -38,13 +38,25 @@ export class EditorPresence {
     if (s === null) return out;
     const lines = new Set(s.unsavedLines());
     if (this.focused && active && (this.composing || now - this.lastInputAt < EDITING_MS)) {
-      for (const l of baseLinesOf(s.saved.body, this.text(), this.cursorLines)) lines.add(l);
+      for (const l of this.#cursorBaseLines(s.saved.body, this.text())) lines.add(l);
     }
     if (lines.size > 0) {
       out.push({ doc: s.doc, date: s.date, rev: s.saved.rev, lines: [...lines].sort((a, b) => a - b) });
     }
     return out;
   }
+
+  /** カーソル行を、もとの本文の行番号にしたもの（入力やカーソルの移動のたびに呼ぶので、同じなら前の結果を使う）。 */
+  #cursorBaseLines(base: string, editor: string): number[] {
+    const cursor = this.cursorLines.join(",");
+    const c = this.#cache;
+    if (c === null || c.base !== base || c.editor !== editor || c.cursor !== cursor) {
+      this.#cache = { base, editor, cursor, lines: baseLinesOf(base, editor, this.cursorLines) };
+    }
+    return this.#cache!.lines;
+  }
+
+  #cache: { base: string; editor: string; cursor: string; lines: number[] } | null = null;
 
   /** 入力中でなくなる時刻（それまでに知らせ直す）。無ければ `null`。 */
   editingUntil(): number | null {

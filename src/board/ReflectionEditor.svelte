@@ -180,7 +180,7 @@
   /** 日 `d` の本文を読み、エディタをその本文で始める（前の日の保存は片付ける）。 */
   async function open(d: LogicalDate) {
     loading = d;
-    view?.setState(stateOf("", false));
+    // 前の日の保存を先に片付ける（close はその時点の本文を写すので、エディタを空にする前に呼ぶ）
     const prev = presence.saver;
     presence.saver = null;
     if (prev !== null) {
@@ -189,6 +189,7 @@
         if (done) presence.closing.delete(prev);
       });
     }
+    view?.setState(stateOf("", false));
     let snap: Snapshot | null = null;
     while (snap === null && loading === d) {
       try {

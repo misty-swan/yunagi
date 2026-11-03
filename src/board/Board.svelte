@@ -153,7 +153,10 @@
     // 入力中でなくなる時刻に、知らせ直す
     clearTimeout(expiry);
     const until = [model.editingUntil(), presence.editingUntil()].filter((x): x is number => x !== null);
-    if (until.length > 0) expiry = setTimeout(activity, Math.max(0, Math.min(...until) - Date.now()) + 1);
+
+    // すでに過ぎた時刻は待たない（入力中でなくなった後も、フォーカスがある間は過ぎた時刻が返るため）
+    const next = Math.min(...until.filter((u) => u > Date.now()));
+    if (Number.isFinite(next)) expiry = setTimeout(activity, next - Date.now() + 1);
   }
   // 保存し終えたら（まだ保存していない欄が減ったら）知らせ直す
   $effect(() => {

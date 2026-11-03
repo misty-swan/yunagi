@@ -151,10 +151,16 @@ export class BoardModel {
   canRedo = $state(false);
 
   readonly #deps: BoardDeps;
-  /** 画面で作って、まだ読み込んだボードに出てきていない行（読み込みが作る前に始まっていたため）。 */
-  readonly #unseenByServer = new Set<string>();
+  /**
+   * 画面で作って、まだ読み込んだボードに出てきていない行と、出てこなかった読み込みの回数。作る前に
+   * 始まった読み込みは、作った後の読み込み（作ると changed が届く）より前に1回だけ届きうるので、
+   * 2回続けて出てこなければ、ほかで消されたものとして画面からも消す。
+   */
+  readonly #unseenByServer = new Map<string, number>();
   /** この日に画面で削除した項目（削除の前に始まった読み込みで戻さないため）。 */
   readonly #deletedIds = new Set<Id>();
+  /** 分割で作った行の、元の行（分割を捨てたときに2行をつなぎ直すため）。 */
+  readonly #splitOf = new Map<string, string>();
   #undo: Entry[] = [];
   #redo: Entry[] = [];
   #textEntry: TextEntry | null = null;
@@ -201,6 +207,7 @@ export class BoardModel {
       this.memoOpen = null;
       this.focus = null;
       this.#unseenByServer.clear();
+      this.#splitOf.clear();
       this.#deletedIds.clear();
       this.#undo = [];
       this.#redo = [];
@@ -239,7 +246,13 @@ export class BoardModel {
     // 画面で足した、読み込んだボードにまだ無い行は、前にあった行の後ろに残す
     let prev: string | null = null;
     for (const r of rows) {
-      const local = r.id === null || (this.#unseenByServer.has(r.key) && !ids.has(r.id));
+      let local = r.id === null;
+      const misses = this.#unseenByServer.get(r.key);
+      if (!local && misses !== undefined && !ids.has(r.id!)) {
+        local = misses < 1;
+        if (local) this.#unseenByServer.set(r.key, misses + 1);
+        else this.#unseenByServer.delete(r.key);
+      }
       if (local) merged.splice(prev === null ? 0 : merged.findIndex((m) => m.key === prev) + 1, 0, r);
       if (merged.some((m) => m.key === r.key)) prev = r.key;
     }
@@ -251,7 +264,7 @@ export class BoardModel {
     const row = this.row(key) ?? this.#rowById(item.id);
     if (row !== undefined && row.id === null) {
       row.id = item.id;
-      this.#unseenByServer.add(row.key);
+      this.#unseenByServer.set(row.key, 0);
     }
   }
 
@@ -262,6 +275,12 @@ export class BoardModel {
     if (row !== undefined && row.id === null) {
       const list = this.list(row.kind);
       list.splice(list.indexOf(row), 1);
+      // 分割を捨てたら、2行の本文をつないで元の項目の保存として送る（入力を失わないため）
+      const orig = this.row(this.#splitOf.get(key) ?? "");
+      if (orig !== undefined && lockOf(orig) === null && row.text.trim() !== "") {
+        orig.text += row.text;
+        this.items.editText(orig.key, orig.text);
+      }
     }
     this.#deps.notify(this.#noticeOf(e));
     this.#deps.reload();
@@ -540,22 +559,16 @@ export class BoardModel {
     // 本文を変えるので、持ち越し済みの項目と取りやめた TODO は分けない
     if (this.#refuse(row)) return null;
     const before = row.text;
-    const list = this.list(row.kind);
-    const created = this.#newRow(row.kind, second);
-    row.text = first;
-    list.splice(list.indexOf(row) + 1, 0, created);
-    this.#lastInputAt = Date.now();
-    this.items.split(key, created.key, { date: this.date, kind: row.kind }, first, second);
-    const removeCreated = this.#rowEntry(created.key);
+    let createdKey = this.#split(row, first, second);
     this.#push({
       undo: async () => {
         const r = this.row(key);
         if (r === undefined) return false;
-        const createdRow = this.row(created.key);
+        const createdRow = this.row(createdKey);
         // 分けた後の2行の本文をつなぎ直す（分けた後に入力していれば、その本文で）
         const joined = createdRow === undefined ? before : r.text + createdRow.text;
-        await removeCreated.undo();
-        if (lockOf(r) === null && joined.trim() !== "") {
+        if (createdRow !== undefined) await this.#removeRow(createdRow);
+        if (lockOf(r) === null && joined.trim() !== "" && joined !== r.text) {
           r.text = joined;
           this.items.editText(key, joined);
         }
@@ -563,11 +576,27 @@ export class BoardModel {
       },
       redo: async () => {
         const r = this.row(key);
-        if (r === undefined || lockOf(r) !== null) return false;
-        return this.splitAt(key, first.length) !== null;
+        if (r === undefined || lockOf(r) !== null || !r.text.startsWith(first) || r.text.length <= first.length) {
+          return false;
+        }
+        // 履歴に足さずに分け直す（やり直しの途中で、やり直しの履歴を消さないため）
+        createdKey = this.#split(r, first, r.text.slice(first.length));
+        return true;
       },
     });
-    return { key: created.key, field: "text", offset: 0 };
+    return { key: createdKey, field: "text", offset: 0 };
+  }
+
+  /** 行 `row` を `first` と、すぐ後の新しい行 `second` に分けて送る。新しい行の名前を返す。 */
+  #split(row: Row, first: string, second: string): string {
+    const list = this.list(row.kind);
+    const created = this.#newRow(row.kind, second);
+    row.text = first;
+    list.splice(list.indexOf(row) + 1, 0, created);
+    this.#splitOf.set(created.key, row.key);
+    this.#lastInputAt = Date.now();
+    this.items.split(row.key, created.key, first, second);
+    return created.key;
   }
 
   /**
@@ -592,15 +621,17 @@ export class BoardModel {
   remove(key: string) {
     const row = this.row(key);
     if (row === undefined) return;
-    let deleted: Deleted | null = null;
     let index = this.list(row.kind).indexOf(row);
     const kind = row.kind;
     const snapshot = { ...row };
+    // 削除を送り終える前に取り消しても、送り終えるのを待ってから戻す
+    let removing: Promise<Deleted | null> = this.#removeRow(row);
     this.#push({
       undo: async () => {
+        const deleted = await removing;
         if (deleted === null) {
-          // 作る前に消した行は、画面にだけ戻す
-          if (snapshot.id !== null || snapshot.text.trim() === "") return false;
+          // 作る前に消した行は、画面にだけ戻す（削除できなかった行は、画面に残っている）
+          if (snapshot.id !== null || snapshot.text.trim() === "" || this.row(key) !== undefined) return false;
           const back = this.#newRow(kind, snapshot.text);
           this.list(kind).splice(Math.min(index, this.list(kind).length), 0, back);
           if (this.date !== null) {
@@ -611,14 +642,14 @@ export class BoardModel {
         return this.#restore(deleted);
       },
       redo: async () => {
+        const deleted = await removing;
         const r = deleted === null ? undefined : this.#rowById(deleted.id);
         if (r === undefined) return false;
         index = this.list(r.kind).indexOf(r);
-        deleted = await this.#removeRow(r);
-        return true;
+        removing = this.#removeRow(r);
+        return (await removing) !== null;
       },
     });
-    void this.#removeRow(row).then((d) => (deleted = d));
   }
 
   /**

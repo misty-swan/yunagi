@@ -442,8 +442,6 @@ export interface NewItem {
  */
 interface SplitItem {
   from: string;
-  date: LogicalDate;
-  kind: ItemKind;
   /** 元の項目の本文（送る時点の値。分割を送り終えるまでの元の行の入力は、ここにまとめる）。 */
   first: string;
 }
@@ -576,8 +574,8 @@ class ItemSaver extends Saver<ItemPatch> {
 
   /**
    * 分割を送る。元の項目の保存を先に送り終え（失敗していれば、その失敗で再試行を待つ）、送る時点の
-   * 元の行の本文 `first` と、この行の本文 `second` で分ける。元の行の本文が空なら、元の項目は変えずに、
-   * この行をそのすぐ後に作る（元の行は、空のまま離れると消える。操作仕様書 2章）。
+   * 元の行の本文 `first` と、この行の本文 `second` で分ける（`first` は空白だけにならない。画面は
+   * 空白だけの本文を送らず、空白だけの前半では分けないため）。
    */
   async #sendSplit(split: SplitItem, second: string): Promise<Item> {
     const orig = this.#lookup(split.from);
@@ -586,9 +584,6 @@ class ItemSaver extends Saver<ItemPatch> {
     }
     const origId = orig === undefined ? split.from : orig.id;
     if (origId === null) throw new CoreError({ kind: "not_found" });
-    if (split.first.trim() === "") {
-      return core.addItem(split.date, split.kind, second, { at: "after", id: origId });
-    }
     const r = await core.splitItem(origId, split.first, second);
     this.#split = null;
     this.#events.saved?.(split.from, r.original);
@@ -697,9 +692,9 @@ export class ItemSaves {
    * 保存先の問題で失敗したら、2行の本文を持ったまま再試行し、送る時点の本文で分ける（その間の元の行の
    * 入力も分割にまとめる）。作ったら `saved` に、元の項目と新しい項目が届く。
    */
-  split(from: string, key: string, item: { date: LogicalDate; kind: ItemKind }, first: string, second: string) {
+  split(from: string, key: string, first: string, second: string) {
     if (this.#savers.has(key)) throw new Error(`item ${key} already exists`);
-    const s = new ItemSaver(this.#status, key, null, null, this.#events, this.#lookup, { from, ...item, first });
+    const s = new ItemSaver(this.#status, key, null, null, this.#events, this.#lookup, { from, first });
     this.#add(s);
     s.edit({ text: second });
     void s.flush();
@@ -707,9 +702,13 @@ export class ItemSaves {
 
   /** 分割を送り終えていない、`key` から分ける項目の待ち行列。 */
   #splitsFrom(key: string): ItemSaver[] {
+    // 作る前の項目どうしは ID が無い（null）ので、ID で比べるのは作った項目だけ
     const id = this.idOf(key);
     return [...new Set(this.#savers.values())].filter(
-      (s) => s.splitFrom !== null && (s.splitFrom === key || this.idOf(s.splitFrom) === id),
+      (s) =>
+        s.key !== key &&
+        s.splitFrom !== null &&
+        (s.splitFrom === key || (id !== null && this.idOf(s.splitFrom) === id)),
     );
   }
 

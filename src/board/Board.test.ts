@@ -284,3 +284,17 @@ test("振り返りの「## 」の行は見出しとして出し、Mod+Shift+R �
     "- 早く終えた",
   ]);
 });
+
+test("振り返りを入力してすぐ別の日へ移っても、前の日には入力した本文を保存する", async () => {
+  const { calls } = await start({ reflection: "はじめ" });
+  const content = $(".ref-ed .cm-content")!;
+  // CodeMirror に入力を渡す（文字を足して input を起こす）
+  const line = content.querySelector(".cm-line")!;
+  line.textContent = "はじめ、つづき";
+  content.dispatchEvent(new Event("input", { bubbles: true }));
+  await until(() => true);
+  session!.show("2026-11-04");
+  await until(() => calls.some((c) => c.cmd === "save_text_doc" && c.args.date === TODAY));
+  const saves = calls.filter((c) => c.cmd === "save_text_doc" && c.args.date === TODAY).map((c) => c.args.body);
+  expect(saves).not.toContain("");
+});

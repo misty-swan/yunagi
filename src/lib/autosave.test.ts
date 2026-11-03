@@ -513,7 +513,7 @@ test("行の分割は、失敗したら2行を持ったまま再試行し、送�
   const status = new SaveStatus();
   const saved: [string, string][] = [];
   const items = new ItemSaves(status, { saved: (key, it) => saved.push([key, it.text]) });
-  items.split(ID, "tmp-1", { date: DATE, kind: "todo" }, "設計を", "読む");
+  items.split(ID, "tmp-1", "設計を", "読む");
   await vi.advanceTimersByTimeAsync(0);
   expect(status.failing).toBe(true);
   // 再試行を待つ間の入力（元の行・新しい行とも）は、次の分割にまとめる
@@ -544,22 +544,12 @@ test("分割で作る行を何も書かずにやめたら、元の行の本文�
   const status = new SaveStatus();
   const items = new ItemSaves(status);
   // 新しい行が空のときは、分割を送らない
-  items.split(ID, "tmp-1", { date: DATE, kind: "todo" }, "設計を", "");
+  items.split(ID, "tmp-1", "設計を", "");
   await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
   expect(calls).toEqual([]);
   expect(items.discard("tmp-1")).toBe(true);
   await items.flush(ID);
   expect(calls.map((c) => [c.cmd, c.args])).toEqual([["save_item", { id: ID, fields: { text: "設計を" } }]]);
-});
-
-test("分割の元の行が空なら、元の項目は変えずに、新しい行をそのすぐ後に作る", async () => {
-  const calls = mockCore(() => ({ ...item("読む"), id: ID2 }));
-  const items = new ItemSaves(new SaveStatus());
-  items.split(ID, "tmp-1", { date: DATE, kind: "blocker" }, " ", "読む");
-  await items.flush("tmp-1");
-  expect(calls.map((c) => [c.cmd, c.args])).toEqual([
-    ["add_item", { date: DATE, kind: "blocker", text: "読む", position: { at: "after", id: ID } }],
-  ]);
 });
 
 test("分割を送っている間の元の行の入力は、分割の後に元の項目の保存として送る", async () => {
@@ -572,7 +562,7 @@ test("分割を送っている間の元の行の入力は、分割の後に元�
     return { updated: true, item: item(String((args.fields as { text?: string }).text)) };
   });
   const items = new ItemSaves(new SaveStatus());
-  items.split(ID, "tmp-1", { date: DATE, kind: "todo" }, "a", "b");
+  items.split(ID, "tmp-1", "a", "b");
   await vi.advanceTimersByTimeAsync(0);
   items.editText(ID, "ab");
   // 作り始めた行はやめられない
