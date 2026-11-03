@@ -3,3 +3,5 @@
 
 pub mod day;
 pub mod logical_date;
+pub mod note_body;
+pub mod text_doc;
