@@ -28,9 +28,12 @@ function fold(s: string, unicode: boolean): string {
   return out;
 }
 
-/** 検索語（前後の空白を除いたもの）。 */
+/**
+ * 検索語（前後の空白を除いたもの）。除く空白はコアの `str::trim`（Unicode の White_Space）にそろえる。
+ * JavaScript の `trim` は U+FEFF も除き、U+0085 は除かないので、そのままでは画面とコアで検索語がずれる。
+ */
 export function searchTerm(query: string): string {
-  return query.trim();
+  return query.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
 }
 
 /** `text` の中で、最初に検索語 `query` と一致した範囲。無ければ `null`。 */

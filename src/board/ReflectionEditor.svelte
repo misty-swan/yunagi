@@ -132,8 +132,9 @@
     const d = date;
     if (view === null) return;
     untrack(() => {
-      // 読み終えるまでは、前に読んだ日のままにしない（読み直している途中の空の本文へ `find` で移らないため）
-      if (loaded !== d) loaded = null;
+      // 読み終えるまでは、読んだ日にしない（同じ日を読み直すときも。読んでいる途中の空の本文へ `find` で
+      // 移らないため）
+      loaded = null;
       void editor.open(d);
     });
   });

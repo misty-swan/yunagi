@@ -13,7 +13,11 @@ test("年を含む日付を、区切りによらず読む（全角・曜日付�
 
 test("年の無い日付は、今日の年にする", () => {
   expect(parseDateQuery("10/31", TODAY)).toBe("2026-10-31");
-  expect(parseDateQuery("1.5", TODAY)).toBe("2026-01-05");
+  expect(parseDateQuery("1-5", TODAY)).toBe("2026-01-05");
+  // 区切りが . のときは、上部のバーの表示の形（曜日付き）だけ
+  expect(parseDateQuery("10.29 Thu", TODAY)).toBe("2026-10-29");
+  expect(parseDateQuery("1.2", TODAY)).toBeNull();
+  expect(parseDateQuery("3.14", TODAY)).toBeNull();
   expect(parseDateQuery("12月24日", TODAY)).toBe("2026-12-24");
 });
 

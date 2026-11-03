@@ -136,10 +136,12 @@
     }
   }
 
-  // 持ち越し先の印・検索パレットの項目の結果：その日を開いて、その項目が一覧に入ったら選ぶ（読み直しと
-  // 行き違って、まだ入っていない一覧が先に届くことがあるため）。選ぶ前にほかの日へ移ったら、選ぶのを
-  // やめる（後でその日を開いたときに、思わぬところでフォーカスを動かさないため）
-  let pendingSelect = $state<{ date: LogicalDate; id: Id } | null>(null);
+  // 持ち越し先の印・検索パレットの項目の結果：その日を開いて、その項目を選ぶ。持ち越し先の印からは、
+  // 項目が一覧に入るまで待つ（読み直しと行き違って、まだ入っていない一覧が先に届くことがあるため）。
+  // パレットの結果からは、その日を読み終えて項目が無ければ（検索の後に消されたなど）、その日を開くだけに
+  // する（`mustExist`。後で戻されたときに、思わぬところでフォーカスを動かさないため。画面設計書 6章）。
+  // どちらも、選ぶ前にほかの日へ移ったら、選ぶのをやめる
+  let pendingSelect = $state<{ date: LogicalDate; id: Id; mustExist?: boolean } | null>(null);
   function openCarried(to: CarriedTo) {
     pendingSelect = { date: to.date, id: to.id };
     session.show(to.date);
@@ -158,7 +160,11 @@
     untrack(() => {
       if (p === null || d !== p.date) return;
       const row = model.todos.find((r) => r.id === p.id) ?? model.blockers.find((r) => r.id === p.id);
-      if (row === undefined) return;
+      if (row === undefined) {
+        // 読み終えた（表示しようとしている日と表示している日がそろった）一覧に無ければ、やめる
+        if (p.mustExist && session.showing === session.date) pendingSelect = null;
+        return;
+      }
       pendingSelect = null;
       requestFocus({ key: row.key, field: "text", offset: "end" });
     });
@@ -173,7 +179,7 @@
     untrack(() => {
       if (!("itemId" in tg)) return;
       // 移る先は Board が持つので、App の移る先はここで終える（その日を開くのは App）
-      pendingSelect = { date: tg.date, id: tg.itemId };
+      pendingSelect = { date: tg.date, id: tg.itemId, mustExist: true };
       onTargetDone();
     });
   });

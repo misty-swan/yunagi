@@ -18,6 +18,7 @@
     paletteCommands,
     SEARCH_LIMIT,
     type CommandContext,
+    type HitView,
     type Palette,
     type PaletteChoice,
   } from "../lib/palette.svelte";
@@ -59,14 +60,14 @@
   });
 
   type Row = { id: string; choice: PaletteChoice };
+  /** 結果の行の印（種類と元の行で決まる。答えが変わっても同じ結果の行は描き直さない）。 */
+  const hitId = (v: HitView) => `hit-${v.hit.kind}-${v.hit.refId}`;
   /** 選べる行（表示の順。日付へ移動・コマンド・検索結果）。 */
   const rows = $derived.by((): Row[] => {
     const out: Row[] = [];
     if (date !== null) out.push({ id: `date-${date}`, choice: { kind: "date", date } });
     for (const c of shownCommands) out.push({ id: `cmd-${c.id}`, choice: { kind: "command", id: c.id } });
-    views.forEach((v, i) =>
-      out.push({ id: `hit-${i}-${v.hit.kind}-${v.hit.refId}`, choice: { kind: "hit", view: v, query: palette.viewsFor } }),
-    );
+    for (const v of views) out.push({ id: hitId(v), choice: { kind: "hit", view: v, query: palette.viewsFor } });
     return out;
   });
   const indexOf = $derived(new Map(rows.map((r, i) => [r.id, i])));
@@ -114,9 +115,6 @@
     void tick().then(() => document.getElementById(id)?.scrollIntoView?.({ block: "nearest" }));
   });
 
-  function close() {
-    palette.close();
-  }
 
   /** 閉じて、開く直前の所へフォーカスを戻してから、選んだものを行う（行う先がフォーカスを移せるように）。 */
   function choose(i: number) {
@@ -149,7 +147,7 @@
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
     if (e.key === "Escape") {
       e.preventDefault();
-      close();
+      palette.close();
     } else if (e.key === "ArrowDown" && plain) {
       e.preventDefault();
       move(1);
@@ -164,7 +162,7 @@
       if (action === null) return;
       // 骨組みの操作はしない。Mod+K はもう一度押すと閉じる
       e.preventDefault();
-      if (action === "palette" && !e.repeat) close();
+      if (action === "palette" && !e.repeat) palette.close();
     }
   }
 
@@ -176,7 +174,7 @@
     e.preventDefault();
     e.stopPropagation();
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Escape") close();
+    if (e.key === "Escape") palette.close();
     else input?.focus();
   }
 
@@ -226,7 +224,7 @@
 
 {#if palette.open}
   <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-  <div class="ov" onkeydown={onKeydown} onmousedown={(e) => e.target === e.currentTarget && close()}>
+  <div class="ov" onkeydown={onKeydown} onmousedown={(e) => e.target === e.currentTarget && palette.close()}>
     <div class="panel" role="dialog" aria-modal="true" aria-label={p.label} data-palette bind:this={panel}>
       <div class="field">
         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -273,7 +271,7 @@
           {/if}
           {#if hasQuery}
             <li class="group label" role="presentation">{m.labels.palette.results}</li>
-            {#each views as v, i (`${i}-${v.hit.kind}-${v.hit.refId}`)}
+            {#each views as v (hitId(v))}
               {#snippet hitRow()}
                 <span class="date">{longDate(v.hit.date)}</span>
                 <span class="kind label">{m.labels.palette.kind[v.hit.kind]}</span>
@@ -287,7 +285,7 @@
                   <span class="carried">{carriedLabel(v.hit.date, v.hit.carriedTo.date)}</span>
                 {/if}
               {/snippet}
-              {@render option(`hit-${i}-${v.hit.kind}-${v.hit.refId}`, hitRow, "hit")}
+              {@render option(hitId(v), hitRow, "hit")}
             {/each}
           {/if}
         </ul>

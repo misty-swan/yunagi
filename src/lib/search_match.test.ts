@@ -1,10 +1,13 @@
 import { expect, test } from "vitest";
-import { findMatch, snippetOf } from "./search_match";
+import { findMatch, searchTerm, snippetOf } from "./search_match";
 
 test("検索語の前後の空白を除き、全体を1つの文字列として探す", () => {
   expect(findMatch("API の応答を確かめる", "  応答を ")).toEqual({ from: 5, to: 8 });
   expect(findMatch("API の応答", "応答 確かめ")).toBeNull();
   expect(findMatch("何か", "   ")).toBeNull();
+  // 除く空白はコアの str::trim（Unicode の White_Space）にそろえる
+  expect(searchTerm("\u0085 　語\t")).toBe("語");
+  expect(searchTerm("﻿語")).toBe("﻿語");
 });
 
 test("大文字・小文字の扱いはコアにそろえる（3文字以上は ASCII 以外も、2文字以下は ASCII だけそろえる）", () => {

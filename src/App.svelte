@@ -154,7 +154,8 @@
   // ---- 検索パレット（S-04。画面設計書 6章） ----
 
   const palette = new Palette();
-  onDestroy(() => palette.stop());
+  // 閉じると、待っている検索もやめる
+  onDestroy(() => palette.close());
   /** 検索結果から移る、整理モードの中の先（Board が移り終えたら `null` に戻す）。 */
   let boardTarget = $state<BoardTarget | null>(null);
   let targetSeq = 0;

@@ -104,8 +104,9 @@ export class Palette {
   input(query: string, composing = false) {
     this.query = query;
     if (composing) {
-      // 変換を終えるまで待つ（変換の前の検索語で送らない）
+      // 変換を終えるまで待つ（変換の前の検索語で送らない）。前の検索語の失敗は出さない
       this.#cancel();
+      this.failed = false;
       return;
     }
     this.#schedule();
@@ -114,11 +115,6 @@ export class Palette {
   /** いまの入力の検索語（前後の空白を除いたもの。結果を出すかどうかもこれで決める）。 */
   get term(): string {
     return searchTerm(this.query);
-  }
-
-  /** 終わったら呼ぶ（待っている検索をやめる）。 */
-  stop() {
-    this.close();
   }
 
   #reset() {

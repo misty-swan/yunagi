@@ -3,7 +3,9 @@
 // 受け付ける形（前後の空白は除く。全角の数字・記号も半角として読む）：
 // - 年を含む日付：`2026-10-31`・`2026/10/31`・`2026.10.31`（月と日は1桁でもよい）、`2026年10月31日`。
 //   後ろに曜日の英字（`2026.10.28 Wed`。パレットの表示の形）が付いていてもよい（曜日は読まない）。
-// - 年の無い日付：`10-31`・`10/31`・`10.31`・`10月31日`。年は今日（論理日付）の年にする。
+// - 年の無い日付：`10-31`・`10/31`・`10月31日`と、上部のバーの表示の形 `10.29 Thu`（区切りが `.` の
+//   ときは曜日の英字が要る。`1.2`・`3.14` のような版の番号や小数を、検索せずに日付として選ばないため）。
+//   年は今日（論理日付）の年にする。
 // - 相対的な日付：today・yesterday・tomorrow（大文字・小文字は問わない）、今日・昨日・明日・一昨日・明後日
 //   （かなの きょう・きのう・あした・おととい・あさって も）。今日（論理日付）を基準にする。
 // 暦に無い日（`2026-02-30` など）は日付として扱わない。
@@ -43,6 +45,7 @@ export function parseDateQuery(text: string, today: LogicalDate): LogicalDate | 
   if (rel !== undefined) return addDays(today, rel);
   const m = NUMERIC.exec(q) ?? KANJI.exec(q);
   if (m === null) return null;
+  if (m[1] === undefined && /^\d{1,2}\.\d{1,2}$/.test(q)) return null;
   const year = m[1] === undefined ? Number(today.slice(0, 4)) : Number(m[1]);
   return dateOf(year, Number(m[2]), Number(m[3]));
 }
