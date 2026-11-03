@@ -26,6 +26,7 @@ use super::data_dir::{self, DataDirError};
 use super::migration::{self, Migration};
 use super::{Database, StorageError};
 use crate::domain::logical_date::LogicalDate;
+use crate::error::ErrorChain;
 
 /// 定期バックアップを残す数（日付の新しいものから）。
 ///
@@ -518,14 +519,12 @@ impl BackupError {
 
 impl fmt::Display for BackupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 原因のエラーの文は含めない（source() で返す。README「エラーの表示」）
         match self {
-            Self::Sqlite(e) => write!(f, "database error: {e}"),
-            Self::Io {
-                action,
-                path,
-                source,
-            } => write!(f, "could not {action} {}: {source}", path.display()),
-            Self::Copy(e) => write!(f, "could not copy the database: {e}"),
+            Self::Sqlite(_) => write!(f, "database error"),
+            Self::Io { action, path, .. } => write!(f, "could not {action} {}", path.display()),
+            Self::Copy(_) => write!(f, "could not copy the database"),
+            // 包むだけなので、中身をそのまま見せる（透過）
             Self::Storage(e) => write!(f, "{e}"),
             Self::NoDatabaseFile => write!(f, "the database is not stored in a file"),
             Self::NotABackup(path) => {
@@ -542,19 +541,22 @@ impl fmt::Display for BackupError {
                 "backup {} failed the integrity check: {result}",
                 path.display()
             ),
-            Self::RestoreFailed { source, saved } => write!(
+            Self::RestoreFailed { saved, .. } => write!(
                 f,
-                "restore failed and the previous data was put back from {}: {source}",
+                "restore failed and the previous data was put back from {}",
                 saved.display()
             ),
+            // 原因が2つある。source() は復元の失敗を返すので、戻す失敗はその原因までここに書く。
+            // source() の文が後ろにつながったとき、復元の原因と読めるよう、復元の失敗を最後に書く
             Self::RollbackFailed {
-                source,
                 rollback_error,
                 saved,
+                ..
             } => write!(
                 f,
-                "restore failed: {source}; putting back the previous data from {} also failed: {rollback_error}",
-                saved.display()
+                "putting back the previous data from {} failed ({}); the restore failed",
+                saved.display(),
+                ErrorChain(rollback_error.as_ref())
             ),
         }
     }
@@ -566,7 +568,8 @@ impl std::error::Error for BackupError {
             Self::Sqlite(e) => Some(e),
             Self::Io { source, .. } => Some(source),
             Self::Copy(e) => Some(e),
-            Self::Storage(e) => Some(e),
+            // Display と同じく透過。中身の原因を返す
+            Self::Storage(e) => e.source(),
             Self::RestoreFailed { source, .. } | Self::RollbackFailed { source, .. } => {
                 Some(source.as_ref())
             }
@@ -1047,8 +1050,8 @@ mod tests {
     fn assert_rejected(env: &Env, db: &mut Database, backup: &Path) -> BackupError {
         let before = names(&env.backups());
         let err = db.restore_backup(backup).unwrap_err();
-        assert_eq!(get(db.connection(), "a"), Some(1), "{err}");
-        assert_eq!(names(&env.backups()), before, "{err}");
+        assert_eq!(get(db.connection(), "a"), Some(1), "{err:?}");
+        assert_eq!(names(&env.backups()), before, "{err:?}");
         err
     }
 
