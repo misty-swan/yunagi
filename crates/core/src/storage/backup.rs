@@ -292,12 +292,11 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
     let backup = parse(&path).expect("backup names are built to be parsable");
 
     let tmp = dir.join(format!("{name}.tmp"));
-    let result = data_dir::copy_database(db_path, &tmp)
-        .map_err(BackupError::Copy)
-        .and_then(|()| fs::rename(&tmp, &path).map_err(|e| BackupError::io("rename", &tmp, e)));
-    if result.is_err() {
+    // 写すのに失敗したときは、copy_database が作りかけのものを片付けている
+    data_dir::copy_database(db_path, &tmp).map_err(BackupError::Copy)?;
+    if let Err(e) = fs::rename(&tmp, &path) {
         db_files::remove_with_side_files(&tmp);
-        return result.map(|()| backup);
+        return Err(BackupError::io("rename", &tmp, e));
     }
     let _ = db_copy::sync_dir(dir);
     Ok(backup)

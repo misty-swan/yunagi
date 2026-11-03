@@ -141,15 +141,17 @@ const KIND_ORDER: [SearchKind; 4] = [
 macro_rules! with_body {
     ($($inner:expr),+ $(,)?) => {
         concat!(
-            "SELECT kind, ref_id, date, CASE kind ",
+            // item も kind・date の列を持つので、結合したものを包んでから並べる
+            "SELECT * FROM (SELECT hit.kind AS kind, hit.ref_id AS ref_id, hit.date AS date, CASE hit.kind ",
             "WHEN 'note' THEN (SELECT body FROM note WHERE date = hit.ref_id) ",
             "WHEN 'reflection' THEN (SELECT body FROM reflection WHERE date = hit.ref_id) ",
-            "ELSE (SELECT text FROM item WHERE id = hit.ref_id) END, ",
-            "CASE WHEN kind IN ('note', 'reflection') THEN NULL ELSE (SELECT CASE WHEN ",
-            "status = 'resolved' THEN resolution_note END FROM item WHERE id = hit.ref_id) END ",
+            "ELSE i.text END, ",
+            "CASE WHEN i.status = 'resolved' THEN i.resolution_note END ",
             "FROM (",
             $($inner,)+
-            ") AS hit ORDER BY ",
+            // 項目の本文と解消メモは、item を1回引いて読む
+            ") AS hit LEFT JOIN item AS i ON hit.kind NOT IN ('note', 'reflection') ",
+            "AND i.id = hit.ref_id) ORDER BY ",
             order!(),
         )
     };

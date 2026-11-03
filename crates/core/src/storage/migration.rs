@@ -214,23 +214,21 @@ fn create_backup(
     }
 
     let tmp = path.with_extension("db.tmp");
-    let result = (|| {
-        db_copy::copy(conn, &tmp).map_err(|e| match e {
-            // 一時ファイルの名前ではなく、作ろうとしたバックアップの名前で知らせる
-            db_copy::CopyError::Corrupted { result, .. } => StorageError::BackupCorrupted {
-                path: path.clone(),
-                result,
-            },
-            e => e.into(),
-        })?;
-        fs::rename(&tmp, &path).map_err(|e| StorageError::io("rename", &tmp, e))?;
-        db_copy::sync_dir(backup_dir).map_err(|e| StorageError::io("sync", backup_dir, e))?;
-        Ok(())
-    })();
-    if result.is_err() {
+    // 写すのに失敗したときは、db_copy::copy が作りかけのものを片付けている
+    db_copy::copy(conn, &tmp).map_err(|e| match e {
+        // 一時ファイルの名前ではなく、作ろうとしたバックアップの名前で知らせる
+        db_copy::CopyError::Corrupted { result, .. } => StorageError::BackupCorrupted {
+            path: path.clone(),
+            result,
+        },
+        e => e.into(),
+    })?;
+    if let Err(e) = fs::rename(&tmp, &path) {
         db_files::remove_with_side_files(&tmp);
+        return Err(StorageError::io("rename", &tmp, e));
     }
-    result.map(|()| path)
+    db_copy::sync_dir(backup_dir).map_err(|e| StorageError::io("sync", backup_dir, e))?;
+    Ok(path)
 }
 
 /// バックアップの内容でデータベースを置き換える。

@@ -409,14 +409,22 @@ fn check_new_dir(dir: &Path) -> Result<(), DataDirError> {
     Ok(())
 }
 
-/// `db` を読み取り専用で開き、Yunagi のデータベースとして開けるかを確かめる（ファイルには書かない）。
+/// `db` を開き、Yunagi のデータベースとして開けるかを確かめる。
+///
+/// 作らない形の読み書きで開く（無いファイルを作らない）。読み取り専用で開くと、書き込みの途中で
+/// 止まったデータベース（中身のある `-journal` が残ったもの）を SQLite が巻き戻せずに読めず、
+/// [`super::Database::open`] なら開ける正しいデータベースを断ってしまうため。そのため、SQLite が開く
+/// ときに行う復旧（`-journal` の巻き戻し）と、閉じるときの `-wal` の書き戻しは起きうる
+/// （[`super::Database::open`] で開いたときと同じ）。表やスキーマの番号には書かない。閉じるときに
+/// SQLite が横の `-wal`・`-shm` を片付けるので、断ったときにも横にファイルを残さない。
 fn inspect_database(db: &Path) -> Result<(), DataDirError> {
     let read_error = |source| DataDirError::Inspect {
         path: db.to_path_buf(),
         source,
     };
-    let conn =
-        Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(read_error)?;
+    let mut flags = OpenFlags::default();
+    flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
+    let conn = Connection::open_with_flags(db, flags).map_err(read_error)?;
     let result: String = conn
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(read_error)?;
@@ -605,11 +613,19 @@ fn copy_symlink(from: &Path, to: &Path, created: &mut Created) -> Result<(), Dat
     }
 }
 
-/// データベース `from` を `to` に写す（[`db_copy::copy`]。写したものの整合性も確かめ、失敗したら
-/// 作りかけの `to` とその横のファイルを消す）。
+/// データベースのファイル `from` を `to` に写す（[`db_copy::copy`]。写したものの整合性も確かめ、
+/// 失敗したら作りかけの `to` とその横のファイルを消す）。`from` を開けなければ、そのパスを持つ
+/// [`DataDirError::Inspect`] を返す。
 pub(super) fn copy_database(from: &Path, to: &Path) -> Result<(), DataDirError> {
-    // 元は読み取り専用で開く（元のファイルに書かず、閉じるときに WAL を書き戻すこともしない）
-    let src = Connection::open_with_flags(from, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // 元は読み取り専用で開く（元のファイルに書かず、閉じるときに WAL を書き戻すこともしない）。
+    // 開けないときは、どのファイルかを知らせる
+    let src =
+        Connection::open_with_flags(from, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|source| {
+            DataDirError::Inspect {
+                path: from.to_path_buf(),
+                source,
+            }
+        })?;
     Ok(db_copy::copy(&src, to)?)
 }
 
@@ -697,7 +713,8 @@ pub enum DataDirError {
     NoDatabase(PathBuf),
     /// 選んだ保存先が無いか、フォルダでない。
     NotADirectory(PathBuf),
-    /// 選んだ保存先のデータベース `path` を読めなかった（SQLite のデータベースでないなど）。
+    /// データベース `path` を読めなかった（SQLite のデータベースでない、開けないなど）。
+    /// 選んだ保存先のデータベースを確かめるときと、写すときの元を開くときに使う。
     Inspect {
         path: PathBuf,
         source: rusqlite::Error,
@@ -1305,15 +1322,9 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap())
                 .unwrap();
         assert_eq!(saved["theme"], "dark");
-        // 確かめただけで、選んだデータベースには書いていない。読み取り専用で開いても SQLite は
-        // WAL モードのデータベースの横に -wal・-shm を作るが、-wal は空のまま（跡にならない）
+        // 確かめただけで、選んだデータベースには書いておらず、横にファイルも残さない
         assert_eq!(fs::read(database_path(&found)).unwrap(), before);
-        assert_eq!(
-            db_files::find_trace(&database_path(&found)),
-            Some(database_path(&found))
-        );
-        let wal = &db_files::side_files(&database_path(&found))[0];
-        assert!(fs::metadata(wal).map_or(true, |m| m.len() == 0));
+        assert_eq!(names_in(&found), [DATABASE_FILE_NAME]);
         // 記録したので、同じロックで開くと選んだデータベースを開く
         let db = Database::open(d.lock()).unwrap();
         let value: String = db
@@ -1323,6 +1334,53 @@ mod tests {
             })
             .unwrap();
         assert_eq!(value, "\"elsewhere\"");
+    }
+
+    /// `dir` の中の名前の一覧（並べたもの）。
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn use_existing_data_dir_accepts_a_database_left_with_a_hot_journal() {
+        // 書き込みの途中で止まったデータベース：本体には書きかけのページがあり、中身のある
+        // -journal が残っている。SQLite は開くときに巻き戻すので、読み取り専用では開けない
+        let d = dirs();
+        let src = d.root.join("src");
+        plain_db(&src, 1);
+        let found = d.root.join("found");
+        fs::create_dir(&found).unwrap();
+        {
+            let conn = Connection::open(database_path(&src)).unwrap();
+            // 書きかけのページを、確定の前に本体へ書き出させる
+            conn.execute_batch("PRAGMA cache_size = 1; BEGIN;").unwrap();
+            for i in 0..500 {
+                conn.execute("INSERT INTO note VALUES (?1)", [format!("{i:0>200}")])
+                    .unwrap();
+            }
+            let journal = db_files::side_files(&database_path(&src))[2].clone();
+            assert!(fs::metadata(&journal).unwrap().len() > 0);
+            fs::copy(database_path(&src), database_path(&found)).unwrap();
+            fs::copy(
+                &journal,
+                db_files::side_files(&database_path(&found))[2].clone(),
+            )
+            .unwrap();
+        }
+        use_existing_data_dir(&d.lock(), &found).unwrap();
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), found);
+        // 巻き戻され、確定していた行だけが残る
+        assert_eq!(read_note(&found), "elsewhere");
+        let count: i64 = Connection::open(database_path(&found))
+            .unwrap()
+            .query_row("SELECT count(*) FROM note", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -1417,6 +1475,17 @@ mod tests {
             refuse(&newer),
             DataDirError::UnsupportedSchema { found: 99, .. }
         ));
+        // WAL モードのデータベースを断っても、横に -wal・-shm を残さない（同期フォルダに置かせない）
+        Connection::open(database_path(&newer))
+            .unwrap()
+            .pragma_update(None, "journal_mode", "WAL")
+            .unwrap();
+        assert_eq!(names_in(&newer), [DATABASE_FILE_NAME]);
+        assert!(matches!(
+            refuse(&newer),
+            DataDirError::UnsupportedSchema { found: 99, .. }
+        ));
+        assert_eq!(names_in(&newer), [DATABASE_FILE_NAME]);
 
         let corrupted = d.root.join("corrupted");
         plain_db(&corrupted, 1);
