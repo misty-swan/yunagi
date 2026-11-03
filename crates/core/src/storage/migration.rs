@@ -266,6 +266,7 @@ fn sync_dir(dir: &Path) -> std::io::Result<()> {
 mod tests {
     use std::time::Duration;
 
+    use super::super::data_dir::DefaultDir;
     use super::super::{Database, DbLock};
     use super::*;
 
@@ -302,7 +303,11 @@ mod tests {
     /// ロックを取ってから、マイグレーションの一覧を指定して開く。テストでは、既定ディレクトリの
     /// 代わりにデータベースと同じ一時フォルダにロックファイルを置く（本番では別のフォルダ）。
     fn open_with(path: &Path, migrations: &[Migration]) -> Result<Database, StorageError> {
-        let lock = DbLock::acquire(path.parent().unwrap(), Duration::ZERO).unwrap();
+        let lock = DbLock::acquire(
+            &DefaultDir::for_test(path.parent().unwrap()),
+            Duration::ZERO,
+        )
+        .unwrap();
         Database::open_with_migrations(lock, path, migrations)
     }
 

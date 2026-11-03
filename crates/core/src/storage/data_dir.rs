@@ -3,6 +3,8 @@
 //!
 //! - 既定ディレクトリは OS ごとに決まる（[`default_dir`]）。`config.json`・`yunagi.lock`・
 //!   ローカル API のトークンとソケットは、保存先の設定に関係なく常にここに置く。
+//!   既定ディレクトリは [`DefaultDir`] 型で受け渡す。本番のコードでは [`default_dir`] でしか
+//!   作れないので、ほかのフォルダ（保存先など）を既定ディレクトリとして渡せない。
 //! - 保存先（`data_dir`）には `yunagi.db` と `backups/` を置く。保存先は `config.json` に
 //!   記録する。`config.json` が無ければ、既定ディレクトリを保存先とする（[`resolve_data_dir`]）。
 //! - 保存先の変更は [`change_data_dir`] で行う。データベースを移してから `config.json` を
@@ -17,6 +19,8 @@ use std::path::{Component, Path, PathBuf};
 use rusqlite::backup::NO_PROGRESS;
 use rusqlite::{Connection, MAIN_DB, OpenFlags};
 use serde::{Deserialize, Serialize};
+
+use super::DbLock;
 
 /// 設定ファイルの名前。既定ディレクトリに置く。
 pub const CONFIG_FILE_NAME: &str = "config.json";
@@ -52,12 +56,43 @@ impl Platform {
     }
 }
 
+/// 既定ディレクトリ（アーキテクチャ設計書 6章）。`config.json`・`yunagi.lock` を置くフォルダ。
+///
+/// 本番のコードでは [`default_dir`] でしか作れない。これで、ロック（[`super::DbLock`]）や
+/// 設定ファイルを、既定ディレクトリ以外のフォルダ（保存先 `data_dir` など）で扱ってしまうことを
+/// 型で防ぐ。保存先を変えた利用者のアプリと CLI・MCP が、別々のロックファイルを取り合わずに
+/// 済む（アーキテクチャ設計書 4.2）。
+///
+/// テストでは、一時フォルダを既定ディレクトリとして使うために `DefaultDir::for_test` で作る
+/// （このクレートのテストのビルドにだけある）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefaultDir(PathBuf);
+
+impl DefaultDir {
+    /// フォルダのパス。
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    /// テスト用：`path` を既定ディレクトリとして扱う。`#[cfg(test)]` なので本番のコードからは
+    /// 使えない。
+    #[cfg(test)]
+    pub(crate) fn for_test(path: impl Into<PathBuf>) -> Self {
+        Self(path.into())
+    }
+}
+
 /// 動いている OS の既定ディレクトリ。環境変数から求める（[`default_dir_for`]）。
-pub fn default_dir() -> Result<PathBuf, DataDirError> {
-    default_dir_for(Platform::current(), |name| std::env::var_os(name))
+///
+/// [`DefaultDir`] を作れる、本番で唯一の関数。フォルダは作らない。
+pub fn default_dir() -> Result<DefaultDir, DataDirError> {
+    default_dir_for(Platform::current(), |name| std::env::var_os(name)).map(DefaultDir)
 }
 
 /// `platform` の既定ディレクトリを、`env` で引いた環境変数から求める。
+///
+/// 求め方を確かめるための関数で、結果は [`DefaultDir`] ではなくただのパスにする
+/// （`env` を差し替えれば任意のフォルダを返せるため。既定ディレクトリとして使うのは [`default_dir`]）。
 ///
 /// | OS | 既定ディレクトリ |
 /// | --- | --- |
@@ -161,7 +196,8 @@ impl Config {
     /// 読めない・JSON として壊れている・`data_dir` が絶対パスでないときはエラーにする
     /// （黙って既定の保存先で開くと、データが消えたように見え、別の場所に新しいデータベースを
     /// 作ってしまうため）。
-    pub fn load(default_dir: &Path) -> Result<Self, DataDirError> {
+    pub fn load(default_dir: &DefaultDir) -> Result<Self, DataDirError> {
+        let default_dir = default_dir.path();
         let path = default_dir.join(CONFIG_FILE_NAME);
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -189,7 +225,8 @@ impl Config {
     ///
     /// 一時ファイルに書いてディスクに反映してから名前を変えるので、途中で失敗しても
     /// 元の `config.json` は壊れない。
-    pub fn save(&self, default_dir: &Path) -> Result<(), DataDirError> {
+    pub fn save(&self, default_dir: &DefaultDir) -> Result<(), DataDirError> {
+        let default_dir = default_dir.path();
         fs::create_dir_all(default_dir)
             .map_err(|e| DataDirError::io("create directory", default_dir, e))?;
         let path = default_dir.join(CONFIG_FILE_NAME);
@@ -214,7 +251,7 @@ impl Config {
 
 /// 既定ディレクトリ `default_dir` の `config.json` から保存先を求める。
 /// `config.json` が無ければ `default_dir` そのもの。
-pub fn resolve_data_dir(default_dir: &Path) -> Result<PathBuf, DataDirError> {
+pub fn resolve_data_dir(default_dir: &DefaultDir) -> Result<PathBuf, DataDirError> {
     Ok(Config::load(default_dir)?.data_dir)
 }
 
@@ -245,10 +282,20 @@ pub struct ChangeReport {
 /// `config.json` は元の保存先を指したまま（新しい保存先に残ったものは 1 の確認で断られるので、
 /// 消してからやり直す）。
 ///
-/// 呼び出し側は、先に `yunagi.lock` を取り（アーキテクチャ設計書 4章。ロックは YUN-41）、
-/// 自分の [`super::Database`] を閉じてから呼ぶ。移している間に別のプロセスがデータベースに
-/// 書くと、その書き込みは新しい保存先に移らない。
-pub fn change_data_dir(default_dir: &Path, new_dir: &Path) -> Result<ChangeReport, DataDirError> {
+/// `yunagi.lock` のロック `lock` を持ち、データベースを閉じてから呼ぶ（アーキテクチャ設計書
+/// 6章）。移している間に別のプロセスがデータベースに書くと、その書き込みは新しい保存先に
+/// 移らないため。これは型で守る：
+///
+/// - ロック（[`DbLock`]）を渡さないと呼べない。`config.json` は、ロックを取った既定ディレクトリ
+///   （[`DbLock::default_dir`]）のものを使う。
+/// - 開いているデータベース（[`super::Database`]）はロックを持っているので、ロックが手元に
+///   あれば、このプロセスがコアを通して開いたデータベースは閉じている（閉じるのに失敗した
+///   ときも、ロックはデータベースと一緒にしか返らない）。アプリは
+///   [`super::Database::close_keeping_lock`] で、ロックを離さずに閉じてから呼ぶ。
+///   コアを通さずに開いた接続（`rusqlite::Connection` を直接使うもの）までは型で防げないので、
+///   データベースはコアの外で開かない。
+pub fn change_data_dir(lock: &DbLock, new_dir: &Path) -> Result<ChangeReport, DataDirError> {
+    let default_dir = lock.default_dir();
     if !new_dir.is_absolute() {
         return Err(DataDirError::NotAbsolute(new_dir.to_path_buf()));
     }
@@ -684,8 +731,11 @@ impl From<rusqlite::Error> for DataDirError {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::time::Duration;
 
     use tempfile::TempDir;
+
+    use super::super::Database;
 
     fn env_of(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
         let map: HashMap<String, OsString> = vars
@@ -698,8 +748,23 @@ mod tests {
     /// テスト用の場所：既定ディレクトリ・元の保存先・新しい保存先の親を、一時フォルダの下に作る。
     struct Dirs {
         _tmp: TempDir,
+        /// 既定ディレクトリのパス（ファイルを置いて確かめる用）。
         default: PathBuf,
+        /// 同じフォルダを既定ディレクトリとして渡す用。
+        dd: DefaultDir,
         root: PathBuf,
+    }
+
+    impl Dirs {
+        /// 既定ディレクトリのロックを取る。
+        fn lock(&self) -> DbLock {
+            DbLock::acquire(&self.dd, Duration::ZERO).unwrap()
+        }
+
+        /// ロックを取ってから保存先を `new_dir` に変え、ロックを離す。
+        fn change(&self, new_dir: &Path) -> Result<ChangeReport, DataDirError> {
+            change_data_dir(&self.lock(), new_dir)
+        }
     }
 
     fn dirs() -> Dirs {
@@ -709,6 +774,7 @@ mod tests {
         fs::create_dir(&default).unwrap();
         Dirs {
             _tmp: tmp,
+            dd: DefaultDir::for_test(&default),
             default,
             root,
         }
@@ -798,7 +864,7 @@ mod tests {
     #[test]
     fn missing_config_means_default_dir() {
         let d = dirs();
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
         assert!(!d.default.join(CONFIG_FILE_NAME).exists());
     }
 
@@ -811,16 +877,16 @@ mod tests {
             serde_json::json!({ "data_dir": data, "future": { "x": 1 } }).to_string(),
         )
         .unwrap();
-        let mut config = Config::load(&d.default).unwrap();
+        let mut config = Config::load(&d.dd).unwrap();
         assert_eq!(config.data_dir, data);
         config.data_dir = d.root.join("other");
-        config.save(&d.default).unwrap();
+        config.save(&d.dd).unwrap();
 
         let saved: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap())
                 .unwrap();
         assert_eq!(saved["future"], serde_json::json!({ "x": 1 }));
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.root.join("other"));
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.root.join("other"));
         assert!(!d.default.join("config.json.tmp").exists());
     }
 
@@ -828,15 +894,15 @@ mod tests {
     fn config_without_data_dir_means_default_dir() {
         let d = dirs();
         fs::write(d.default.join(CONFIG_FILE_NAME), r#"{"theme": "dark"}"#).unwrap();
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
         // 保存先を変えても、ほかの項目は残る
         let new_dir = d.root.join("new");
-        change_data_dir(&d.default, &new_dir).unwrap();
+        d.change(&new_dir).unwrap();
         let saved: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(d.default.join(CONFIG_FILE_NAME)).unwrap())
                 .unwrap();
         assert_eq!(saved["theme"], "dark");
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), new_dir);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
     }
 
     #[test]
@@ -845,12 +911,12 @@ mod tests {
         let path = d.default.join(CONFIG_FILE_NAME);
         fs::write(&path, "{ not json").unwrap();
         assert!(matches!(
-            Config::load(&d.default),
+            Config::load(&d.dd),
             Err(DataDirError::InvalidConfig { .. })
         ));
         fs::write(&path, r#"{"data_dir": "relative"}"#).unwrap();
         assert!(matches!(
-            Config::load(&d.default),
+            Config::load(&d.dd),
             Err(DataDirError::NotAbsolute(_))
         ));
     }
@@ -866,11 +932,11 @@ mod tests {
         // 開いたままの接続は、閉じると WAL を書き戻して消すので、閉じずに置く
         // （本番では閉じてから呼ぶ。ここでは WAL にだけある書き込みが写ることを確かめる）
         let new_dir = d.root.join("sync/Yunagi");
-        let report = change_data_dir(&d.default, &new_dir).unwrap();
+        let report = d.change(&new_dir).unwrap();
         drop(conn);
 
         assert_eq!(report, ChangeReport::default());
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), new_dir);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
         assert_eq!(read_note(&new_dir), "kept in wal");
         assert_eq!(
             fs::read(backups_dir(&new_dir).join("nested/b.db")).unwrap(),
@@ -907,7 +973,7 @@ mod tests {
         std::os::unix::fs::symlink("../../archive", backups_dir(&d.default).join("rel")).unwrap();
 
         let new_dir = d.root.join("new");
-        change_data_dir(&d.default, &new_dir).unwrap();
+        d.change(&new_dir).unwrap();
         let link = backups_dir(&new_dir).join("archive");
         assert_eq!(fs::read_link(&link).unwrap(), outside);
         assert_eq!(fs::read(link.join("old.db")).unwrap(), b"archived");
@@ -928,7 +994,7 @@ mod tests {
         fs::set_permissions(&file, ro).unwrap();
 
         let new_dir = d.root.join("new");
-        change_data_dir(&d.default, &new_dir).unwrap();
+        d.change(&new_dir).unwrap();
         let copied = backups_dir(&new_dir).join("a.db");
         assert_eq!(fs::read(&copied).unwrap(), b"backup");
         assert!(fs::metadata(&copied).unwrap().permissions().readonly());
@@ -945,7 +1011,7 @@ mod tests {
         fs::write(backups.join("mine.db"), b"mine").unwrap();
         fs::set_permissions(&backups, fs::Permissions::from_mode(0o300)).unwrap();
         let readable = fs::read_dir(&backups).is_ok(); // root で動かすと読めてしまう
-        let result = change_data_dir(&d.default, &new_dir);
+        let result = d.change(&new_dir);
         fs::set_permissions(&backups, fs::Permissions::from_mode(0o700)).unwrap();
         if readable {
             assert!(matches!(result, Err(DataDirError::TargetHasBackups(_))));
@@ -953,7 +1019,7 @@ mod tests {
             assert!(matches!(result, Err(DataDirError::Io { .. })), "{result:?}");
         }
         assert_eq!(fs::read(backups.join("mine.db")).unwrap(), b"mine");
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
     }
 
     #[test]
@@ -964,7 +1030,7 @@ mod tests {
         let before = fs::read(&wal).unwrap();
         // 記録で失敗させ、元が残る場合に、元の WAL が書き戻されていないことを確かめる
         fs::create_dir(d.default.join("config.json.tmp")).unwrap();
-        assert!(change_data_dir(&d.default, &d.root.join("new")).is_err());
+        assert!(d.change(&d.root.join("new")).is_err());
         assert_eq!(fs::read(&wal).unwrap(), before);
         drop(conn);
     }
@@ -972,11 +1038,12 @@ mod tests {
     #[test]
     fn moved_database_opens_in_wal_mode() {
         let d = dirs();
-        let lock = || super::super::DbLock::acquire(&d.default, std::time::Duration::ZERO).unwrap();
-        drop(super::super::Database::open(lock(), database_path(&d.default)).unwrap());
+        // アプリの流れ：開いたデータベースを、ロックを離さずに閉じてから移し、同じロックで開き直す
+        let db = Database::open(d.lock(), database_path(&d.default)).unwrap();
+        let lock = db.close_keeping_lock().unwrap();
         let new_dir = d.root.join("new");
-        change_data_dir(&d.default, &new_dir).unwrap();
-        let db = super::super::Database::open(lock(), database_path(&new_dir)).unwrap();
+        change_data_dir(&lock, &new_dir).unwrap();
+        let db = Database::open(lock, database_path(&new_dir)).unwrap();
         let mode: String = db
             .connection()
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
@@ -985,18 +1052,31 @@ mod tests {
     }
 
     #[test]
+    fn change_uses_the_config_of_the_locked_default_dir() {
+        let d = dirs();
+        let new_dir = d.root.join("new");
+        change_data_dir(&d.lock(), &new_dir).unwrap();
+        // config.json はロックを取った既定ディレクトリに書かれ、ロックファイルもそこに残る。
+        // 保存先には、どちらも置かない
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
+        assert!(d.default.join(super::super::LOCK_FILE_NAME).exists());
+        assert!(!new_dir.join(super::super::LOCK_FILE_NAME).exists());
+        assert!(!new_dir.join(CONFIG_FILE_NAME).exists());
+    }
+
+    #[test]
     fn change_twice_moves_from_recorded_data_dir() {
         let d = dirs();
         drop(make_db_with_wal(&d.default));
         let first = d.root.join("first");
         let second = d.root.join("second");
-        change_data_dir(&d.default, &first).unwrap();
-        change_data_dir(&d.default, &second).unwrap();
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), second);
+        d.change(&first).unwrap();
+        d.change(&second).unwrap();
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), second);
         assert_eq!(read_note(&second), "kept in wal");
         assert!(!database_path(&first).exists());
         // 既定ディレクトリに戻すこともできる
-        change_data_dir(&d.default, &d.default).unwrap();
+        d.change(&d.default).unwrap();
         assert_eq!(read_note(&d.default), "kept in wal");
     }
 
@@ -1004,9 +1084,9 @@ mod tests {
     fn change_without_database_only_records() {
         let d = dirs();
         let new_dir = d.root.join("empty");
-        change_data_dir(&d.default, &new_dir).unwrap();
+        d.change(&new_dir).unwrap();
         assert!(new_dir.is_dir());
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), new_dir);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
     }
 
     #[test]
@@ -1015,11 +1095,11 @@ mod tests {
         drop(make_db_with_wal(&d.default));
 
         assert!(matches!(
-            change_data_dir(&d.default, Path::new("relative")),
+            d.change(Path::new("relative")),
             Err(DataDirError::NotAbsolute(_))
         ));
         assert!(matches!(
-            change_data_dir(&d.default, &d.default),
+            d.change(&d.default),
             Err(DataDirError::SameDirectory(_))
         ));
 
@@ -1028,10 +1108,7 @@ mod tests {
             backups_dir(&d.default).join("moved"),
         ] {
             assert!(
-                matches!(
-                    change_data_dir(&d.default, &inside),
-                    Err(DataDirError::InsideBackups(_))
-                ),
+                matches!(d.change(&inside), Err(DataDirError::InsideBackups(_))),
                 "{inside:?}"
             );
         }
@@ -1043,10 +1120,7 @@ mod tests {
             d.default.join("missing/../backups/sub"),
         ] {
             assert!(
-                matches!(
-                    change_data_dir(&d.default, &sneaky),
-                    Err(DataDirError::NotNormalized(_))
-                ),
+                matches!(d.change(&sneaky), Err(DataDirError::NotNormalized(_))),
                 "{sneaky:?}"
             );
         }
@@ -1056,10 +1130,7 @@ mod tests {
         {
             use std::os::unix::ffi::OsStrExt;
             let bad = d.root.join(std::ffi::OsStr::from_bytes(b"bad\xff"));
-            assert!(matches!(
-                change_data_dir(&d.default, &bad),
-                Err(DataDirError::NotUtf8(_))
-            ));
+            assert!(matches!(d.change(&bad), Err(DataDirError::NotUtf8(_))));
             assert!(!bad.exists());
         }
 
@@ -1067,7 +1138,7 @@ mod tests {
         fs::create_dir(&has_wal).unwrap();
         fs::write(has_wal.join("yunagi.db-wal"), b"stale").unwrap();
         assert!(matches!(
-            change_data_dir(&d.default, &has_wal),
+            d.change(&has_wal),
             Err(DataDirError::TargetHasDatabase(_))
         ));
 
@@ -1075,12 +1146,12 @@ mod tests {
         fs::create_dir_all(backups_dir(&has_backups)).unwrap();
         fs::write(backups_dir(&has_backups).join("x"), b"x").unwrap();
         assert!(matches!(
-            change_data_dir(&d.default, &has_backups),
+            d.change(&has_backups),
             Err(DataDirError::TargetHasBackups(_))
         ));
 
         // どれも元のデータに触れていない
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
         assert_eq!(read_note(&d.default), "kept in wal");
         assert_eq!(fs::read(has_wal.join("yunagi.db-wal")).unwrap(), b"stale");
     }
@@ -1095,7 +1166,7 @@ mod tests {
         fs::create_dir(d.default.join(CONFIG_FILE_NAME)).unwrap();
 
         let new_dir = d.root.join("a/b/new");
-        let err = change_data_dir(&d.default, &new_dir);
+        let err = d.change(&new_dir);
         // config.json が読めないので、移動の前に止まる
         assert!(matches!(err, Err(DataDirError::Io { .. })), "{err:?}");
         assert!(!d.root.join("a").exists());
@@ -1103,7 +1174,7 @@ mod tests {
         // 読めるが書けない場合：config.json.tmp の場所をフォルダにする
         fs::remove_dir_all(d.default.join(CONFIG_FILE_NAME)).unwrap();
         fs::create_dir(d.default.join("config.json.tmp")).unwrap();
-        let err = change_data_dir(&d.default, &new_dir);
+        let err = d.change(&new_dir);
         assert!(matches!(err, Err(DataDirError::Io { .. })), "{err:?}");
 
         // 作ったフォルダ・写したファイルは消え、元のデータと設定はそのまま
@@ -1113,7 +1184,7 @@ mod tests {
             fs::read(backups_dir(&d.default).join("a.db")).unwrap(),
             b"backup"
         );
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
     }
 
     #[test]
@@ -1121,14 +1192,14 @@ mod tests {
         let d = dirs();
         fs::write(database_path(&d.default), b"this is not a database").unwrap();
         let new_dir = d.root.join("new");
-        let err = change_data_dir(&d.default, &new_dir);
+        let err = d.change(&new_dir);
         assert!(matches!(err, Err(DataDirError::Sqlite(_))), "{err:?}");
         assert!(!new_dir.exists());
         assert_eq!(
             fs::read(database_path(&d.default)).unwrap(),
             b"this is not a database"
         );
-        assert_eq!(resolve_data_dir(&d.default).unwrap(), d.default);
+        assert_eq!(resolve_data_dir(&d.dd).unwrap(), d.default);
     }
 
     #[test]
@@ -1138,7 +1209,7 @@ mod tests {
         let new_dir = d.root.join("existing");
         fs::create_dir(&new_dir).unwrap();
         fs::write(new_dir.join("user-file.txt"), b"mine").unwrap();
-        assert!(change_data_dir(&d.default, &new_dir).is_err());
+        assert!(d.change(&new_dir).is_err());
         assert_eq!(fs::read(new_dir.join("user-file.txt")).unwrap(), b"mine");
         assert_eq!(
             fs::read_dir(&new_dir).unwrap().count(),
