@@ -162,14 +162,7 @@ impl Database {
             });
         }
         drop(src);
-        // 古いスキーマから復元すると、マイグレーションが復元したものの写しを
-        // pre-migration-*.db として作る。選んだバックアップと同じ内容なので消す
-        // （旧版の再導入に備えて残している、本来のマイグレーション前のものを押し出さないように）
-        for path in pre_migration_paths(&dir) {
-            if !pre_migration_before.contains(&path) {
-                let _ = fs::remove_file(&path);
-            }
-        }
+        remove_new_pre_migration(&dir, &pre_migration_before);
         // データはもう置き換わっているので、片付けに失敗しても復元は失敗にしない。
         // 時計が戻っていても、退避したばかりのものは消さない
         if let Ok(backups) = list_in(&dir) {
@@ -254,7 +247,7 @@ impl DailyBackup {
 }
 
 /// データベースのファイル `db_path` と同じフォルダの `backups/`（[`Database::open`] と同じ決め方）。
-fn backups_dir_of(db_path: &Path) -> PathBuf {
+pub(super) fn backups_dir_of(db_path: &Path) -> PathBuf {
     data_dir::backups_dir(db_path.parent().unwrap_or_else(|| Path::new("")))
 }
 
@@ -262,7 +255,7 @@ fn backups_dir_of(db_path: &Path) -> PathBuf {
 const RESTORE_PAUSE: Duration = Duration::from_millis(10);
 
 /// 復元に使えるバックアップかを確かめ、読み取り専用で開いた接続を返す。ファイルには書かない。
-fn open_restorable(
+pub(super) fn open_restorable(
     backup: &Path,
     db_path: &Path,
     migrations: &[Migration],
@@ -298,13 +291,28 @@ fn open_read_only(path: &Path) -> Result<Connection, BackupError> {
 }
 
 /// `dir` にあるマイグレーション前のバックアップのパス。読めなければ空。
-fn pre_migration_paths(dir: &Path) -> Vec<PathBuf> {
+pub(super) fn pre_migration_paths(dir: &Path) -> Vec<PathBuf> {
     list_in(dir)
         .unwrap_or_default()
         .into_iter()
         .filter(|b| matches!(b.kind, BackupKind::PreMigration { .. }))
         .map(|b| b.path)
         .collect()
+}
+
+/// `dir` のマイグレーション前のバックアップのうち、`before`（前に [`pre_migration_paths`] で
+/// 求めたもの）に無いものを消す（消せなくても続ける）。
+///
+/// 古いスキーマのバックアップから戻すと、マイグレーションが戻したものの写しを `pre-migration-*.db` と
+/// して作る。選んだバックアップと同じ内容なので消す（旧版の再導入に備えて残している、本来の
+/// マイグレーション前のものを押し出さないように）。復元（[`Database::restore_backup`]）と、開けない
+/// データベースからの回復（[`Database::open_from_backup`]）が使う。
+pub(super) fn remove_new_pre_migration(dir: &Path, before: &[PathBuf]) {
+    for path in pre_migration_paths(dir) {
+        if !before.contains(&path) {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 /// データベース `db_path` を `dir` に `<stem>.db` として写し、写したものを返す。
@@ -334,13 +342,15 @@ fn create_backup(db_path: &Path, dir: &Path, stem: &str) -> Result<Backup, Backu
     Ok(backup)
 }
 
-/// 書きかけのまま残った定期・復元前のバックアップの一時ファイルを消す（SQLite が横に作る
+/// 書きかけのまま残った定期・復元前のバックアップと、回復で写した一時ファイルを消す（SQLite が横に作る
 /// `-journal` などを含む。[`db_files::remove_stale_temp_files`]）。マイグレーション前のものは
 /// `migration` モジュールが消す。
-fn remove_stale_temp_files(dir: &Path) {
+pub(super) fn remove_stale_temp_files(dir: &Path) {
     db_files::remove_stale_temp_files(dir, |name| {
         parse(Path::new(name))
             .is_some_and(|b| matches!(b.kind, BackupKind::Daily { .. } | BackupKind::PreRestore))
+            // 開けないデータベースからの回復で、置く前に写したもの（`recover` モジュール）
+            || super::recover::is_restore_temp(name)
     });
 }
 
@@ -468,7 +478,7 @@ fn parse_digits<T: std::str::FromStr>(s: &str) -> Option<T> {
 }
 
 /// 今の UNIX 時刻（秒）。
-fn now_secs() -> u64 {
+pub(super) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

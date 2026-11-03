@@ -315,7 +315,11 @@ lines: Array<number>, };
  * データベースを開く処理の状態（起動直後に画面が `startup_status` で問い合わせ、変わると
  * `startup` イベントでも届く）。
  */
-export type Startup = { "state": "opening" } | { "state": "ready" } | { "state": "not_found", 
+export type Startup = { "state": "opening" } | { "state": "ready" } | { "state": "restored", 
+/**
+ * 退避した、それまでのデータベース（`backups/damaged-<秒>.db`）。無かったときは `None`。
+ */
+setAside: string | null, } | { "state": "not_found", 
 /**
  * 探した `yunagi.db` のパス。
  */
@@ -331,12 +335,43 @@ configuredIn: string | null,
 /**
  * 保存先のフォルダそのものがあるか。
  */
-dataDirExists: boolean, } | { "state": "failed", reason: StartupFailure, detail: string, };
+dataDirExists: boolean, } | { "state": "failed", reason: StartupFailure, detail: string, 
+/**
+ * 開こうとした `yunagi.db` のパス（保存先が分かったとき）。
+ */
+database: string | null, 
+/**
+ * マイグレーション前のバックアップ（`migration_failed`・`migration_restore_failed` のとき。
+ * 適用前のデータがある）。
+ */
+backup: string | null, 
+/**
+ * `config.json` のパス（`config` のとき）。
+ */
+config: string | null, };
 
 /**
  * データベースを開けなかった理由。
  */
-export type StartupFailure = "default_dir" | "lock_busy" | "lock" | "config" | "already_exists" | "storage";
+export type StartupFailure = "default_dir" | "lock_busy" | "lock" | "config" | "already_exists" | "migration_failed" | "migration_restore_failed" | "unsupported_schema" | "corrupted" | "storage";
+
+/**
+ * `backups/` にある1つのバックアップ（`list_backups`）。
+ */
+export type BackupEntry = { 
+/**
+ * ファイルのパス。戻すときに `restore_at_startup` に渡す。
+ */
+path: string, kind: BackupKind, 
+/**
+ * 作った時刻（秒まで）。
+ */
+createdAt: Millis, };
+
+/**
+ * バックアップの種類（アーキテクチャ設計書 6.2）。
+ */
+export type BackupKind = { "type": "daily", date: LogicalDate, } | { "type": "pre_migration", from: number, to: number, } | { "type": "pre_restore" };
 
 /**
  * `changed` イベント：コアでデータが変わった。画面は表示中のデータを読み込み直す
@@ -363,12 +398,17 @@ export type BackupFailed = { detail: string, };
  * コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
  * （Display の文をそのまま使わない。README「エラーの表示」）。
  */
-export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" } | { "kind": "not_found" } | { "kind": "invalid_argument", reason: InvalidReason, } | { "kind": "conflict" } & Conflict | { "kind": "restore_refused" } & RestoreRefused | { "kind": "storage", detail: string, } | { "kind": "internal", detail: string, };
+export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" } | { "kind": "not_found" } | { "kind": "invalid_argument", reason: InvalidReason, } | { "kind": "conflict" } & Conflict | { "kind": "restore_refused" } & RestoreRefused | { "kind": "storage", detail: string, } | { "kind": "rejected", reason: RejectReason, } | { "kind": "put_back_failed", setAside: string, detail: string, } | { "kind": "internal", detail: string, };
 
 /**
  * 引数の誤りの種類。
  */
 export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line";
+
+/**
+ * 選んだバックアップ・保存先を使えない理由。
+ */
+export type RejectReason = "invalid_path" | "not_a_directory" | "no_database" | "unreadable" | "corrupted" | "not_yunagi" | "newer_schema";
 
 /**
  * 受け付けられない状態の理由。

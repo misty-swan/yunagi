@@ -37,6 +37,11 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
     tauri::generate_handler![
         commands::startup_status,
         commands::create_database,
+        commands::retry_open,
+        commands::choose_data_dir,
+        commands::restore_at_startup,
+        commands::acknowledge_restore,
+        commands::list_backups,
         commands::today,
         commands::get_board,
         commands::get_overview,

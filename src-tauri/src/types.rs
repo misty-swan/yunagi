@@ -636,6 +636,13 @@ pub enum Startup {
     Opening,
     /// 開いた。コマンドを使える。
     Ready,
+    /// 起動時にバックアップから戻して開いた（`restore_at_startup`）。コマンドは使えるが、画面は
+    /// 退避した場所を示し、利用者が確かめたら `acknowledge_restore` を呼ぶ（その後は `ready`）。
+    #[serde(rename_all = "camelCase")]
+    Restored {
+        /// 退避した、それまでのデータベース（`backups/damaged-<秒>.db`）。無かったときは `None`。
+        set_aside: Option<String>,
+    },
     /// 保存先にデータベースが無く、初めて使うときでもない（アーキテクチャ設計書 6.3）。
     /// 画面は探した場所を示して案内する。新しく作るのは `create_database`。
     #[serde(rename_all = "camelCase")]
@@ -649,11 +656,60 @@ pub enum Startup {
         /// 保存先のフォルダそのものがあるか。
         data_dir_exists: bool,
     },
-    /// 開けなかった。`detail` はログ用の文（英語。画面にそのまま出さない）。
+    /// 開けなかった。`detail` はログ用の文（英語。画面にそのまま出さない。問い合わせのときに
+    /// 添えてもらうため、画面は「詳しい情報」として写せるように示す）。
+    #[serde(rename_all = "camelCase")]
     Failed {
         reason: StartupFailure,
         detail: String,
+        /// 開こうとした `yunagi.db` のパス（保存先が分かったとき）。
+        database: Option<String>,
+        /// マイグレーション前のバックアップ（`migration_failed`・`migration_restore_failed` のとき。
+        /// 適用前のデータがある）。
+        backup: Option<String>,
+        /// `config.json` のパス（`config` のとき）。
+        config: Option<String>,
     },
+}
+
+/// `backups/` にある1つのバックアップ（`list_backups`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct BackupEntry {
+    /// ファイルのパス。戻すときに `restore_at_startup` に渡す。
+    pub path: String,
+    pub kind: BackupKind,
+    /// 作った時刻（秒まで）。
+    pub created_at: Millis,
+}
+
+/// バックアップの種類（アーキテクチャ設計書 6.2）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BackupKind {
+    /// 1日1回の定期バックアップ。`date` は作った日の論理日付。
+    Daily { date: Date },
+    /// マイグレーションの適用前のもの（スキーマの番号 `from` から `to` へ）。
+    PreMigration { from: u32, to: u32 },
+    /// 復元の前に、それまでのデータを退避したもの。
+    PreRestore,
+}
+
+impl From<yunagi_core::storage::backup::Backup> for BackupEntry {
+    fn from(b: yunagi_core::storage::backup::Backup) -> Self {
+        use yunagi_core::storage::backup::BackupKind as K;
+        Self {
+            path: b.path.display().to_string(),
+            kind: match b.kind {
+                K::Daily { date } => BackupKind::Daily { date: Date(date) },
+                K::PreMigration { from, to } => BackupKind::PreMigration { from, to },
+                K::PreRestore => BackupKind::PreRestore,
+            },
+            created_at: Millis(b.created_at),
+        }
+    }
 }
 
 /// データベースを開けなかった理由。
@@ -671,7 +727,20 @@ pub enum StartupFailure {
     Config,
     /// 新しく作ろうとした場所に、すでにデータベースがある。
     AlreadyExists,
-    /// 開く・マイグレーションに失敗した。
+    /// マイグレーションの適用に失敗し、適用前の内容に戻した（データは無事）。旧版を入れ直せば
+    /// そのまま開ける（ビルド・配布手順書 5章）。
+    MigrationFailed,
+    /// マイグレーションの適用に失敗し、適用前の内容に戻すことにも失敗した。適用前のデータは
+    /// `backup` に残っている。
+    MigrationRestoreFailed,
+    /// データベースが、このアプリより新しい版で作られている（スキーマの番号を知らない）。
+    /// ファイルには触れていない。
+    UnsupportedSchema,
+    /// データベースが壊れている（マイグレーション前のバックアップの整合性の確認が通らない、
+    /// SQLite のデータベースとして読めない）。ファイルには触れていない。バックアップから戻せる
+    /// （`restore_at_startup`）。
+    Corrupted,
+    /// そのほかの理由で、開けなかった（WAL にできない、読み書きの失敗など）。
     Storage,
 }
 
@@ -736,8 +805,37 @@ pub enum CommandError {
     /// これを返してから次に保存が成功するまで、コアはエージェントの書き込みを受け付けない
     /// （アーキテクチャ設計書 4.1「保存に失敗している間」）。
     Storage { detail: String },
+    /// 選んだバックアップ・保存先を使えないので、何も変えなかった（起動時の
+    /// `restore_at_startup`・`choose_data_dir`）。
+    Rejected { reason: RejectReason },
+    /// バックアップから戻すのに失敗し、退避した前のデータベースを元の場所に戻すこともできなかった
+    /// （`restore_at_startup`）。前のデータベースは `set_aside`（とその横のファイル）に残っている。
+    /// `detail` はログ用の文。
+    #[serde(rename_all = "camelCase")]
+    PutBackFailed { set_aside: String, detail: String },
     /// アプリの不具合（コマンドの処理が途中で止まった）。`detail` はログ用の文。
     Internal { detail: String },
+}
+
+/// 選んだバックアップ・保存先を使えない理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum RejectReason {
+    /// 保存先のパスの形が誤っている（絶対パスでない、`..`・`.` を含む、UTF-8 で表せない）。
+    InvalidPath,
+    /// 選んだ保存先が無いか、フォルダでない。
+    NotADirectory,
+    /// 選んだ保存先に、中身のある `yunagi.db` が無い。
+    NoDatabase,
+    /// 読めない（SQLite のデータベースでない、ファイルが無い、権限が無いなど）。
+    Unreadable,
+    /// 整合性の確認（`integrity_check`）が通らない。
+    Corrupted,
+    /// Yunagi のデータベースではない（スキーマの番号が 0）。
+    NotYunagi,
+    /// このアプリより新しい版で作られている。
+    NewerSchema,
 }
 
 /// 引数の誤りの種類。

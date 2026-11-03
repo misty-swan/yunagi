@@ -6,6 +6,7 @@ import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENTS,
+  type BackupEntry,
   type BackupFailed,
   type Board,
   type Changed,
@@ -73,6 +74,16 @@ export const core = {
   startupStatus: () => call<Startup>("startup_status"),
   /** データベースが見つからないときに、新しく作って開く。 */
   createDatabase: () => call<Startup>("create_database"),
+  /** 見つからなかった・開けなかったときに、もう一度開く。 */
+  retryOpen: () => call<Startup>("retry_open"),
+  /** 見つからなかったときに、データベースのある既存のフォルダ `dir` を保存先にして開く。 */
+  chooseDataDir: (dir: string) => call<Startup>("choose_data_dir", { dir }),
+  /** 見つからなかった・壊れていて開けなかったときに、バックアップ `backup` で置き換えて開く。 */
+  restoreAtStartup: (backup: string) => call<Startup>("restore_at_startup", { backup }),
+  /** バックアップから戻した結果（`restored`）を、利用者が確かめた。 */
+  acknowledgeRestore: () => call<Startup>("acknowledge_restore"),
+  /** 保存先の `backups/` にあるバックアップの一覧（新しいものが先）。 */
+  listBackups: () => call<BackupEntry[]>("list_backups"),
   /** 今日の論理日付。 */
   today: () => call<LogicalDate>("today"),
   getBoard: (date: LogicalDate) => call<Board>("get_board", { date }),
