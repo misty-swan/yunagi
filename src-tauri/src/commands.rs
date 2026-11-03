@@ -16,8 +16,9 @@ use yunagi_core::domain::{board, export, item, text_doc};
 
 use crate::app_core::{AppCore, ScreenWrite, now, system_tz};
 use crate::types::{
-    Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome, Overview,
-    Position, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    BackupEntry, Board, CommandError, Date, Deleted, Id, Item, ItemFields, ItemKind, ItemOutcome,
+    Overview, Position, Snapshot, SplitResult, Startup, StartupRestored, TextDoc, TextSave,
+    UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -46,6 +47,38 @@ pub async fn startup_status(core: Core<'_>) -> Result<Startup, CommandError> {
 #[tauri::command]
 pub async fn create_database(core: Core<'_>) -> Result<Startup, CommandError> {
     blocking(&core, |core| core.create_database()).await
+}
+
+/// 見つからなかった・開けなかったときに、もう一度開く。
+#[tauri::command]
+pub async fn retry_open(core: Core<'_>) -> Result<Startup, CommandError> {
+    blocking(&core, |core| core.retry_open()).await
+}
+
+/// 見つからなかったときに、データベースのある既存のフォルダ `dir` を保存先として記録してから開く
+/// （保存先の選び直し）。
+#[tauri::command]
+pub async fn choose_data_dir(core: Core<'_>, dir: String) -> Result<Startup, CommandError> {
+    blocking(&core, move |core| core.choose_data_dir(Path::new(&dir))).await
+}
+
+/// 見つからなかった・壊れていて開けなかったときに、バックアップ `backup`（`list_backups` の
+/// `path`）で置き換えて開く。
+#[tauri::command]
+pub async fn restore_at_startup(
+    core: Core<'_>,
+    backup: String,
+) -> Result<StartupRestored, CommandError> {
+    blocking(&core, move |core| {
+        core.restore_at_startup(Path::new(&backup))
+    })
+    .await
+}
+
+/// 保存先の `backups/` にあるバックアップの一覧（新しいものが先）。
+#[tauri::command]
+pub async fn list_backups(core: Core<'_>) -> Result<Vec<BackupEntry>, CommandError> {
+    blocking(&core, |core| core.backups()).await
 }
 
 /// 今日の論理日付。変わると `today-changed` イベントが届く。

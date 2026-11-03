@@ -15,6 +15,7 @@ mod error;
 mod lock;
 mod migration;
 mod open;
+mod recover;
 pub mod search;
 pub mod table;
 #[cfg(test)]
@@ -29,6 +30,7 @@ use rusqlite::{Connection, OpenFlags};
 pub use error::StorageError;
 pub use lock::{CloseError, DEFAULT_LOCK_WAIT, DbLock, LOCK_FILE_NAME, LockError};
 pub use open::{DatabaseNotFound, OpenError};
+pub use recover::{RecoverError, Recovered};
 pub(crate) use transaction::{in_read_transaction, in_transaction};
 pub use ulid::{ParseUlidError, Ulid};
 
@@ -78,7 +80,8 @@ impl Database {
     /// 作り直す。保存先のフォルダは作らない（繋いでいないドライブの代わりに作らないように）ので、
     /// 無ければ [`OpenError::NotFound`]（`data_dir_exists` が `false`）を返す。
     ///
-    /// バックアップから戻すときは、作ってから [`Database::restore_backup`] を呼ぶ。
+    /// バックアップから戻すときは、これではなく [`Database::open_from_backup`] を使う（取り残された
+    /// `-wal` などがあっても、退避してから置く）。
     pub fn create(lock: DbLock) -> Result<Self, OpenError> {
         Self::open_located(lock, open::Intent::Create, migration::MIGRATIONS)
     }
@@ -103,21 +106,8 @@ impl Database {
         migrations: &[migration::Migration],
         create: bool,
     ) -> Result<Self, StorageError> {
-        let mut flags = OpenFlags::default();
-        if !create {
-            flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
-        }
-        let mut conn = Connection::open_with_flags(path, flags)?;
-        // 新しい版で作られたデータベースは、WAL への切り替えなどでファイルを書き換える前に断る
-        migration::check_supported(&conn, migrations)?;
-        configure(&conn)?;
-        let backup_dir = path
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join(data_dir::BACKUPS_DIR_NAME);
-        migration::migrate(&mut conn, &backup_dir, migrations)?;
         Ok(Self {
-            conn,
+            conn: connect(path, migrations, create)?,
             path: path.to_path_buf(),
             _lock: lock,
         })
@@ -135,6 +125,35 @@ impl Database {
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
+
+    /// 開いたデータベースのファイルのパス（`<保存先>/yunagi.db`）。保存先は、この親のフォルダ。
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// `path` のデータベースに接続し、マイグレーションを適用する（[`Database::connect`]）。
+/// ロックは呼び出し側が持つ。失敗したときにロックを持ったまま片付けるとき
+/// （[`Database::open_from_backup`]）にも使う。
+pub(super) fn connect(
+    path: &Path,
+    migrations: &[migration::Migration],
+    create: bool,
+) -> Result<Connection, StorageError> {
+    let mut flags = OpenFlags::default();
+    if !create {
+        flags.remove(OpenFlags::SQLITE_OPEN_CREATE);
+    }
+    let mut conn = Connection::open_with_flags(path, flags)?;
+    // 新しい版で作られたデータベースは、WAL への切り替えなどでファイルを書き換える前に断る
+    migration::check_supported(&conn, migrations)?;
+    configure(&conn)?;
+    let backup_dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(data_dir::BACKUPS_DIR_NAME);
+    migration::migrate(&mut conn, &backup_dir, migrations)?;
+    Ok(conn)
 }
 
 /// 接続を WAL モード・`synchronous=NORMAL`・外部キー有効にする。

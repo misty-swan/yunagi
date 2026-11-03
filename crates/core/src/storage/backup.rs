@@ -254,7 +254,7 @@ impl DailyBackup {
 }
 
 /// データベースのファイル `db_path` と同じフォルダの `backups/`（[`Database::open`] と同じ決め方）。
-fn backups_dir_of(db_path: &Path) -> PathBuf {
+pub(super) fn backups_dir_of(db_path: &Path) -> PathBuf {
     data_dir::backups_dir(db_path.parent().unwrap_or_else(|| Path::new("")))
 }
 
@@ -262,7 +262,7 @@ fn backups_dir_of(db_path: &Path) -> PathBuf {
 const RESTORE_PAUSE: Duration = Duration::from_millis(10);
 
 /// 復元に使えるバックアップかを確かめ、読み取り専用で開いた接続を返す。ファイルには書かない。
-fn open_restorable(
+pub(super) fn open_restorable(
     backup: &Path,
     db_path: &Path,
     migrations: &[Migration],
@@ -298,7 +298,7 @@ fn open_read_only(path: &Path) -> Result<Connection, BackupError> {
 }
 
 /// `dir` にあるマイグレーション前のバックアップのパス。読めなければ空。
-fn pre_migration_paths(dir: &Path) -> Vec<PathBuf> {
+pub(super) fn pre_migration_paths(dir: &Path) -> Vec<PathBuf> {
     list_in(dir)
         .unwrap_or_default()
         .into_iter()
@@ -468,7 +468,7 @@ fn parse_digits<T: std::str::FromStr>(s: &str) -> Option<T> {
 }
 
 /// 今の UNIX 時刻（秒）。
-fn now_secs() -> u64 {
+pub(super) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

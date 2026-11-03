@@ -10,6 +10,7 @@
 //!
 //! Tauri には依存しない（知らせ先は [`Notify`] で受け取る）。Tauri とのつなぎは `crate::run`。
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -24,15 +25,17 @@ use yunagi_core::domain::item;
 use yunagi_core::domain::logical_date::LogicalDate;
 use yunagi_core::domain::text_doc;
 use yunagi_core::error::ErrorChain;
+use yunagi_core::storage::backup::{self, BackupError};
+use yunagi_core::storage::data_dir::DataDirError;
 use yunagi_core::storage::{
-    DEFAULT_LOCK_WAIT, Database, DatabaseNotFound, DbLock, LockError, OpenError, StorageError,
-    Ulid, data_dir,
+    DEFAULT_LOCK_WAIT, Database, DatabaseNotFound, DbLock, LockError, OpenError, RecoverError,
+    StorageError, Ulid, data_dir,
 };
 
 use crate::screen::ScreenState;
 use crate::types::{
-    BackupFailed, ChangeSource, Changed, CommandError, ItemOutcome, SplitResult, Startup,
-    StartupFailure, TextSave, TodayChanged,
+    BackupEntry, BackupFailed, ChangeSource, Changed, CommandError, ItemOutcome, RejectReason,
+    SplitResult, Startup, StartupFailure, StartupRestored, TextSave, TodayChanged,
 };
 
 /// コアから画面への知らせ（Tauri のイベントになる。`crate::run`）。
@@ -63,9 +66,21 @@ enum Slot {
     Failed {
         reason: StartupFailure,
         detail: String,
+        info: FailureInfo,
     },
     /// アプリの終了で閉じた。
     Closed,
+}
+
+/// 開けなかったときに、画面の案内に使う場所。
+#[derive(Default)]
+struct FailureInfo {
+    /// 開こうとした `yunagi.db`（保存先が分かったとき）。
+    database: Option<PathBuf>,
+    /// マイグレーション前のバックアップ（マイグレーションに失敗したとき）。
+    backup: Option<PathBuf>,
+    /// `config.json`（読めなかったとき）。
+    config: Option<PathBuf>,
 }
 
 /// アプリの中のコア。Tauri の状態（`State<Arc<AppCore>>`）として持つ。
@@ -231,22 +246,140 @@ impl AppCore {
     /// （利用者が「新しく作る」を選んだとき。アーキテクチャ設計書 6.3）。それ以外の状態では、
     /// 何もせずに [`CommandError::InvalidState`]。結果は [`AppCore::open`] と同じく知らせる。
     pub fn create_database(self: &Arc<Self>) -> Result<Startup, CommandError> {
-        {
-            let mut slot = lock(&self.db);
-            if !matches!(*slot, Slot::NotFound(_)) {
-                return Err(CommandError::InvalidState);
-            }
-            // 作っている間に、もう一度作ろうとしても断る
-            *slot = Slot::Opening;
-        }
+        self.begin(|s| matches!(s, Slot::NotFound(_)))?;
         self.open_with(Database::create);
         Ok(self.startup())
     }
 
-    /// 開いた結果を、まだ開いている途中のとき（[`Slot::Opening`]）だけ記録する。開いている間に
-    /// アプリが終わった（[`AppCore::close`]）ときは、開いたデータベースをすぐ閉じ、知らせもしない。
+    /// 見つからなかった・開けなかったときに、もう一度開く（同期が終わった、ドライブを繋いだ、
+    /// CLI・MCP の操作が終わったなど。画面設計書 11章「起動時の画面」）。開いている途中・開いた
+    /// 後は [`CommandError::InvalidState`]。結果は [`AppCore::open`] と同じく知らせる。
+    pub fn retry_open(self: &Arc<Self>) -> Result<Startup, CommandError> {
+        self.begin(|s| matches!(s, Slot::NotFound(_) | Slot::Failed { .. }))?;
+        self.open_with(Database::open);
+        Ok(self.startup())
+    }
+
+    /// 見つからなかったとき（[`Startup::NotFound`]）に、データベースのある既存のフォルダ `dir` を
+    /// 保存先として記録してから開く（保存先の選び直し。アーキテクチャ設計書 6章・6.3）。
+    ///
+    /// `dir` を使えなければ、何も変えずに [`CommandError::Rejected`]（状態は見つからないまま）。
+    /// 記録した後に開けなかったときは、`Ok` で開けなかった状態を返す。それ以外の状態では
+    /// [`CommandError::InvalidState`]。
+    pub fn choose_data_dir(self: &Arc<Self>, dir: &Path) -> Result<Startup, CommandError> {
+        self.begin(|s| matches!(s, Slot::NotFound(_)))?;
+        let lock = match acquire_lock() {
+            Ok(lock) => lock,
+            Err(slot) => {
+                self.finish(*slot);
+                return Ok(self.startup());
+            }
+        };
+        let chosen = data_dir::use_existing_data_dir(&lock, dir);
+        // 記録できなかったときも、同じロックで開き直して、見つからない状態に戻す
+        self.finish(open_slot(lock, Database::open));
+        match chosen {
+            Ok(()) => Ok(self.startup()),
+            Err(e) => {
+                eprintln!(
+                    "yunagi: could not use {} as the data directory: {}",
+                    dir.display(),
+                    chain(&e)
+                );
+                Err(data_dir_rejected(&e))
+            }
+        }
+    }
+
+    /// 見つからなかったとき（[`Startup::NotFound`]）と、データベースが壊れていて開けなかったとき
+    /// （[`StartupFailure::Corrupted`]）に、バックアップ `backup` で置き換えて開く（アーキテクチャ
+    /// 設計書 6.2「開けないデータベースからの回復」・6.3）。それまでのデータベースは消さずに
+    /// `backups/` に退避し、その場所を返す。
+    ///
+    /// 戻せなかったときは、開き直して元の状態に戻してから、エラーを返す（使えないバックアップは
+    /// [`CommandError::Rejected`]）。それ以外の状態では [`CommandError::InvalidState`]。
+    pub fn restore_at_startup(
+        self: &Arc<Self>,
+        backup: &Path,
+    ) -> Result<StartupRestored, CommandError> {
+        self.begin(|s| {
+            matches!(
+                s,
+                Slot::NotFound(_)
+                    | Slot::Failed {
+                        reason: StartupFailure::Corrupted,
+                        ..
+                    }
+            )
+        })?;
+        let lock = match acquire_lock() {
+            Ok(lock) => lock,
+            Err(slot) => {
+                self.finish(*slot);
+                return Err(CommandError::NotReady);
+            }
+        };
+        match Database::open_from_backup(lock, backup) {
+            Ok(recovered) => {
+                let set_aside = recovered.set_aside.map(|p| p.display().to_string());
+                self.finish(Slot::Open(recovered.database));
+                Ok(StartupRestored { set_aside })
+            }
+            Err(e) => {
+                eprintln!(
+                    "yunagi: could not restore from {}: {}",
+                    backup.display(),
+                    chain(&e)
+                );
+                // ロックは離れている。取り直して、今の状態（壊れている・見つからない）を求め直す
+                self.open_with(Database::open);
+                Err(recover_error(&e))
+            }
+        }
+    }
+
+    /// 保存先の `backups/` にあるバックアップの一覧（新しいものが先）。開いた後と、見つからない・
+    /// 保存先が分かっていて開けなかったときに使える（起動時の「バックアップから戻す」と設定画面）。
+    /// 保存先が分からないときは [`CommandError::InvalidState`]。
+    pub fn backups(&self) -> Result<Vec<BackupEntry>, CommandError> {
+        let data_dir = match &*lock(&self.db) {
+            Slot::Open(db) => db.path().parent().map(Path::to_path_buf),
+            Slot::NotFound(nf) => Some(nf.data_dir.clone()),
+            Slot::Failed { info, .. } => info
+                .database
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf),
+            Slot::Opening | Slot::Closed => None,
+        }
+        .ok_or(CommandError::InvalidState)?;
+        let list = backup::list_backups(&data_dir).map_err(|e| CommandError::storage(&e))?;
+        Ok(list.into_iter().map(BackupEntry::from).collect())
+    }
+
+    /// 状態が `allowed` なら、開いている途中にする（その間に、ほかの起動時の操作を断る）。
+    /// それ以外なら [`CommandError::InvalidState`]。
+    fn begin(&self, allowed: impl FnOnce(&Slot) -> bool) -> Result<(), CommandError> {
+        let mut slot = lock(&self.db);
+        if !allowed(&slot) {
+            return Err(CommandError::InvalidState);
+        }
+        *slot = Slot::Opening;
+        Ok(())
+    }
+
+    /// ロックを取ってから `open` で開き、結果を記録する（[`AppCore::finish`]）。
     fn open_with(self: &Arc<Self>, open: fn(DbLock) -> Result<Database, OpenError>) {
-        let slot = open_database(open);
+        let slot = match acquire_lock() {
+            Ok(lock) => open_slot(lock, open),
+            Err(slot) => *slot,
+        };
+        self.finish(slot);
+    }
+
+    /// 開いた結果を、まだ開いている途中のとき（[`Slot::Opening`]）だけ記録し、知らせる。開いている
+    /// 間にアプリが終わった（[`AppCore::close`]）ときは、開いたデータベースをすぐ閉じ、知らせもしない。
+    fn finish(self: &Arc<Self>, slot: Slot) {
         let ready = matches!(slot, Slot::Open(_));
         {
             let mut current = lock(&self.db);
@@ -265,6 +398,7 @@ impl AppCore {
 
     /// データベースを開く処理の状態。
     pub fn startup(&self) -> Startup {
+        let text = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
         match &*lock(&self.db) {
             Slot::Opening => Startup::Opening,
             Slot::Open(_) => Startup::Ready,
@@ -274,13 +408,23 @@ impl AppCore {
                 configured_in: nf.configured_in.as_ref().map(|p| p.display().to_string()),
                 data_dir_exists: nf.data_dir_exists,
             },
-            Slot::Failed { reason, detail } => Startup::Failed {
+            Slot::Failed {
+                reason,
+                detail,
+                info,
+            } => Startup::Failed {
                 reason: *reason,
                 detail: detail.clone(),
+                database: text(&info.database),
+                backup: text(&info.backup),
+                config: text(&info.config),
             },
             Slot::Closed => Startup::Failed {
                 reason: StartupFailure::Storage,
                 detail: "the database was closed".into(),
+                database: None,
+                backup: None,
+                config: None,
             },
         }
     }
@@ -494,22 +638,13 @@ fn spawn(name: &str, f: impl FnOnce() + Send + 'static) -> Option<JoinHandle<()>
     }
 }
 
-/// 既定ディレクトリを求めて作り、`yunagi.lock` を取ってから `open` で開く。開けたか、開けなかった
-/// 理由の状態を返す。
-fn open_database(open: fn(DbLock) -> Result<Database, OpenError>) -> Slot {
-    match try_open_database(open) {
-        Ok(db) => Slot::Open(db),
-        Err(slot) => *slot,
-    }
-}
-
-fn try_open_database(
-    open: fn(DbLock) -> Result<Database, OpenError>,
-) -> Result<Database, Box<Slot>> {
+/// 既定ディレクトリを求めて作り、`yunagi.lock` を取る。取れなければ、開けなかった状態を返す。
+fn acquire_lock() -> Result<DbLock, Box<Slot>> {
     let failed = |reason, e: &(dyn std::error::Error + 'static)| {
         Box::new(Slot::Failed {
             reason,
             detail: chain(e),
+            info: FailureInfo::default(),
         })
     };
     let dir = data_dir::default_dir().map_err(|e| failed(StartupFailure::DefaultDir, &e))?;
@@ -524,15 +659,172 @@ fn try_open_database(
             ),
         )
     })?;
-    let lock = DbLock::acquire(&dir, DEFAULT_LOCK_WAIT).map_err(|e| match e {
+    DbLock::acquire(&dir, DEFAULT_LOCK_WAIT).map_err(|e| match e {
         LockError::Busy { .. } => failed(StartupFailure::LockBusy, &e),
         _ => failed(StartupFailure::Lock, &e),
-    })?;
-    open(lock).map_err(|e| match e {
-        OpenError::NotFound(nf) => Box::new(Slot::NotFound(nf)),
-        OpenError::DataDir(_) => failed(StartupFailure::Config, &e),
-        OpenError::AlreadyExists(_) => failed(StartupFailure::AlreadyExists, &e),
-        OpenError::Storage(StorageError::Lock(_)) => failed(StartupFailure::Lock, &e),
-        OpenError::Storage(_) => failed(StartupFailure::Storage, &e),
     })
+}
+
+/// ロック `lock` を持って `open` で開き、開けたか、開けなかった理由の状態を返す。
+fn open_slot(lock: DbLock, open: fn(DbLock) -> Result<Database, OpenError>) -> Slot {
+    // 案内に使う場所は、開く前に求めておく（開けなかったときはロックが離れている）
+    let database = lock.database_path().ok();
+    let config = lock.default_dir().path().join(data_dir::CONFIG_FILE_NAME);
+    match open(lock) {
+        Ok(db) => Slot::Open(db),
+        Err(OpenError::NotFound(nf)) => Slot::NotFound(nf),
+        Err(e) => {
+            let mut info = FailureInfo {
+                database,
+                ..FailureInfo::default()
+            };
+            let reason = match &e {
+                OpenError::DataDir(_) => {
+                    info.config = Some(config);
+                    StartupFailure::Config
+                }
+                OpenError::AlreadyExists(_) => StartupFailure::AlreadyExists,
+                OpenError::Storage(e) => storage_failure(e, &mut info),
+                OpenError::NotFound(_) => unreachable!("handled above"),
+            };
+            Slot::Failed {
+                reason,
+                detail: chain(&e),
+                info,
+            }
+        }
+    }
+}
+
+/// 開く・マイグレーションの失敗の理由。マイグレーション前のバックアップがあれば `info` に書く。
+fn storage_failure(e: &StorageError, info: &mut FailureInfo) -> StartupFailure {
+    match e {
+        StorageError::Lock(_) => StartupFailure::Lock,
+        StorageError::MigrationFailed { backup, .. } => {
+            info.backup = Some(backup.clone());
+            StartupFailure::MigrationFailed
+        }
+        StorageError::RestoreFailed { backup, .. } => {
+            info.backup = Some(backup.clone());
+            StartupFailure::MigrationRestoreFailed
+        }
+        StorageError::UnsupportedSchema { .. } => StartupFailure::UnsupportedSchema,
+        StorageError::BackupCorrupted { .. } => StartupFailure::Corrupted,
+        StorageError::Sqlite(e) if is_corruption(e) => StartupFailure::Corrupted,
+        _ => StartupFailure::Storage,
+    }
+}
+
+/// SQLite が、データベースが壊れている・データベースでないと答えた失敗か。
+fn is_corruption(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+    )
+}
+
+/// 選んだバックアップで戻せなかった理由（[`AppCore::restore_at_startup`]）。
+fn recover_error(e: &RecoverError) -> CommandError {
+    let reject = |reason| CommandError::Rejected { reason };
+    match e {
+        RecoverError::Backup(b) => match b {
+            BackupError::Corrupted { .. } => reject(RejectReason::Corrupted),
+            BackupError::NotYunagiDatabase(_) => reject(RejectReason::NotYunagi),
+            BackupError::Storage(StorageError::UnsupportedSchema { .. }) => {
+                reject(RejectReason::NewerSchema)
+            }
+            BackupError::Sqlite(_) | BackupError::NotABackup(_) => reject(RejectReason::Unreadable),
+            _ => CommandError::storage(e),
+        },
+        _ => CommandError::storage(e),
+    }
+}
+
+/// 選んだ保存先を使えなかった理由（[`AppCore::choose_data_dir`]）。
+fn data_dir_rejected(e: &DataDirError) -> CommandError {
+    let reject = |reason| CommandError::Rejected { reason };
+    match e {
+        DataDirError::NotAbsolute(_)
+        | DataDirError::NotNormalized(_)
+        | DataDirError::NotUtf8(_) => reject(RejectReason::InvalidPath),
+        DataDirError::NotADirectory(_) => reject(RejectReason::NotADirectory),
+        DataDirError::NoDatabase(_) => reject(RejectReason::NoDatabase),
+        DataDirError::Inspect { .. } => reject(RejectReason::Unreadable),
+        DataDirError::DatabaseCorrupted { .. } => reject(RejectReason::Corrupted),
+        DataDirError::NotYunagiDatabase(_) => reject(RejectReason::NotYunagi),
+        DataDirError::UnsupportedSchema { .. } => reject(RejectReason::NewerSchema),
+        _ => CommandError::storage(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reason(e: StorageError) -> (StartupFailure, Option<PathBuf>) {
+        let mut info = FailureInfo::default();
+        let reason = storage_failure(&e, &mut info);
+        (reason, info.backup)
+    }
+
+    #[test]
+    fn storage_failures_become_startup_reasons() {
+        let backup = PathBuf::from("/d/backups/pre-migration-v1-to-v2-1.db");
+        assert_eq!(
+            reason(StorageError::MigrationFailed {
+                version: 2,
+                name: "x",
+                source: rusqlite::Error::InvalidQuery,
+                backup: backup.clone(),
+            }),
+            (StartupFailure::MigrationFailed, Some(backup.clone()))
+        );
+        assert_eq!(
+            reason(StorageError::RestoreFailed {
+                version: 2,
+                name: "x",
+                source: rusqlite::Error::InvalidQuery,
+                restore_error: Box::new(StorageError::WalUnavailable {
+                    mode: "delete".into()
+                }),
+                backup: backup.clone(),
+            }),
+            (StartupFailure::MigrationRestoreFailed, Some(backup))
+        );
+        assert_eq!(
+            reason(StorageError::UnsupportedSchema {
+                found: 9,
+                supported: 3
+            }),
+            (StartupFailure::UnsupportedSchema, None)
+        );
+        assert_eq!(
+            reason(StorageError::BackupCorrupted {
+                path: "/d/backups/x.db".into(),
+                result: "bad".into()
+            }),
+            (StartupFailure::Corrupted, None)
+        );
+        for code in [rusqlite::ffi::SQLITE_CORRUPT, rusqlite::ffi::SQLITE_NOTADB] {
+            let e = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
+            assert_eq!(
+                reason(StorageError::Sqlite(e)),
+                (StartupFailure::Corrupted, None)
+            );
+        }
+        let full = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            None,
+        );
+        assert_eq!(
+            reason(StorageError::Sqlite(full)),
+            (StartupFailure::Storage, None)
+        );
+        assert_eq!(
+            reason(StorageError::WalUnavailable {
+                mode: "memory".into()
+            }),
+            (StartupFailure::Storage, None)
+        );
+    }
 }

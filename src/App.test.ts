@@ -108,7 +108,7 @@ test("コアとつなぎ、開く処理の状態を出す", async () => {
     shouldMockEvents: true,
   });
   app = mount(App, { target: document.body });
-  await until(() => $("main.content")?.dataset.startup === "opening");
+  await until(() => $(".startup")?.dataset.startup === "opening");
 });
 
 test("サイドバー・上部のバー・凪メーター・キーの案内に、コアの値を出す", async () => {

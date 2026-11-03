@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 13] = [
+    let tests: [(&str, Test); 16] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -87,6 +87,18 @@ fn main() {
         (
             "missing_database_is_reported_and_can_be_created",
             missing_database_is_reported_and_can_be_created,
+        ),
+        (
+            "a_damaged_database_can_be_replaced_from_a_backup",
+            a_damaged_database_can_be_replaced_from_a_backup,
+        ),
+        (
+            "a_missing_database_can_be_retried_or_pointed_elsewhere",
+            a_missing_database_can_be_retried_or_pointed_elsewhere,
+        ),
+        (
+            "a_newer_database_is_reported_without_touching_it",
+            a_newer_database_is_reported_without_touching_it,
         ),
     ];
     // `cargo test <名前>` の名前（`-` で始まらない引数）があれば、名前にそれを含むものだけを走らせる
@@ -1014,4 +1026,166 @@ fn missing_database_is_reported_and_can_be_created(default_dir: &Path) {
     assert_eq!(h.err("today", json!({})), json!({ "kind": "not_ready" }));
     let dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     yunagi_core::storage::DbLock::acquire(&dir, Duration::ZERO).unwrap();
+}
+
+/// `config.json` の保存先を `data_dir` にする（データは移さない）。
+fn point_config_to(default_dir: &Path, data_dir: &Path) {
+    std::fs::write(
+        default_dir.join("config.json"),
+        serde_json::to_string(&json!({ "data_dir": data_dir })).unwrap(),
+    )
+    .unwrap();
+}
+
+/// 保存先 `data_dir` に、TODO `text` と定期バックアップを持つデータベースを作り、閉じる。
+fn create_with_backup(default_dir: &Path, data_dir: &Path, text: &str) {
+    std::fs::create_dir_all(data_dir).unwrap();
+    point_config_to(default_dir, data_dir);
+    let h = Harness::new();
+    h.core.open();
+    assert_eq!(h.next_event().1["state"], "not_found");
+    h.ok("create_database", json!({}));
+    h.core.wait_for_backup();
+    let today = h.today();
+    h.add_todo(&today, text);
+}
+
+/// 壊れていて開けないデータベース：開けなかった理由と場所を返し、バックアップの一覧から選んで
+/// 置き換えられる。壊れたものは backups/ に残る（アーキテクチャ設計書 6.2）。
+fn a_damaged_database_can_be_replaced_from_a_backup(default_dir: &Path) {
+    let data_dir = default_dir.parent().unwrap().join("damaged");
+    create_with_backup(default_dir, &data_dir, "kept in the backup");
+    let db = data_dir.join("yunagi.db");
+    std::fs::write(&db, b"this is not a database").unwrap();
+
+    let h = Harness::new();
+    h.core.open();
+    let (name, failed) = h.next_event();
+    assert_eq!(name, "startup");
+    assert_eq!(failed["state"], "failed");
+    assert_eq!(failed["reason"], "corrupted");
+    assert_eq!(failed["database"], db.display().to_string());
+    assert_eq!(failed["backup"], Value::Null);
+    assert_eq!(h.ok("startup_status", json!({})), failed);
+
+    let list = h.ok("list_backups", json!({}));
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0]["kind"]["type"], "daily");
+    let backup = list[0]["path"].as_str().unwrap().to_owned();
+
+    // 使えないものを選んでも、何も変えずに元の状態に戻る
+    let missing = data_dir.join("missing.db").display().to_string();
+    assert_eq!(
+        h.err("restore_at_startup", json!({ "backup": missing })),
+        json!({ "kind": "rejected", "reason": "unreadable" })
+    );
+    assert_eq!(h.next_event(), ("startup", failed.clone()));
+    assert_eq!(std::fs::read(&db).unwrap(), b"this is not a database");
+
+    let restored = h.ok("restore_at_startup", json!({ "backup": backup }));
+    assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+    let set_aside = PathBuf::from(restored["setAside"].as_str().unwrap());
+    assert_eq!(set_aside.parent().unwrap(), data_dir.join("backups"));
+    assert_eq!(
+        std::fs::read(&set_aside).unwrap(),
+        b"this is not a database"
+    );
+    // バックアップの内容が戻っている（バックアップは TODO を足す前に作ったので空）
+    let today = h.today();
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(board["todos"], json!([]), "{board}");
+    // 開いた後は、起動時の操作はできない
+    assert_eq!(
+        h.err("restore_at_startup", json!({ "backup": backup })),
+        json!({ "kind": "invalid_state" })
+    );
+    assert_eq!(
+        h.err("retry_open", json!({})),
+        json!({ "kind": "invalid_state" })
+    );
+}
+
+/// 見つからないデータベース：やり直す・データベースのある別のフォルダを選び直す（6.3）。
+fn a_missing_database_can_be_retried_or_pointed_elsewhere(default_dir: &Path) {
+    let root = default_dir.parent().unwrap();
+    let existing = root.join("existing");
+    create_with_backup(default_dir, &existing, "in existing");
+    let gone = root.join("not-connected");
+    point_config_to(default_dir, &gone);
+
+    let h = Harness::new();
+    h.core.open();
+    let (_, not_found) = h.next_event();
+    assert_eq!(not_found["state"], "not_found");
+    assert_eq!(not_found["dataDirExists"], false);
+    // まだ繋いでいないので、やり直しても見つからない
+    assert_eq!(h.ok("retry_open", json!({})), not_found);
+    assert_eq!(h.next_event(), ("startup", not_found.clone()));
+    // バックアップの一覧は、保存先のフォルダが無ければ空
+    assert_eq!(h.ok("list_backups", json!({})), json!([]));
+
+    // 使えないフォルダは、何も変えずに断る
+    for (dir, reason) in [
+        ("relative/path".to_owned(), "invalid_path"),
+        (gone.display().to_string(), "not_a_directory"),
+        (
+            root.join("damaged").join("backups").display().to_string(),
+            "no_database",
+        ),
+    ] {
+        assert_eq!(
+            h.err("choose_data_dir", json!({ "dir": dir })),
+            json!({ "kind": "rejected", "reason": reason }),
+            "{dir}"
+        );
+        assert_eq!(h.next_event(), ("startup", not_found.clone()));
+    }
+
+    assert_eq!(
+        h.ok(
+            "choose_data_dir",
+            json!({ "dir": existing.display().to_string() })
+        ),
+        json!({ "state": "ready" })
+    );
+    assert_eq!(h.next_event(), ("startup", json!({ "state": "ready" })));
+    let today = h.today();
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(board["todos"][0]["item"]["text"], "in existing", "{board}");
+    let config: Value =
+        serde_json::from_str(&std::fs::read_to_string(default_dir.join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["data_dir"], existing.display().to_string());
+    // 開いた後の一覧は、開いた保存先のもの
+    assert_eq!(h.ok("list_backups", json!({})).as_array().unwrap().len(), 1);
+}
+
+/// 新しい版で作られたデータベース：開かずに理由と場所を返し、ファイルには触れない。
+fn a_newer_database_is_reported_without_touching_it(default_dir: &Path) {
+    let data_dir = default_dir.parent().unwrap().join("newer");
+    create_with_backup(default_dir, &data_dir, "made by a newer version");
+    let db = data_dir.join("yunagi.db");
+    rusqlite_set_user_version(&db, 999);
+    let before = std::fs::read(&db).unwrap();
+
+    let h = Harness::new();
+    h.core.open();
+    let (_, failed) = h.next_event();
+    assert_eq!(failed["reason"], "unsupported_schema", "{failed}");
+    assert_eq!(failed["database"], db.display().to_string());
+    assert_eq!(std::fs::read(&db).unwrap(), before);
+    // 壊れているわけではないので、バックアップでの置き換えはできない
+    assert_eq!(
+        h.err("restore_at_startup", json!({ "backup": "/x.db" })),
+        json!({ "kind": "invalid_state" })
+    );
+}
+
+/// `db` のスキーマの番号を `version` にする（新しい版で作られたことにする）。
+fn rusqlite_set_user_version(db: &Path, version: i64) {
+    let conn = rusqlite::Connection::open(db).unwrap();
+    conn.pragma_update(None, "user_version", version).unwrap();
+    // WAL の中身を本体に書き戻してから閉じる（ファイルの中身で比べるため）
+    conn.pragma_update(None, "journal_mode", "DELETE").unwrap();
 }
