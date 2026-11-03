@@ -8,8 +8,9 @@ use std::fmt;
 ///
 /// このクレートのエラーは Display に原因の文を含めないが、rusqlite などの外部のエラーには、
 /// Display に原因の文を含め、同時に `source()` でも返すものがある。二重に出さないよう、
-/// 原因の文が1つ前の文と同じか、1つ前の文の末尾と同じときは省く（たどるのは続ける）。
-/// 文の途中に同じ言葉があるだけなら省かない（本当の原因を隠さないため）。
+/// 原因の文が1つ前の文と同じとき、1つ前の文の末尾に `: `・`, ` で区切って付いているとき、
+/// 1つ前の文の先頭に空白で区切って付いているとき（rusqlite の `Utf8Error` など）は省く
+/// （たどるのは続ける）。それ以外で同じ言葉があるだけなら省かない（本当の原因を隠さないため）。
 ///
 /// ```
 /// use yunagi_core::error::ErrorChain;
@@ -28,14 +29,32 @@ impl fmt::Display for ErrorChain<'_> {
         let mut next = self.0.source();
         while let Some(e) = next {
             let text = e.to_string();
-            if !text.is_empty() && !prev.ends_with(&text) {
+            next = e.source();
+            if text.is_empty() {
+                // 文の無い原因は飛ばし、その先の原因は、文のある1つ前と比べる
+                continue;
+            }
+            if !already_shown(&prev, &text) {
                 write!(f, ": {text}")?;
             }
             prev = text;
-            next = e.source();
         }
         Ok(())
     }
+}
+
+/// 原因の文 `cause` が、1つ前の文 `prev` にすでに含まれているか。
+fn already_shown(prev: &str, cause: &str) -> bool {
+    if prev == cause {
+        return true;
+    }
+    if let Some(head) = prev.strip_suffix(cause)
+        && (head.ends_with(": ") || head.ends_with(", "))
+    {
+        return true;
+    }
+    prev.strip_prefix(cause)
+        .is_some_and(|tail| tail.starts_with(' '))
 }
 
 #[cfg(test)]
@@ -88,9 +107,35 @@ mod tests {
         );
         let same = e("disk full", Some(e("disk full", None)));
         assert_eq!(ErrorChain(&same).to_string(), "disk full");
+        // 外部のエラーが Display の先頭に原因の文を含め、source() でも返すとき
+        let head = e(
+            "x",
+            Some(e("bad byte at index 2", Some(e("bad byte", None)))),
+        );
+        assert_eq!(ErrorChain(&head).to_string(), "x: bad byte at index 2");
         // 省いた先の原因はたどり続ける
         let deeper = e("a", Some(e("a", Some(e("b", None)))));
         assert_eq!(ErrorChain(&deeper).to_string(), "a: b");
+        // 文の無い原因は飛ばし、その先は文のある1つ前と比べる
+        let empty = e("x: foo", Some(e("", Some(e("foo", None)))));
+        assert_eq!(ErrorChain(&empty).to_string(), "x: foo");
+    }
+
+    #[test]
+    fn skips_rusqlite_utf8_error_shown_at_the_start() {
+        let utf8 = String::from_utf8(vec![0xff]).unwrap_err().utf8_error();
+        let err = rusqlite::Error::Utf8Error(2, utf8);
+        assert_eq!(ErrorChain(&err).to_string(), format!("{utf8} at index 2"));
+    }
+
+    #[test]
+    fn keeps_a_cause_that_only_matches_part_of_a_word_or_path() {
+        // パスの末尾が原因の文とたまたま同じでも、区切りが無ければ省かない
+        let err = e("could not read /x/disk full", Some(e("full", None)));
+        assert_eq!(
+            ErrorChain(&err).to_string(),
+            "could not read /x/disk full: full"
+        );
     }
 
     #[test]
