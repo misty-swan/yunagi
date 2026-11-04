@@ -211,7 +211,7 @@ fn tools() -> Vec<Tool> {
                 ("date", date()),
                 (
                     "line",
-                    json!({"type": "integer", "minimum": 0, "description": "Line number in the whole note, from 1."}),
+                    json!({"type": "integer", "minimum": 1, "description": "Line number in the whole note, from 1."}),
                 ),
                 (
                     "expected_text",
@@ -224,7 +224,7 @@ fn tools() -> Vec<Tool> {
                 ),
                 (
                     "move_to",
-                    json!({"type": "integer", "minimum": 0, "description": "Line number to move the line to, from 1."}),
+                    json!({"type": "integer", "minimum": 1, "description": "Line number to move the line to, from 1."}),
                 ),
             ],
             required: &["line", "expected_text"],

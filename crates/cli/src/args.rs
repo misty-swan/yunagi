@@ -690,30 +690,37 @@ mod tests {
             parse_args(&["mcp"]).unwrap().command,
             Command::Mcp { client: None }
         );
-        for args in [
-            ["mcp", "--client", "claude-code"],
-            ["mcp", "--client=claude-code", ""],
-        ] {
-            let args: Vec<&str> = args.iter().copied().filter(|a| !a.is_empty()).collect();
-            assert_eq!(
-                parse_args(&args).unwrap().command,
-                Command::Mcp {
-                    client: Some("claude-code".into())
-                }
-            );
-        }
+        let with_client = Command::Mcp {
+            client: Some("claude-code".into()),
+        };
+        assert_eq!(
+            parse_args(&["mcp", "--client", "claude-code"])
+                .unwrap()
+                .command,
+            with_client
+        );
+        assert_eq!(
+            parse_args(&["mcp", "--client=claude-code"])
+                .unwrap()
+                .command,
+            with_client
+        );
     }
 
     #[test]
     fn mcp_ignores_json_so_that_errors_stay_off_standard_output() {
         assert!(!parse_args(&["mcp", "--json"]).unwrap().json);
-        let args: Vec<String> = ["--json", "mcp", "--client", "Bad Name"]
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
-        let e = parse(&args).unwrap_err();
-        assert!(!e.json);
-        assert_eq!(error::code(&e.error), "invalid_argument");
+        // `--json` や値を取るオプションが `mcp` の前にあっても、`mcp` が最初の位置引数なら同じ
+        for args in [
+            &["--json", "mcp", "--client", "Bad Name"][..],
+            &["mcp", "--json", "--client", "Bad Name"],
+            &["--json", "--client", "Bad", "mcp"],
+        ] {
+            let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+            let e = parse(&args).unwrap_err();
+            assert!(!e.json, "{args:?}");
+            assert_eq!(error::code(&e.error), "invalid_argument");
+        }
     }
 
     #[test]

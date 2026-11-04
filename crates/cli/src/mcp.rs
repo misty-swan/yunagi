@@ -15,10 +15,10 @@
 //! 標準出力にはメッセージ以外を書かない（診断は標準エラー）。依頼は 1 件ずつ順に処理する（最大 5 秒待つ
 //! 間は `ping` にも答えない）。
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use serde_json::{Map, Value, json};
-use yunagi_api::{MAX_REQUEST_LINE, wire};
+use yunagi_api::MAX_REQUEST_LINE;
 
 use crate::error::{self, ErrorObject};
 use crate::{Env, Io, Warnings, connector, mcp_tools};
@@ -75,6 +75,8 @@ pub fn run(client: Option<&str>, env: &Env, io: &mut Io<'_>) -> i32 {
             let _ = writeln!(stderr, "{line}");
         }
     };
+    // 接続の道具を作るときに出た警告も、最初の呼び出しを待たずに出す
+    after_call(&mut *io.stderr);
     serve(io.stdin, io.stdout, io.stderr, &mut call, &mut after_call)
 }
 
@@ -89,12 +91,12 @@ pub fn serve(
     after_call: &mut dyn FnMut(&mut dyn Write),
 ) -> i32 {
     loop {
-        let response = match wire::read_line(&mut input, MAX_LINE) {
+        let response = match read_message(&mut input, MAX_LINE) {
             Ok(Some(line)) if line.iter().all(u8::is_ascii_whitespace) => continue,
             Ok(Some(line)) => handle(&line, call, &mut || after_call(&mut *stderr)),
             // 入力が閉じられた（クライアントが終わらせた）
-            Ok(None) | Err(wire::LineError::Truncated) => return 0,
-            Err(wire::LineError::TooLong) => {
+            Ok(None) => return 0,
+            Err(LineError::TooLong) => {
                 // 残りの行を読み捨てて、次の依頼から続ける
                 if skip_line(&mut *input).is_err() {
                     return 0;
@@ -106,7 +108,7 @@ pub fn serve(
                     None,
                 ))
             }
-            Err(wire::LineError::Io(e)) => {
+            Err(LineError::Io(e)) => {
                 let _ = writeln!(stderr, "yunagi: could not read from standard input: {e}");
                 return 0;
             }
@@ -117,6 +119,38 @@ pub fn serve(
             return 1;
         }
     }
+}
+
+/// 1 行を読めなかった理由。
+enum LineError {
+    /// 上限を超えた。
+    TooLong,
+    Io(io::Error),
+}
+
+/// 改行までの 1 行を、最大 `max` バイト（改行を除く）まで読む。何も読まずに閉じられたら `Ok(None)`。
+/// 改行の無いまま閉じられた最後の行も、1 行として返す（クライアントが最後の改行を付けずに閉じても、
+/// 依頼を黙って捨てないため。ローカル API の `wire::read_line` は、閉じ方の誤りとして捨てる）。
+fn read_message(input: &mut dyn BufRead, max: usize) -> Result<Option<Vec<u8>>, LineError> {
+    let mut buf = Vec::new();
+    // 上限 + 改行 1 バイトまで読む。ここで止まって改行が無ければ長すぎる
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    let read = input
+        .take(limit)
+        .read_until(b'\n', &mut buf)
+        .map_err(LineError::Io)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    } else if buf.len() as u64 >= limit {
+        return Err(LineError::TooLong);
+    }
+    Ok(Some(buf))
 }
 
 /// 改行まで読み捨てる。
@@ -171,7 +205,7 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
             ));
         }
     };
-    let Value::Object(message) = message else {
+    let Value::Object(mut message) = message else {
         let text = if message.is_array() {
             "Batch requests are not supported. Send one message per line."
         } else {
@@ -183,7 +217,11 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
     if message.contains_key("result") || message.contains_key("error") {
         return None;
     }
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
+    let Some(method) = message
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
         return Some(rpc_error(
             &Value::Null,
             INVALID_REQUEST,
@@ -192,7 +230,7 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
         ));
     };
     // `id` の無いものは通知：応答しない
-    let id = message.get("id")?;
+    let id = message.get("id")?.clone();
     if !(id.is_string() || id.is_number()) {
         return Some(rpc_error(
             &Value::Null,
@@ -201,12 +239,12 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
             None,
         ));
     }
-    let params = match message.get("params") {
+    let mut params = match message.remove("params") {
         None | Some(Value::Null) => Map::new(),
-        Some(Value::Object(p)) => p.clone(),
+        Some(Value::Object(p)) => p,
         Some(_) => {
             return Some(rpc_error(
-                id,
+                &id,
                 INVALID_PARAMS,
                 "params must be an object.",
                 None,
@@ -219,7 +257,7 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
         Some(Value::String(version)) if version == MODERN_VERSION => true,
         Some(Value::String(version)) => {
             return Some(rpc_error(
-                id,
+                &id,
                 UNSUPPORTED_VERSION,
                 "Unsupported protocol version",
                 Some(json!({"supported": [MODERN_VERSION], "requested": version})),
@@ -227,14 +265,14 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
         }
         Some(_) => {
             return Some(rpc_error(
-                id,
+                &id,
                 INVALID_PARAMS,
                 "The protocol version in _meta must be a string.",
                 None,
             ));
         }
     };
-    let outcome = match method {
+    let outcome = match method.as_str() {
         "initialize" => initialize(&params),
         "ping" => Ok(json!({})),
         "server/discover" => Ok(discover()),
@@ -242,7 +280,7 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
             Ok(json!({"tools": mcp_tools::list(), "ttlMs": 300_000, "cacheScope": "public"}))
         }
         "tools/call" => {
-            let result = tools_call(&params, call);
+            let result = tools_call(&mut params, line.len(), call);
             after_call();
             result
         }
@@ -258,9 +296,9 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
                 object.remove("ttlMs");
                 object.remove("cacheScope");
             }
-            rpc_result(id, result)
+            rpc_result(&id, result)
         }
-        Err((code, text)) => rpc_error(id, code, &text, None),
+        Err((code, text)) => rpc_error(&id, code, &text, None),
     })
 }
 
@@ -299,27 +337,39 @@ fn discover() -> Value {
 
 /// `tools/call`。知らないツールと `name` の欠けはプロトコルのエラー、それ以外の失敗（引数の誤りを含む）は
 /// ツールの結果の `isError`（仕様の Error Handling）。
-fn tools_call(params: &Map<String, Value>, call: &mut CallFn<'_>) -> Result<Value, (i64, String)> {
-    let Some(name) = params.get("name").and_then(Value::as_str) else {
+fn tools_call(
+    params: &mut Map<String, Value>,
+    line_len: usize,
+    call: &mut CallFn<'_>,
+) -> Result<Value, (i64, String)> {
+    let Some(name) = params
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
         return Err((INVALID_PARAMS, "name is required.".to_owned()));
     };
-    if !mcp_tools::exists(name) {
+    if !mcp_tools::exists(&name) {
         return Err((INVALID_PARAMS, format!("Unknown tool: {name}")));
     }
-    let arguments = match params.get("arguments") {
+    let arguments = match params.remove("arguments") {
         None | Some(Value::Null) => Ok(Map::new()),
         Some(Value::Object(arguments)) => {
-            if Value::Object(arguments.clone()).to_string().len() > MAX_ARGUMENTS {
+            // JSON にした引数は、受け取った行より長くならない（エスケープの書き方は、受け取った側のほうが
+            // 長いか同じ）ので、行が上限以下なら測らない
+            let too_large = line_len > MAX_ARGUMENTS
+                && serde_json::to_vec(&arguments).is_ok_and(|json| json.len() > MAX_ARGUMENTS);
+            if too_large {
                 Err(error::invalid_argument(
                     "The arguments are too large. Send less text at a time.",
                 ))
             } else {
-                Ok(arguments.clone())
+                Ok(arguments)
             }
         }
         Some(_) => Err(error::invalid_argument("arguments must be an object.")),
     };
-    let result = arguments.and_then(|arguments| call(name, arguments));
+    let result = arguments.and_then(|arguments| call(&name, arguments));
     Ok(match result {
         Ok(value) => tool_result(&value, false),
         // CLI の `--json` と同じ包み方
@@ -496,6 +546,17 @@ mod tests {
         assert_eq!(r[4]["error"]["code"], INVALID_REQUEST);
         assert_eq!(r[5]["id"], 2);
         assert_eq!(r.len(), 6);
+    }
+
+    #[test]
+    fn a_last_line_without_a_newline_is_still_handled() {
+        let input: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut call = |_: &str, _: Map<String, Value>| Ok(json!({}));
+        let code = serve(&mut { input }, &mut out, &mut err, &mut call, &mut |_| {});
+        assert_eq!(code, 0);
+        let response: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(response["id"], 1);
     }
 
     #[test]
