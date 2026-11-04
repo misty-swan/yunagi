@@ -1,5 +1,6 @@
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { EditorView } from "@codemirror/view";
+import { getCM, Vim } from "@replit/codemirror-vim";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SaveStatus } from "../lib/autosave.svelte";
@@ -22,6 +23,7 @@ let tracker: InputTracker | undefined;
 beforeEach(() => {
   prefs.lang = "ja";
   prefs.noteFont = "body";
+  prefs.vimMode = false;
 });
 
 afterEach(async () => {
@@ -700,4 +702,160 @@ test("右クリックのメニューは、窓の右・下の端の近くでも�
   await until(() => q(".line-menu") !== null && document.activeElement === qa(".line-menu button")[0]);
   expect(parseFloat(q(".line-menu")!.style.left)).toBeLessThanOrEqual(window.innerWidth);
   expect(parseFloat(q(".line-menu")!.style.top)).toBeLessThanOrEqual(window.innerHeight);
+});
+
+// ---- Vim モード（操作仕様書 4.1・4.2） ----
+
+/** Vim のキーを順に押す（Vim の表記。`<Esc>` など）。 */
+function vimKeys(view: EditorView, ...ks: string[]) {
+  const cm = getCM(view)!;
+  for (const k of ks) for (const one of k.match(/<[^>]+>|./g)!) Vim.handleKey(cm, one, "user");
+  flushSync();
+}
+
+const badge = () => text(q(".vim-mode"));
+
+test("Vim モードの有効・無効の切替が、開いているエディタにすぐ反映され、モードを右下に出す", async () => {
+  const { view } = await start("abc");
+  expect(q(".vim-mode")).toBeNull();
+  prefs.vimMode = true;
+  await until(() => badge() === "NORMAL");
+  vimKeys(view(), "i");
+  expect(badge()).toBe("INSERT");
+  vimKeys(view(), "<Esc>", "v");
+  expect(badge()).toBe("VISUAL");
+  vimKeys(view(), "<Esc>");
+  // 無効にすると、モードの表示を消し、Vim のキーを受けない
+  prefs.vimMode = false;
+  await until(() => q(".vim-mode") === null);
+  expect(getCM(view())).toBeNull();
+  press({ key: "x", code: "KeyX", keyCode: 88 }, q(".note-ed .cm-content")!);
+  expect(view().state.doc.toString()).toBe("abc");
+  // もう一度有効にすると、また Vim のキーを受ける
+  prefs.vimMode = true;
+  await until(() => badge() === "NORMAL");
+  vimKeys(view(), "x");
+  expect(view().state.doc.toString()).toBe("bc");
+});
+
+test("Vim モードの有効のまま日を移っても（状態の作り直し）、Vim のキーとモードの表示が続く", async () => {
+  prefs.vimMode = true;
+  const { view, props } = await start("abc");
+  await until(() => badge() === "NORMAL");
+  vimKeys(view(), "i");
+  expect(badge()).toBe("INSERT");
+  props.date = "2026-11-02";
+  await until(() => badge() === "NORMAL");
+  vimKeys(view(), "x");
+  expect(view().state.doc.toString()).toBe("");
+});
+
+test("Vim のノーマルモードでは、「- 」の行の Enter は次の行を作らない。挿入モードでは作る", async () => {
+  prefs.vimMode = true;
+  const { view } = await start("- 買う");
+  const content = q(".note-ed .cm-content")!;
+  content.focus();
+  view().dispatch({ selection: { anchor: 4 } });
+  press({ key: "Enter", code: "Enter", keyCode: 13 }, content);
+  expect(view().state.doc.toString()).toBe("- 買う");
+  vimKeys(view(), "A");
+  press({ key: "Enter", code: "Enter", keyCode: 13 }, content);
+  expect(view().state.doc.toString()).toBe("- 買う\n- ");
+});
+
+test("Vim モードでも、Mod を使うショートカットは Vim が横取りせず、そのまま動く", async () => {
+  prefs.vimMode = true;
+  const { core, view } = await start("- 調べる\n- 待つ");
+  await until(() => badge() === "NORMAL");
+  const content = q(".note-ed .cm-content")!;
+  content.focus();
+  // Mod+Shift+T（TODO へ送る）はノーマルモードでも、挿入モードでも動く
+  press(T, content);
+  await until(() => core.sends.length === 1);
+  vimKeys(view(), "i");
+  view().dispatch({ selection: { anchor: view().state.doc.line(2).from } });
+  press(B, content);
+  await until(() => core.sends.length === 2);
+  vimKeys(view(), "<Esc>");
+  // Vim の Ctrl のキー（<C-v> の矩形選択など）には反応せず、モードも本文も変えない
+  for (const k of ["v", "a", "x", "d", "u", "w", "t"]) {
+    const e = new KeyboardEvent("keydown", { key: k, code: `Key${k.toUpperCase()}`, ctrlKey: true, bubbles: true, cancelable: true });
+    content.dispatchEvent(e);
+  }
+  expect(badge()).toBe("NORMAL");
+  expect(view().state.doc.toString()).toBe("- 調べる\n- 待つ");
+  // Mod+Z（取り消し）は Vim のノーマルモードでも使える
+  vimKeys(view(), "x");
+  expect(view().state.doc.toString()).not.toBe("- 調べる\n- 待つ");
+  press({ key: "z", code: "KeyZ", keyCode: 90, ctrlKey: true }, content);
+  expect(view().state.doc.toString()).toBe("- 調べる\n- 待つ");
+});
+
+test("Vim モードでも、割当を変えたキー（Alt を使うもの）はノーマル・ビジュアルモードで動き、本文とモードを変えない", async () => {
+  prefs.vimMode = true;
+  prefs.shortcuts = { toTodo: "Alt+T", timeHeading: "Mod+Enter" };
+  try {
+    const { core, view } = await start("- 一\n- 二");
+    await until(() => badge() === "NORMAL");
+    const content = q(".note-ed .cm-content")!;
+    content.focus();
+    view().dispatch({ selection: { anchor: 0 } });
+    press({ key: "t", code: "KeyT", altKey: true }, content);
+    await until(() => core.sends.length === 1);
+    expect(core.sends[0]).toMatchObject({ text: "- 一", kind: "todo" });
+    expect(badge()).toBe("NORMAL");
+    // ビジュアルモードでも同じ（選んだ行を送る）
+    vimKeys(view(), "j", "V");
+    view().dispatch({ selection: { anchor: view().state.doc.line(2).from, head: view().state.doc.line(2).to } });
+    press({ key: "t", code: "KeyT", altKey: true }, content);
+    await until(() => core.sends.length === 2);
+    expect(badge()).toBe("VISUAL");
+    // 見出しも、変えたキーで入る（ノーマルモードのまま）
+    vimKeys(view(), "<Esc>");
+    press({ key: "Enter", code: "Enter", keyCode: 13, ctrlKey: true }, content);
+    expect(view().state.doc.toString()).toContain("## 14:05 ");
+    expect(badge()).toBe("NORMAL");
+  } finally {
+    prefs.shortcuts = {};
+  }
+});
+
+test("<Space>t <Space>b は Vim が作る選択のとおりに送る：行ビジュアルは選んだ行だけ、gg V G は全行", async () => {
+  prefs.vimMode = true;
+  const { core, view } = await start("- 一\n- 二\n- 三");
+  await until(() => badge() === "NORMAL");
+  // 2 行目で V：その行だけ（選択範囲が次の行の先頭に届いても、次の行は送らない）
+  view().dispatch({ selection: { anchor: view().state.doc.line(2).from } });
+  vimKeys(view(), "V");
+  vimKeys(view(), "<Space>t");
+  await until(() => core.sends.length === 1);
+  expect(core.sends[0]).toMatchObject({ text: "- 二", kind: "todo" });
+  await until(() => badge() === "NORMAL");
+  // gg V G：全行（空の行は送らない）
+  vimKeys(view(), "g", "g", "V", "G");
+  vimKeys(view(), "<Space>b");
+  await until(() => core.sends.length === 3);
+  expect(core.sends.slice(1).map((s) => [s.text, s.kind])).toEqual([["- 一", "blocker"], ["- 三", "blocker"]]);
+});
+
+test("<Space>t <Space>b は現在行（ビジュアルモードでは選んだ行）を TODO・障害へ送り、<Space>h は見出しを入れて挿入モードにする", async () => {
+  prefs.vimMode = true;
+  const { core, view } = await start("- 一\n- 二\n- 三");
+  await until(() => badge() === "NORMAL");
+  view().dispatch({ selection: { anchor: 0 } });
+  vimKeys(view(), "<Space>t");
+  await until(() => core.sends.length === 1);
+  expect(core.sends[0]).toMatchObject({ text: "- 一", kind: "todo" });
+  // ビジュアル（行）：選んだ行を送り、送り終えたらノーマルモードに戻る
+  vimKeys(view(), "G", "V", "k");
+  view().dispatch({ selection: { anchor: view().state.doc.line(2).from, head: view().state.doc.line(3).to } });
+  vimKeys(view(), "<Space>b");
+  await until(() => core.sends.length === 3);
+  expect(core.sends.slice(1).map((s) => [s.text, s.kind])).toEqual([["- 二", "blocker"], ["- 三", "blocker"]]);
+  await until(() => badge() === "NORMAL");
+  // 見出し
+  vimKeys(view(), "G", "<Space>h");
+  expect(view().state.doc.toString().endsWith("\n\n## 14:05 ")).toBe(true);
+  expect(badge()).toBe("INSERT");
+  expect(view().state.selection.main.head).toBe(view().state.doc.length);
 });

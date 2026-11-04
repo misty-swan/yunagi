@@ -15,6 +15,8 @@
   // - 設定のノートの書体が等幅なら、同梱の等幅の書体を読み込み終えてから当てる（src/lib/fonts.svelte.ts）。
   //   起動時は、読み込み終えるまで（上限 FONT_WAIT_MS）ノートの文字を出さない。
   // - 保存・取り込み・入力中の状態・日の移動は、振り返りと共通（src/lib/doc_editor.ts）。
+  // - 設定の Vim モードが有効なら、エディタを Vim のキーで操作する（src/lib/editor_vim.ts。操作仕様書 4.2）。
+  //   `<Space>t` `<Space>b` `<Space>h` は Mod+Shift+T・B・H と同じ操作を呼ぶ。現在のモードは右下に小さく出す。
   import { isolateHistory } from "@codemirror/commands";
   import { RangeSetBuilder, StateField, type EditorState, type Transaction } from "@codemirror/state";
   import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
@@ -30,8 +32,10 @@
   import { continueList, insertTimeHeading, timeHeadingOf, type Edit, type TimeHeading } from "../lib/note";
   import { markedLine, marksField, sendRange, sentCounts, setMarks } from "../lib/note_marks";
   import type { Notice } from "../lib/notice.svelte";
+  import { setVimHost, type VimMode } from "../lib/editor_vim";
   import { prefs, type NoteFont } from "../lib/prefs.svelte";
   import type { EditorPresence } from "../lib/ui_report.svelte";
+  import VimBadge from "../shell/VimBadge.svelte";
 
   let {
     date,
@@ -86,6 +90,8 @@
 
   const m = $derived(t());
   let host = $state<HTMLElement | null>(null);
+  /** Vim の現在のモード（Vim が無効なら `null`）。 */
+  let vimMode = $state<VimMode | null>(null);
 
   // ---- 時刻付き見出しと Outline ----
 
@@ -344,6 +350,7 @@
       keys: [{ key: "Enter", run: enter }],
     }),
     label: () => t().noteLabel,
+    onVimMode: (m) => (vimMode = m),
     onLoaded: (d) => {
       loaded = d;
       marked = false;
@@ -551,8 +558,22 @@
     });
   });
 
+  // Vim の `<Space>t` `<Space>b` `<Space>h` は、キーの割当を変えていても、この操作を呼ぶ
+  // （Vim のキーは固定。Mod+Shift+T・B・H の割当とは別）
+  const vimHost = {
+    send: (v: EditorView, kind: ItemKind) => sendLines(v, kind),
+    timeHeading: (v: EditorView) => timeHeading(v),
+  };
+
+  // 設定の Vim モードを、開いているエディタにすぐ反映する
+  $effect(() => {
+    const on = prefs.vimMode;
+    untrack(() => editor.setVim(on));
+  });
+
   onMount(() => {
     view = editor.mount(host!);
+    setVimHost(view, vimHost);
     syncOutline(view.state);
     return () => {
       clearTimeout(marksTimer);
@@ -582,28 +603,31 @@
 
 <svelte:window onkeydown={onKeydown} onpointerdown={onPointerDown} onblur={() => closeMenu(false)} />
 
-<div class="note" data-font={applied} data-ready={ready ? "" : undefined} data-narrow={narrow ? "" : undefined}>
-  <div class="wrap">
-    <div class="note-ed" bind:this={host}></div>
-    <aside class="note-side">
-      <nav class="outline" aria-label={m.labels.outline}>
-        <div class="label">{m.labels.outline}</div>
-        {#each heads as h (h.line)}
-          <button type="button" class:cur={h.line === cur} aria-current={h.line === cur ? "location" : undefined} onclick={() => toHeading(h)}>
-            <span class="ot">{h.time}</span>
-            {#if h.title !== ""}<span class="tt">{h.title}</span>{/if}
-          </button>
-        {/each}
-      </nav>
-      <section class="sent" aria-label={m.labels.sent}>
-        <div class="label">{m.labels.sent}</div>
-        <div class="counts">
-          <span data-kind="todo">{m.labels.hint.toTodo} <b>{sent.todo}</b></span>
-          <span data-kind="blocker">{m.labels.hint.toBlockers} <b>{sent.blocker}</b></span>
-        </div>
-      </section>
-    </aside>
+<div class="note-root">
+  <div class="note" data-font={applied} data-ready={ready ? "" : undefined} data-narrow={narrow ? "" : undefined}>
+    <div class="wrap">
+      <div class="note-ed" bind:this={host}></div>
+      <aside class="note-side">
+        <nav class="outline" aria-label={m.labels.outline}>
+          <div class="label">{m.labels.outline}</div>
+          {#each heads as h (h.line)}
+            <button type="button" class:cur={h.line === cur} aria-current={h.line === cur ? "location" : undefined} onclick={() => toHeading(h)}>
+              <span class="ot">{h.time}</span>
+              {#if h.title !== ""}<span class="tt">{h.title}</span>{/if}
+            </button>
+          {/each}
+        </nav>
+        <section class="sent" aria-label={m.labels.sent}>
+          <div class="label">{m.labels.sent}</div>
+          <div class="counts">
+            <span data-kind="todo">{m.labels.hint.toTodo} <b>{sent.todo}</b></span>
+            <span data-kind="blocker">{m.labels.hint.toBlockers} <b>{sent.blocker}</b></span>
+          </div>
+        </section>
+      </aside>
+    </div>
   </div>
+  <VimBadge mode={vimMode} />
 </div>
 
 {#if menu !== null}
@@ -627,6 +651,12 @@
 {/if}
 
 <style>
+  /* スクロールしない外枠（Vim のモードの表示を右下に固定するため） */
+  .note-root {
+    position: relative;
+    height: 100%;
+  }
+
   .note {
     height: 100%;
     overflow: auto;

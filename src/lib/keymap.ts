@@ -213,6 +213,9 @@ const RESERVED = ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "M
 /** Windows・Linux で、Vim モードの Esc と重なるキー（Ctrl+[）。 */
 const VIM_ESC = "Mod+[";
 
+/** Windows・Linux で、Vim モードのやり直し（`<C-r>`。操作仕様書 4.2）と重なるキー（Ctrl+R）。 */
+const VIM_REDO = "Mod+R";
+
 /** 割り当てられないキーか。割り当てられれば `null`。 */
 export function problemOf(b: Binding, vim: boolean, mac: boolean): BindingProblem | null {
   if (!b.mod && !b.alt) return "no_modifier";
@@ -233,7 +236,7 @@ export function problemOf(b: Binding, vim: boolean, mac: boolean): BindingProble
   const f = format(b);
   if (RESERVED.includes(f)) return "reserved";
   if (!mac && f === "Mod+Y") return "reserved";
-  if (vim && !mac && f === VIM_ESC) return "reserved";
+  if (vim && !mac && (f === VIM_ESC || f === VIM_REDO)) return "reserved";
   return null;
 }
 

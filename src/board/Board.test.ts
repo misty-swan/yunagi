@@ -1,3 +1,5 @@
+import { EditorView } from "@codemirror/view";
+import { getCM, Vim } from "@replit/codemirror-vim";
 import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushSync, mount, unmount } from "svelte";
@@ -695,4 +697,110 @@ test("振り返りを入力してすぐ別の日へ移っても、前の日に�
   await until(() => calls.some((c) => c.cmd === "save_text_doc" && c.args.date === TODAY));
   const saves = calls.filter((c) => c.cmd === "save_text_doc" && c.args.date === TODAY).map((c) => c.args.body);
   expect(saves).not.toContain("");
+});
+
+// ---- 振り返り欄の Vim（操作仕様書 4.1・4.2） ----
+
+const refView = () => EditorView.findFromDOM($(".ref-ed .cm-editor")!)!;
+
+/** Vim のキーを順に押す（Vim の表記。`<Esc>` など）。 */
+function vimKeys(view: EditorView, ...ks: string[]) {
+  const cm = getCM(view)!;
+  for (const k of ks) for (const one of k.match(/<[^>]+>|./g)!) Vim.handleKey(cm, one, "user");
+  flushSync();
+}
+
+const refBadge = () => text($(".ref-root .vim-mode"));
+
+test("Vim モードの振り返り欄：モードを右下に出し、有効・無効の切替がすぐ反映される。<Space>t / b / h は何もしない", async () => {
+  const { calls } = await start({ reflection: "一行目\n二行目" });
+  expect($(".ref-root .vim-mode")).toBeNull();
+  prefs.vimMode = true;
+  await until(() => refBadge() === "NORMAL");
+  vimKeys(refView(), "i");
+  expect(refBadge()).toBe("INSERT");
+  vimKeys(refView(), "<Esc>", "v");
+  expect(refBadge()).toBe("VISUAL");
+  vimKeys(refView(), "<Esc>");
+  // ノート専用の操作は、キーを受けるだけで何もしない（行送りも、挿入モードも、文字の移動・検索も起こさない）
+  const before = refView().state.selection.main.head;
+  vimKeys(refView(), "<Space>t", "<Space>b", "<Space>h");
+  expect(refView().state.doc.toString()).toBe("一行目\n二行目");
+  expect(refView().state.selection.main.head).toBe(before);
+  expect(refBadge()).toBe("NORMAL");
+  expect(calls.some((c) => c.cmd === "send_note_lines")).toBe(false);
+  // 編集（x）は動く。無効にするとモードの表示が消える
+  vimKeys(refView(), "x");
+  expect(refView().state.doc.toString()).toBe("行目\n二行目");
+  prefs.vimMode = false;
+  await until(() => $(".ref-root .vim-mode") === null);
+});
+
+test("Vim モードの振り返り欄：ノーマルモードの Tab・Shift+Tab で領域を移り、Mod を使うキーは Vim が横取りしない", async () => {
+  prefs.vimMode = true;
+  await start({
+    reflection: "abc",
+    boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))], reflectionRev: 1 } },
+  });
+  await until(() => refBadge() === "NORMAL");
+  const content = $(".ref-ed .cm-content")!;
+  content.focus();
+  const key = (init: KeyboardEventInit) => {
+    const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    document.activeElement!.dispatchEvent(e);
+    flushSync();
+    return e;
+  };
+  // 次の領域（端から反対の端へ回る）：振り返り → TODO
+  key({ key: "Tab", code: "Tab", keyCode: 9 });
+  await until(() => $$(".r-todo .item")[0].contains(document.activeElement));
+  // 振り返りへ戻って、Shift+Tab：障害の領域（行が無いので領域そのもの）
+  content.focus();
+  key({ key: "Tab", code: "Tab", keyCode: 9, shiftKey: true });
+  await until(() => document.activeElement?.closest(".r-blk") !== null);
+  // 挿入モードの Tab は領域を移らない
+  content.focus();
+  vimKeys(refView(), "i");
+  key({ key: "Tab", code: "Tab", keyCode: 9 });
+  expect(document.activeElement).toBe(content);
+  vimKeys(refView(), "<Esc>");
+  // Ctrl+R はやり直し、Vim の Ctrl+V / Ctrl+A / Ctrl+X には反応しない
+  expect(refBadge()).toBe("NORMAL");
+  for (const k of ["v", "x", "d", "u"]) {
+    key({ key: k, code: `Key${k.toUpperCase()}`, ctrlKey: true });
+    expect(refBadge(), `Ctrl+${k}`).toBe("NORMAL");
+  }
+  expect(refView().state.doc.toString()).toBe("abc");
+  // Mod+A（全選択）は標準のとおり動く（選んだので Vim はビジュアルモードになる）
+  key({ key: "a", code: "KeyA", ctrlKey: true });
+  expect(refView().state.selection.main).toMatchObject({ from: 0, to: 3 });
+  vimKeys(refView(), "<Esc>");
+  // テンプレートの挿入（Mod+Shift+R）は Vim のノーマルモードでも動く
+  key({ key: "R", code: "KeyR", keyCode: 82, ctrlKey: true, shiftKey: true });
+  await until(() => refView().state.doc.toString().includes("## 良かったこと"));
+});
+
+test("整理モードのリストから振り返り欄へ Tab で移ったとき、Vim のキーで操作できる", async () => {
+  prefs.vimMode = true;
+  await start({
+    reflection: "abc",
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [bi(item(A, "一"))],
+        blockers: [bi(item(B, "詰まり", { kind: "blocker" }))],
+        reflectionRev: 1,
+      },
+    },
+  });
+  // TODO の行から Tab を 2 回（TODO → 障害 → 振り返り）で振り返りに着く
+  const row = $$(".r-todo .item")[0];
+  row.focus();
+  vimKey(row, "Tab");
+  await until(() => $$(".r-blk .item")[0].contains(document.activeElement));
+  vimKey(document.activeElement as HTMLElement, "Tab");
+  await until(() => $(".ref-ed .cm-content") === document.activeElement);
+  expect(refBadge()).toBe("NORMAL");
+  vimKeys(refView(), "x");
+  expect(refView().state.doc.toString()).toBe("bc");
 });

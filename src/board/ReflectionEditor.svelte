@@ -4,6 +4,9 @@
   // - 「## 」で始まる行は見出し：夕陽色（`--accent-strong`）の小さな文字にし、「## 」はごく薄く出す。
   // - Mod+Shift+R で「良かったこと／詰まったこと／明日の一手」の見出しを入れる（操作仕様書 2章）。
   // - 保存・取り込み・入力中の状態・日の移動は、ノートと共通（src/lib/doc_editor.ts）。
+  // - 設定の Vim モードが有効なら、エディタを Vim のキーで操作する（src/lib/editor_vim.ts。操作仕様書 4.2）。
+  //   `<Space>t` `<Space>b` `<Space>h` は何もしない（ノートだけの操作）。ノーマルモードの Tab・Shift+Tab は、
+  //   整理モードのリストと同じく領域を移る。現在のモードは右下に小さく出す。
   import { RangeSetBuilder } from "@codemirror/state";
   import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
   import { onMount, untrack } from "svelte";
@@ -12,9 +15,12 @@
   import { selectMatch, TextDocEditor } from "../lib/doc_editor";
   import { t } from "../lib/i18n";
   import { boardActionOf } from "../lib/board_keys";
+  import { vimModeOf, type VimMode } from "../lib/editor_vim";
   import { isMacPlatform } from "../lib/keys";
   import { blank } from "../lib/note";
+  import { prefs } from "../lib/prefs.svelte";
   import type { EditorPresence } from "../lib/ui_report.svelte";
+  import VimBadge from "../shell/VimBadge.svelte";
 
   let {
     date,
@@ -22,6 +28,7 @@
     presence,
     rev,
     onActivity,
+    onRegion = () => {},
     find = null,
     onFound = () => {},
     view = $bindable(null),
@@ -32,6 +39,8 @@
     /** ボードを読んだときの振り返りの版（進んだら、コアの最新を読み直して取り込む）。 */
     rev: number;
     onActivity: () => void;
+    /** Vim のノーマルモードの Tab・Shift+Tab：前（-1）・次（+1）の領域へ移る。 */
+    onRegion?: (dir: -1 | 1) => void;
     /** 検索パレットの結果から移る先：その日の振り返りで、検索語 `text` と一致した所（`n` は選ぶたびに変わる）。 */
     find?: { date: LogicalDate; text: string; n: number } | null;
     /** `find` へ移り終えた（一致する所が無ければ、先頭へ移る）。 */
@@ -43,6 +52,8 @@
   let loaded = $state<LogicalDate | null>(null);
 
   let host = $state<HTMLElement | null>(null);
+  /** Vim の現在のモード（Vim が無効なら `null`）。 */
+  let vimMode = $state<VimMode | null>(null);
 
   const headingLine = Decoration.line({ class: "cm-ref-h" });
   const headingMark = Decoration.mark({ class: "cm-md" });
@@ -101,6 +112,11 @@
         headingPlugin,
         EditorView.domEventHandlers({
           keydown: (e, v) => {
+            // Vim のノーマルモードの Tab・Shift+Tab は領域の移動（整理モードのリストと同じ）
+            if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey && vimModeOf(v) === "normal") {
+              onRegion(e.shiftKey ? -1 : 1);
+              return true;
+            }
             if (boardActionOf(e, isMacPlatform()) !== "template") return false;
             e.preventDefault();
             return insertTemplate(v);
@@ -110,7 +126,14 @@
       keys: [],
     }),
     label: () => t().reflectionLabel,
+    onVimMode: (m) => (vimMode = m),
     onLoaded: (d) => (loaded = d),
+  });
+
+  // 設定の Vim モードを、開いているエディタにすぐ反映する
+  $effect(() => {
+    const on = prefs.vimMode;
+    untrack(() => editor.setVim(on));
   });
 
   // 検索パレットの結果から移る：その日の本文を読み終えてから、一致した所を選ぶ
@@ -159,9 +182,28 @@
   });
 </script>
 
-<div class="ref-ed" bind:this={host}></div>
+<div class="ref-root">
+  <div class="ref-ed" bind:this={host}></div>
+  <!-- 文が長くて振り返りの領域がスクロールしても、見える範囲の右下に残す（高さ 0 の枠を下端に貼り付ける） -->
+  <div class="ref-badge"><VimBadge mode={vimMode} /></div>
+</div>
 
 <style>
+  /* Vim のモードの表示を右下に置くための外枠 */
+  .ref-root {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ref-badge {
+    position: sticky;
+    bottom: 0;
+    flex: none;
+    height: 0;
+  }
+
   .ref-ed {
     flex: 1;
     display: flex;
