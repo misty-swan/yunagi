@@ -477,7 +477,10 @@ export class BoardModel {
       return;
     }
     try {
-      await this.items.run(key, (id) => core.copyHandoff(id));
+      // 削除・並べ替えなどの送りの途中なら、それが終わってから書き出す（画面の本文と食い違わないため）
+      const run = this.#ops.then(() => this.items.run(key, (id) => core.copyHandoff(id)));
+      this.#ops = run.catch(() => {});
+      await run;
       this.#deps.notify({ kind: "handoff_copied" });
     } catch (e) {
       // 利用者には理由を分けて見せない（04 2章）。原因はログに残す

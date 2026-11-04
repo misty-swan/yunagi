@@ -523,7 +523,7 @@ pub async fn copy_handoff(
     id: Id,
 ) -> Result<(), CommandError> {
     let markdown = blocking(&core, move |core| {
-        core.read(|conn| handoff::build_now(conn, id.0, &system_tz(), now()).map(|h| h.markdown))
+        core.read(|conn| handoff::build(conn, id.0, &system_tz(), now()).map(|h| h.markdown))
     })
     .await?;
     let clipboard = Arc::clone(&clipboard);

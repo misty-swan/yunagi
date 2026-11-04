@@ -80,9 +80,10 @@ impl From<rusqlite::Error> for HandoffError {
     }
 }
 
-/// TODO `item_id` の依頼文を書き出す。`client_id` に `read` が要る（権限はコアが確かめる）。`today` は
-/// 末尾の日付（呼び出し側が設定とタイムゾーンで求めた論理日付の今日）。
-pub fn export(
+/// [`export`] の、今日 `today` を呼び出し側が渡すもの（試験用。実際の入り口は、今日を同じ読み取りの中で
+/// 求める [`export`]）。
+#[cfg(test)]
+fn export_on(
     conn: &Connection,
     client_id: Ulid,
     item_id: Ulid,
@@ -91,18 +92,16 @@ pub fn export(
     agent::read_as(conn, client_id, || read(conn, item_id, today))
 }
 
-/// 画面の入り口。[`export`] と同じ依頼文を、権限を確かめずに書き出す。
-pub fn build(
-    conn: &Connection,
-    item_id: Ulid,
-    today: LogicalDate,
-) -> Result<Handoff, HandoffError> {
+/// [`build`] の、今日 `today` を呼び出し側が渡すもの（試験用）。
+#[cfg(test)]
+fn build_on(conn: &Connection, item_id: Ulid, today: LogicalDate) -> Result<Handoff, HandoffError> {
     in_read_transaction(conn, || read(conn, item_id, today))
 }
 
-/// [`export`] の、今日を同じ読み取りの中で（切り替わり時刻の設定と同じ時点で）求めるもの。ローカル API が
+/// TODO `item_id` の依頼文を書き出す。`client_id` に `read` が要る（権限はコアが確かめる）。末尾の日付の
+/// 今日は、同じ読み取りの中で（切り替わり時刻の設定と同じ時点で）`tz`・`now` から求める。ローカル API が
 /// 使う（今日の求め方を呼び出し側に書き写さないため）。
-pub fn export_now(
+pub fn export(
     conn: &Connection,
     client_id: Ulid,
     item_id: Ulid,
@@ -114,8 +113,8 @@ pub fn export_now(
     })
 }
 
-/// [`build`] の、今日を同じ読み取りの中で求めるもの。画面の `copy_handoff` が使う。
-pub fn build_now(
+/// 画面の入り口（`copy_handoff`）。[`export`] と同じ依頼文を、権限を確かめずに書き出す。
+pub fn build(
     conn: &Connection,
     item_id: Ulid,
     tz: &TimeZone,
@@ -230,7 +229,7 @@ mod tests {
         let body = "前置き\n## 10:00 定例\n- API のレート制限を調査\n- 外部APIの429が増えている。上限は1分あたり600件らしい\n  - リトライは指数バックオフで\n\n- ステージング環境の権限待ち\n## 11:00 別件\n- 関係ない";
         let todo = send_lines(conn, "2026-11-03", body, 3..=3, ItemKind::Todo)[0];
         send_lines(conn, "2026-11-03", body, 7..=7, ItemKind::Blocker);
-        let h = build(conn, todo, date("2026-11-03")).unwrap();
+        let h = build_on(conn, todo, date("2026-11-03")).unwrap();
         assert_eq!(h.id, todo);
         assert_eq!(
             h.markdown,
@@ -258,7 +257,7 @@ mod tests {
             at(T1),
         )
         .unwrap();
-        let h = export(conn, cli, added.id, date("2026-11-04")).unwrap();
+        let h = export_on(conn, cli, added.id, date("2026-11-04")).unwrap();
         assert_eq!(
             h.markdown,
             "## Task\n調べる\n\n(Exported from Yunagi on 2026-11-04)\n"
@@ -271,7 +270,7 @@ mod tests {
         let conn = db.connection();
         let body = "メモ\n- 調べる\n\n```\n- ログ  \n\n```\n---\n## 10:00 後";
         let todo = send_lines(conn, "2026-11-02", body, 2..=2, ItemKind::Todo)[0];
-        let h = build(conn, todo, date("2026-11-03")).unwrap();
+        let h = build_on(conn, todo, date("2026-11-03")).unwrap();
         // 送った行は載せない。空行・区切り線・囲みの印は載せず、囲みの中は印のように見えてもそのまま
         assert_eq!(
             h.markdown,
@@ -285,7 +284,7 @@ mod tests {
         let conn = db.connection();
         let body = "## 10:00 定例\n- 調べる\n";
         let todo = send_lines(conn, "2026-11-03", body, 2..=2, ItemKind::Todo)[0];
-        let h = build(conn, todo, date("2026-11-03")).unwrap();
+        let h = build_on(conn, todo, date("2026-11-03")).unwrap();
         assert_eq!(
             h.markdown,
             "## Task\n調べる\n\n(Exported from Yunagi on 2026-11-03)\n"
@@ -315,7 +314,7 @@ mod tests {
             .iter()
             .find(|i| i.carried_from_id == Some(todo))
             .unwrap();
-        let h = build(conn, carried.id, date("2026-11-03")).unwrap();
+        let h = build_on(conn, carried.id, date("2026-11-03")).unwrap();
         assert!(
             h.markdown
                 .contains("(from notes on 2026-11-02)\n- 10:00 定例: 背景の話\n")
@@ -332,27 +331,27 @@ mod tests {
         let today = date("2026-11-03");
         // 登録されていないクライアントには、何も許可されない（read も）
         let unknown = Ulid::generate();
-        let err = export(conn, unknown, todo, today).unwrap_err();
+        let err = export_on(conn, unknown, todo, today).unwrap_err();
         assert!(matches!(
             err,
             HandoffError::PermissionDenied(p) if p.required_scope == Scope::Read
         ));
         // 権限が先：存在しない ID でも permission_denied
-        let err = export(conn, unknown, Ulid::generate(), today).unwrap_err();
+        let err = export_on(conn, unknown, Ulid::generate(), today).unwrap_err();
         assert!(matches!(err, HandoffError::PermissionDenied(_)));
         let cli = agent_client::CLI_ID;
         assert!(matches!(
-            export(conn, cli, Ulid::generate(), today).unwrap_err(),
+            export_on(conn, cli, Ulid::generate(), today).unwrap_err(),
             HandoffError::NotFound
         ));
         assert!(matches!(
-            export(conn, cli, blocker, today).unwrap_err(),
+            export_on(conn, cli, blocker, today).unwrap_err(),
             HandoffError::NotTodo
         ));
         // 削除した TODO は、無いものとして扱う
         item::delete(conn, todo, at(T1)).unwrap();
         assert!(matches!(
-            export(conn, cli, todo, today).unwrap_err(),
+            export_on(conn, cli, todo, today).unwrap_err(),
             HandoffError::NotFound
         ));
     }
@@ -363,7 +362,7 @@ mod tests {
         let conn = db.connection();
         let todo = send_lines(conn, "2026-11-03", "- 調べる", 1..=1, ItemKind::Todo)[0];
         item::set_closed(conn, todo, Some(at(T1)), at(T1)).unwrap();
-        let h = build(conn, todo, date("2026-11-03")).unwrap();
+        let h = build_on(conn, todo, date("2026-11-03")).unwrap();
         assert!(h.markdown.starts_with("## Task\n調べる\n"));
     }
 }

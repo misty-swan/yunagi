@@ -637,6 +637,9 @@ impl DaySends {
     /// ことで、生きている記録の行を取ってしまわないように。ほかの印の行は変えない）。印は付けない
     /// （送り元の行をたどるためだけ）。
     fn gone_marks(&self, keys: &[LineKey], by_text: &LineIndex<'_>, live: &[Mark]) -> Vec<Mark> {
+        if self.gone.is_empty() {
+            return Vec::new();
+        }
         let taken = live.iter().map(|m| m.line - 1).collect();
         marks_of(&self.gone, keys, by_text, &taken)
     }
