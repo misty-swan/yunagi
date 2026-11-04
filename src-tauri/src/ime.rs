@@ -13,9 +13,11 @@
 //! 切替の呼び出しは、1本の専用スレッド（[`ImeWorker`]）に順に渡す。Esc の直後に `i` を押しても、
 //! 英数への切替より先に復元が走らないようにするため。呼ぶ側（画面）は待たない。
 
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Sender};
+use std::time::{Duration, Instant};
 
 use crate::types::{ImeMethod, ImeStatus};
 
@@ -40,23 +42,39 @@ pub trait Backend: Send {
 pub struct Session {
     detect: Box<dyn FnMut() -> Option<Box<dyn Backend>> + Send>,
     backend: Option<Box<dyn Backend>>,
+    /// 仕組みが見つからなかったとき、この時刻までは探し直さない。
+    none_until: Option<Instant>,
     saved: Option<String>,
 }
 
+/// 使える仕組みが見つからなかったあと、探し直すまでの時間。
+const DETECT_BACKOFF: Duration = Duration::from_secs(5);
+
 impl Session {
-    /// `detect` は、使える仕組みを探す（見つからなければ `None`。切替のたびに、無ければもう一度探す。
-    /// 利用者が後から IME を起動した場合に使えるようにするため）。
+    /// `detect` は、使える仕組みを探す（見つからなければ `None`。切替のたびに、無ければ探し直す。
+    /// 利用者が後から IME を起動した場合に使えるようにするため。見つからなかった直後の
+    /// 5 秒の間は探し直さない）。
     pub fn new(detect: impl FnMut() -> Option<Box<dyn Backend>> + Send + 'static) -> Self {
         Self {
             detect: Box::new(detect),
             backend: None,
+            none_until: None,
             saved: None,
         }
     }
 
     fn backend(&mut self) -> Option<&mut Box<dyn Backend>> {
         if self.backend.is_none() {
+            // 見つからなかった直後は、探し直さない（IME の無い環境で、Esc のたびにコマンドを
+            // 起動し続けないため）
+            if self.none_until.is_some_and(|t| Instant::now() < t) {
+                return None;
+            }
             self.backend = (self.detect)();
+            self.none_until = self
+                .backend
+                .is_none()
+                .then(|| Instant::now() + DETECT_BACKOFF);
         }
         self.backend.as_mut()
     }
@@ -82,22 +100,27 @@ impl Session {
         }
     }
 
-    /// 挿入モードに入った：抜けた時点の入力状態に戻す（覚えているものがなければ何もしない）。
-    pub fn enter_insert(&mut self) {
+    /// 挿入モードに入った：覚えていた入力状態を捨て、`restore` なら抜けた時点の入力状態に戻す
+    /// （覚えているものがなければ何もしない）。設定が無効のときも入ったことは知らせる（抜けた後に
+    /// 入らないまま、もう一度抜けた状態を、古い入力状態で上書きしないため）。
+    pub fn enter_insert(&mut self, restore: bool) {
         let Some(saved) = self.saved.take() else {
             return;
         };
+        if !restore {
+            return;
+        }
         let Some(b) = self.backend() else { return };
+        // 戻せなくても（入力ソースが無効にされたなど）、仕組みそのものは使えるので捨てない
         if let Err(e) = b.restore(&saved) {
             eprintln!("yunagi: failed to restore the input method: {e}");
-            self.backend = None;
         }
     }
 }
 
 enum Msg {
     LeaveInsert,
-    EnterInsert,
+    EnterInsert { restore: bool },
 }
 
 /// 切替を順に行う専用のスレッド。アプリに1つ持たせる（`State<ImeWorker>`）。
@@ -115,7 +138,7 @@ impl ImeWorker {
                 for msg in rx {
                     match msg {
                         Msg::LeaveInsert => session.leave_insert(),
-                        Msg::EnterInsert => session.enter_insert(),
+                        Msg::EnterInsert { restore } => session.enter_insert(restore),
                     }
                 }
             })
@@ -132,8 +155,8 @@ impl ImeWorker {
         self.send(Msg::LeaveInsert);
     }
 
-    pub fn enter_insert(&self) {
-        self.send(Msg::EnterInsert);
+    pub fn enter_insert(&self, restore: bool) {
+        self.send(Msg::EnterInsert { restore });
     }
 
     fn send(&self, msg: Msg) {
@@ -197,13 +220,40 @@ pub struct SystemRunner;
 
 impl Runner for SystemRunner {
     fn run(&self, program: &str, args: &[&str]) -> Option<String> {
-        let out = Command::new(program).args(args).output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        // 常駐プロセスが固まっていても、切替のスレッドが止まり続けないよう、待つ時間に上限を置く
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let mut stdout = child.stdout.take()?;
+        // 出力は別のスレッドで読む（読まないと、出力が多いときにコマンドが書き込みで止まる）
+        let reader = std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = stdout.read_to_string(&mut buf);
+            buf
+        });
+        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let status = loop {
+            match child.try_wait().ok()? {
+                Some(status) => break status,
+                None if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        let out = reader.join().ok()?;
+        status.success().then(|| out.trim().to_owned())
     }
 }
+
+/// コマンドの終わりを待つ時間の上限。
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub mod linux {
     //! Linux：fcitx5（`fcitx5-remote`）と IBus（`ibus engine`）。どちらも常駐プロセスが無ければ
@@ -378,7 +428,9 @@ mod mac {
                     let _ = tx.send(f());
                 })
                 .map_err(|e| e.to_string())?;
-            rx.recv().map_err(|e| e.to_string())
+            // メインスレッドが固まっていても、切替のスレッドが止まり続けないよう、待つ時間に上限を置く
+            rx.recv_timeout(std::time::Duration::from_secs(2))
+                .map_err(|e| e.to_string())
         }
     }
 
@@ -455,7 +507,7 @@ mod win {
     use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
     use windows::Win32::UI::WindowsAndMessaging::{
         GUITHREADINFO, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
-        SendMessageW, WM_IME_CONTROL,
+        SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_IME_CONTROL,
     };
 
     use super::{Backend, Failure, ImeMethod};
@@ -497,15 +549,23 @@ mod win {
     fn control(command: usize, value: isize) -> Result<isize, Failure> {
         let ime = ime_window()?;
         // SAFETY: IME の窓へ、オープン状態の問い合わせ・設定の通知を送るだけ
-        Ok(unsafe {
-            SendMessageW(
+        // 応答しない窓で止まり続けないよう、待つ時間に上限を置く（固まっている窓は待たない）
+        let mut result = 0usize;
+        let sent = unsafe {
+            SendMessageTimeoutW(
                 ime,
                 WM_IME_CONTROL,
-                Some(WPARAM(command)),
-                Some(LPARAM(value)),
+                WPARAM(command),
+                LPARAM(value),
+                SMTO_ABORTIFHUNG,
+                1000,
+                Some(&mut result),
             )
+        };
+        if sent.0 == 0 {
+            return Err("the IME window did not respond".into());
         }
-        .0)
+        Ok(result as isize)
     }
 
     impl Backend for Imm {
@@ -594,7 +654,7 @@ mod tests {
         assert_eq!(*fake.state.lock().unwrap(), "english");
         // ノーマルモード中に利用者が入力状態を変えても、戻すのは抜けた時点のもの
         *fake.state.lock().unwrap() = "other".into();
-        s.enter_insert();
+        s.enter_insert(true);
         assert_eq!(*fake.state.lock().unwrap(), "kana");
         assert_eq!(
             *fake.log.lock().unwrap(),
@@ -607,11 +667,11 @@ mod tests {
         let fake = Fake::default();
         *fake.state.lock().unwrap() = "kana".into();
         let mut s = session(&fake);
-        s.enter_insert();
+        s.enter_insert(true);
         assert!(fake.log.lock().unwrap().is_empty());
         s.leave_insert();
-        s.enter_insert();
-        s.enter_insert();
+        s.enter_insert(true);
+        s.enter_insert(true);
         assert_eq!(
             *fake.log.lock().unwrap(),
             ["english from kana", "restore kana"]
@@ -626,7 +686,7 @@ mod tests {
         s.leave_insert();
         *fake.state.lock().unwrap() = "second".into();
         s.leave_insert();
-        s.enter_insert();
+        s.enter_insert(true);
         assert_eq!(*fake.state.lock().unwrap(), "second");
     }
 
@@ -642,7 +702,7 @@ mod tests {
         });
         *fake.fail.lock().unwrap() = true;
         s.leave_insert();
-        s.enter_insert();
+        s.enter_insert(true);
         assert!(fake.log.lock().unwrap().is_empty());
         *fake.fail.lock().unwrap() = false;
         *fake.state.lock().unwrap() = "kana".into();
@@ -655,7 +715,53 @@ mod tests {
     fn nothing_happens_without_a_backend() {
         let mut s = Session::new(|| None);
         s.leave_insert();
-        s.enter_insert();
+        s.enter_insert(true);
+    }
+
+    #[test]
+    fn a_missing_backend_is_not_looked_up_again_right_away() {
+        let counter = Arc::new(Mutex::new(0));
+        let c = Arc::clone(&counter);
+        let mut s = Session::new(move || {
+            *c.lock().unwrap() += 1;
+            None
+        });
+        for _ in 0..5 {
+            s.leave_insert();
+            s.enter_insert(true);
+        }
+        assert_eq!(*counter.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn entering_without_restore_forgets_the_exit_state() {
+        let fake = Fake::default();
+        let mut s = session(&fake);
+        *fake.state.lock().unwrap() = "kana".into();
+        s.leave_insert();
+        // 設定が無効：戻さないが、入ったことで覚えていた状態は捨てる
+        s.enter_insert(false);
+        s.enter_insert(true);
+        assert_eq!(*fake.log.lock().unwrap(), ["english from kana"]);
+        assert_eq!(*fake.state.lock().unwrap(), "english");
+    }
+
+    #[test]
+    fn a_failed_restore_keeps_the_backend() {
+        let fake = Fake::default();
+        let counter = Arc::new(Mutex::new(0));
+        let c = Arc::clone(&counter);
+        let f = fake.clone();
+        let mut s = Session::new(move || {
+            *c.lock().unwrap() += 1;
+            Some(Box::new(f.clone()))
+        });
+        *fake.state.lock().unwrap() = "kana".into();
+        s.leave_insert();
+        s.enter_insert(true);
+        s.leave_insert();
+        s.enter_insert(true);
+        assert_eq!(*counter.lock().unwrap(), 1);
     }
 
     /// 呼ばれたコマンドを記録し、あらかじめ決めた出力を返す偽の `Runner`。
@@ -778,7 +884,7 @@ mod tests {
         let worker = ImeWorker::new(session(&fake));
         for _ in 0..3 {
             worker.leave_insert();
-            worker.enter_insert();
+            worker.enter_insert(true);
         }
         // スレッドが全部を処理し終えるまで待つ（送る口を閉じると、スレッドは残りを処理して終わる）
         let log = Arc::clone(&fake.log);

@@ -385,6 +385,20 @@ test("ノーマルモードで IME が先に受けたキー（key が Process）
   expect(big.state.doc.toString()).toBe("one two three");
 });
 
+test("覚えた物理キーは、押下から 0.5 秒を過ぎた入力には使わない（届かなかった押下のキーが、後の入力を置き換えない）", () => {
+  vi.useFakeTimers();
+  try {
+    const v = make("one two three");
+    press(v, { key: "Process", code: "KeyW", keyCode: 229 });
+    vi.advanceTimersByTime(600);
+    // 置き換えず、Vim 拡張が文字を受けて何もしない（w の移動は起きない）
+    typed(v, "ｗ");
+    expect(v.state.selection.main.head).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("IME が先に受けたキーでも、回数指定の数字は Vim に渡る。読めないキー・挿入モードでは置き換えない", () => {
   const n = make("a b c d e");
   press(n, { key: "Process", code: "Digit2", keyCode: 229 });

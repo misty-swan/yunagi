@@ -45,13 +45,21 @@ test("挿入モードを抜けたら英数に切り替え、入ったら戻す",
   expect(calls).toEqual(["ime_leave_insert", "ime_enter_insert"]);
 });
 
-test("設定 vim_ime_restore が無効なら、入ったときに戻さない（抜けたときの英数への切替は行う）", async () => {
-  mock();
+test("設定 vim_ime_restore が無効なら、入ったときに戻さない（入ったことは知らせ、抜けたときの英数への切替は行う）", async () => {
+  const args: unknown[] = [];
+  mockIPC((cmd, a) => {
+    calls.push(cmd);
+    args.push(a);
+    return null;
+  });
   prefs.vimImeRestore = false;
+  imeEnterInsert();
+  prefs.vimImeRestore = true;
   imeEnterInsert();
   imeLeaveInsert();
   await settle();
-  expect(calls).toEqual(["ime_leave_insert"]);
+  expect(calls).toEqual(["ime_enter_insert", "ime_enter_insert", "ime_leave_insert"]);
+  expect(args).toEqual([{ restore: false }, { restore: true }, {}]);
 });
 
 test("Vimモードが無効のとき、窓が前面にないときは、呼ばない", async () => {

@@ -23,10 +23,13 @@ export function imeLeaveInsert(): void {
   void core.imeLeaveInsert().catch(() => {});
 }
 
-/** 挿入モードに入った：直前に抜けた時点の入力状態に戻す。設定 `vim_ime_restore` が無効なら何もしない（4.4 の 3）。 */
+/**
+ * 挿入モードに入った：直前に抜けた時点の入力状態に戻す。設定 `vim_ime_restore` が無効なら戻さない（4.4 の 3）。
+ * 無効のときも入ったことは知らせる（コア側が、覚えていた入力状態を捨てるため）。
+ */
 export function imeEnterInsert(): void {
-  if (!active() || !prefs.vimImeRestore) return;
-  void core.imeEnterInsert().catch(() => {});
+  if (!active()) return;
+  void core.imeEnterInsert(prefs.vimImeRestore).catch(() => {});
 }
 
 /** この環境で IME の切替ができるか（設定画面の制約の表示。4.4 の 4）。 */

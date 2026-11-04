@@ -610,16 +610,21 @@ pub async fn ime_status() -> Result<ImeStatus, CommandError> {
 
 /// Vim の挿入モードを抜けた：IME を英数入力に切り替える（操作仕様書 4.4 の 1）。切替は専用のスレッドが
 /// 順に行うので、待たずに返る。切り替えられなくても失敗にしない（ベストエフォート）。
+///
+/// この 2 つのコマンドだけは同期のコマンドにする（画面のスレッドで、届いた順に動く）。非同期のコマンドは
+/// 別々のスレッドで動き、Esc の直後の `i` で、入ったことの知らせが抜けたことの知らせを追い越しうるため。
+/// 中身は専用のスレッドへ知らせを送るだけで、待たない。
 #[tauri::command]
-pub async fn ime_leave_insert(ime: State<'_, ImeWorker>) -> Result<(), CommandError> {
+pub fn ime_leave_insert(ime: State<'_, ImeWorker>) -> Result<(), CommandError> {
     ime.leave_insert();
     Ok(())
 }
 
-/// Vim の挿入モードに入った：抜けた時点の入力状態に戻す（操作仕様書 4.4 の 3）。
+/// Vim の挿入モードに入った：覚えていた入力状態を捨て、`restore`（設定 `vim_ime_restore`）なら抜けた
+/// 時点の入力状態に戻す（操作仕様書 4.4 の 3）。
 #[tauri::command]
-pub async fn ime_enter_insert(ime: State<'_, ImeWorker>) -> Result<(), CommandError> {
-    ime.enter_insert();
+pub fn ime_enter_insert(ime: State<'_, ImeWorker>, restore: bool) -> Result<(), CommandError> {
+    ime.enter_insert(restore);
     Ok(())
 }
 

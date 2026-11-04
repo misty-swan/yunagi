@@ -181,7 +181,11 @@ const keepSpaceOut = EditorView.domEventHandlers({
  * なる（`a` `i` `o` が Vim のキーにならない）。そこで、押下のときに物理キーから Vim のキーを作って
  * 覚え、入力の文字を、その Vim のキーに置き換えて Vim 拡張に渡す。
  */
-const imeKeys = new WeakMap<EditorView, string>();
+const imeKeys = new WeakMap<EditorView, { key: string; at: number }>();
+
+/** 覚えたキーを使える時間（ミリ秒）。IME の入力は押下の直後に届くので、長く持たない（届かなかった押下の
+ * キーが、後の貼り付けなどの入力を置き換えないため）。 */
+const IME_KEY_TTL = 500;
 
 /** IME が先に受けたキーの押下か（`key` が実際のキーでない）。実際のキーで届くときは、Vim 拡張が自分で扱う。 */
 function processKey(e: KeyboardEvent): boolean {
@@ -194,17 +198,18 @@ const imeKeydown = EditorView.domEventHandlers({
     const mode = vimModeOf(v);
     if (mode !== null && mode !== "insert" && processKey(e)) {
       const key = vimKeyOfCode(e);
-      if (key !== null) imeKeys.set(v, key);
+      if (key !== null) imeKeys.set(v, { key, at: Date.now() });
     }
     return false;
   },
 });
 
 const imeInput: Parameters<typeof EditorView.inputHandler.of>[0] = (v, from, to, text, insert) => {
-  const key = imeKeys.get(v);
-  if (key === undefined) return false;
+  const hit = imeKeys.get(v);
+  if (hit === undefined) return false;
   imeKeys.delete(v);
-  if (vimModeOf(v) === "insert" || text === key) return false;
+  const key = hit.key;
+  if (Date.now() - hit.at > IME_KEY_TTL || vimModeOf(v) === "insert" || text === key) return false;
   // ほかの入力の処理（Vim 拡張）に、置き換えたキーを渡す
   return v.state.facet(EditorView.inputHandler).some((h) => h !== imeInput && h(v, from, to, key, insert));
 };

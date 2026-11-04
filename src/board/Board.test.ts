@@ -596,33 +596,35 @@ test("Vim モードの整理モードのリスト：挿入モードを抜ける�
   await until(() => $$(".r-todo [contenteditable]").length === 0);
   await until(() => ime().length === 2);
   expect(ime()).toEqual(["ime_enter_insert", "ime_leave_insert"]);
-  // 設定が無効：入るときは戻さず、抜けるときは英数にする
+  // 設定が無効：入るときは戻さず（restore: false で知らせる）、抜けるときは英数にする
   prefs.vimImeRestore = false;
   vimKey(row, "i");
   await until(() => $(".r-todo [contenteditable]") !== null);
-  esc();
   await until(() => ime().length === 3);
-  expect(ime()).toEqual(["ime_enter_insert", "ime_leave_insert", "ime_leave_insert"]);
+  expect(calls.filter((c) => c.cmd === "ime_enter_insert").map((c) => c.args.restore)).toEqual([true, false]);
+  esc();
+  await until(() => ime().length === 4);
+  expect(ime()).toEqual(["ime_enter_insert", "ime_leave_insert", "ime_enter_insert", "ime_leave_insert"]);
   // 窓が前面にないとき（日が替わるなどで挿入モードが終わっても）は触らない
   prefs.vimImeRestore = true;
   vimKey(row, "i");
   await until(() => $(".r-todo [contenteditable]") !== null);
-  await until(() => ime().length === 4);
+  await until(() => ime().length === 5);
   focus.mockReturnValue(false);
   esc();
   await until(() => $$(".r-todo [contenteditable]").length === 0);
   await new Promise((r) => setTimeout(r, 20));
-  expect(ime().length).toBe(4);
+  expect(ime().length).toBe(5);
   // Vimモードを無効にしたことで挿入モードが終わったときも、切り替えない
   focus.mockReturnValue(true);
   prefs.vimMode = true;
   vimKey(row, "i");
   await until(() => $(".r-todo [contenteditable]") !== null);
-  await until(() => ime().length === 5);
+  await until(() => ime().length === 6);
   prefs.vimMode = false;
   flushSync();
   await new Promise((r) => setTimeout(r, 20));
-  expect(ime().length).toBe(5);
+  expect(ime().length).toBe(6);
   focus.mockRestore();
 });
 

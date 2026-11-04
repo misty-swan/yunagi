@@ -172,8 +172,8 @@ export const core = {
   imeStatus: () => call<ImeStatus>("ime_status"),
   /** Vim の挿入モードを抜けた：IME を英数入力に切り替える。切替は待たずに返る（失敗しても失敗にならない）。 */
   imeLeaveInsert: () => call<null>("ime_leave_insert"),
-  /** Vim の挿入モードに入った：抜けた時点の入力状態に戻す。 */
-  imeEnterInsert: () => call<null>("ime_enter_insert"),
+  /** Vim の挿入モードに入った：`restore` なら抜けた時点の入力状態に戻す（どちらでも、覚えていた状態は捨てる）。 */
+  imeEnterInsert: (restore: boolean) => call<null>("ime_enter_insert", { restore }),
 };
 
 /** イベントを聞き始められなかったとき、やり直すまでの時間。 */
