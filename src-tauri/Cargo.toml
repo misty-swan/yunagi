@@ -33,6 +33,9 @@ core-foundation.workspace = true
 # 結合テスト（tests/）で、WebView を開かずにコマンドとイベントを呼ぶ（tauri::test）
 tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
+# 登録の失敗の文の見分けを、部品が実際に返す文で確かめる（src/global_shortcut.rs のテスト）。
+# プラグインが使っている版（Cargo.lock）にそろえる
+global-hotkey = "=0.8.0"
 # 画面と共有する型の TypeScript の定義を作る（src/bindings.rs のテスト。配るアプリには含めない）
 ts-rs.workspace = true
 

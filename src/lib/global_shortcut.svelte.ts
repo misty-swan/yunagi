@@ -22,22 +22,30 @@ class GlobalShortcutRegistry {
   /** 最後に OS へ頼んだ割当（`undefined` はまだ頼んでいない）。 */
   #requested: string | null | undefined = undefined;
   #queue: Promise<void> = Promise.resolve();
+  /** `forget` するたびに増える（待っている呼び出しの結果を捨てるため）。 */
+  #epoch = 0;
 
   /**
    * いまの割当を OS に登録する。前に頼んだ割当と同じなら何もしない。
-   * 呼び出しに失敗したときは、登録できたか分からないので、次に呼ばれたとき同じ割当でも頼み直す。
+   * 呼び出しに失敗したときは、登録できたか分からないので、状態を空にし、次に呼ばれたとき同じ割当でも
+   * 頼み直す（呼ばれるのは、割当が変わったときと、設定を読み込み直したとき。自動では頼み直さない）。
    */
   sync(mac: boolean): Promise<void> {
     const b = currentKeymap(mac).get("bringToFront")?.binding ?? null;
     const binding = b === null ? null : format(b);
     if (binding === this.#requested) return this.#queue;
     this.#requested = binding;
+    const epoch = this.#epoch;
     this.#queue = this.#queue.then(async () => {
       try {
-        this.status = await core.setGlobalShortcut(binding);
+        const s = await core.setGlobalShortcut(binding);
+        // 待つ間に `forget` された（設定を読み込み直す）なら、古い結果は捨てる
+        if (epoch === this.#epoch) this.status = s;
       } catch {
+        if (epoch !== this.#epoch) return;
         this.status = null;
-        this.#requested = undefined;
+        // 後から別の割当を頼んでいたら、その頼みを消さない
+        if (this.#requested === binding) this.#requested = undefined;
       }
     });
     return this.#queue;
@@ -45,6 +53,7 @@ class GlobalShortcutRegistry {
 
   /** 登録を外した状態に戻す（データベースを開き直す前など。次の `sync` で必ず頼み直す）。 */
   forget() {
+    this.#epoch++;
     this.#requested = undefined;
     this.status = null;
   }

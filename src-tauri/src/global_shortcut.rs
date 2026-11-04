@@ -37,7 +37,8 @@ pub enum RegisterError {
 /// OS への登録。プラグインを使う本物（`PluginBackend`）と、テストの偽物がある。
 pub trait Backend: Send {
     fn register(&mut self, shortcut: Shortcut) -> Result<(), RegisterError>;
-    fn unregister(&mut self, shortcut: Shortcut);
+    /// 外せなかったら、理由を返す（OS に残っているので、呼ぶ側は登録を持ったままにする）。
+    fn unregister(&mut self, shortcut: Shortcut) -> Result<(), String>;
 }
 
 /// 割当の文字列（`Mod+Shift+D`）を、OS に登録するキーにする。`mac` は `Mod` を ⌘（`SUPER`）にするか
@@ -75,10 +76,14 @@ pub fn parse(text: &str, mac: bool) -> Option<Shortcut> {
     Some(Shortcut::new(Some(mods), code))
 }
 
-/// Wayland のセッションか（Linux の環境変数。`XDG_SESSION_TYPE` が `wayland`、または `WAYLAND_DISPLAY` がある）。
+/// Wayland のセッションか（Linux の環境変数）。`XDG_SESSION_TYPE` があればそれに従う（`wayland` だけが
+/// Wayland。SSH や sudo で引き継いだ古い `WAYLAND_DISPLAY` が残っていても、`x11` なら X11）。無いときだけ、
+/// `WAYLAND_DISPLAY` があるかで決める。
 pub fn is_wayland(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
-    session_type.is_some_and(|s| s.eq_ignore_ascii_case("wayland"))
-        || wayland_display.is_some_and(|d| !d.is_empty())
+    match session_type.filter(|s| !s.is_empty()) {
+        Some(s) => s.eq_ignore_ascii_case("wayland"),
+        None => wayland_display.is_some_and(|d| !d.is_empty()),
+    }
 }
 
 /// いまの環境が Wayland のセッションか（Linux だけ）。
@@ -144,12 +149,11 @@ impl<R: Runtime> Backend for PluginBackend<R> {
             .map_err(|e| classify(&e.to_string()))
     }
 
-    fn unregister(&mut self, shortcut: Shortcut) {
-        if let Some(plugin) = self.plugin()
-            && let Err(e) = plugin.unregister(shortcut)
-        {
-            eprintln!("yunagi: failed to unregister the global shortcut: {e}");
-        }
+    fn unregister(&mut self, shortcut: Shortcut) -> Result<(), String> {
+        let Some(plugin) = self.plugin() else {
+            return Err("plugin is not installed".into());
+        };
+        plugin.unregister(shortcut).map_err(|e| e.to_string())
     }
 }
 
@@ -199,8 +203,14 @@ impl GlobalShortcutController {
         let Some(backend) = backend else {
             return self.status(GlobalShortcutState::Unavailable);
         };
-        if let Some(old) = current.take() {
-            backend.unregister(old);
+        if let Some(old) = *current {
+            // 外せなかったら、OS にはまだ残っている。登録を持ったままにして、失敗を返す（次に呼ばれたとき、
+            // もう一度外す。忘れてしまうと、古いキーが効き続け、同じキーの登録が「使用中」になる）
+            if let Err(e) = backend.unregister(old) {
+                eprintln!("yunagi: failed to unregister the global shortcut: {e}");
+                return self.status(GlobalShortcutState::Failed);
+            }
+            *current = None;
         }
         let Some(text) = binding else {
             return self.status(GlobalShortcutState::Off);
@@ -281,7 +291,10 @@ mod tests {
         assert!(is_wayland(Some("wayland"), None));
         assert!(is_wayland(Some("Wayland"), None));
         assert!(is_wayland(None, Some("wayland-1")));
-        assert!(is_wayland(Some("x11"), Some("wayland-0")));
+        // XDG_SESSION_TYPE があればそれに従う（古い WAYLAND_DISPLAY が残っていても X11）
+        assert!(!is_wayland(Some("x11"), Some("wayland-0")));
+        assert!(!is_wayland(Some("tty"), Some("wayland-0")));
+        assert!(is_wayland(Some(""), Some("wayland-0")));
         assert!(!is_wayland(Some("x11"), None));
         assert!(!is_wayland(None, Some("")));
         assert!(!is_wayland(None, None));
@@ -289,10 +302,9 @@ mod tests {
 
     #[test]
     fn classify_finds_the_taken_key() {
-        assert_eq!(
-            classify("HotKey already registered: HotKey { mods: CONTROL, key: KeyD, id: 1 }"),
-            RegisterError::Taken
-        );
+        // 部品が実際に返す文で確かめる（部品の版を上げて文が変わったら、ここで気づく）
+        let real = global_hotkey::Error::AlreadyRegistered(parse("Mod+Shift+D", false).unwrap());
+        assert_eq!(classify(&real.to_string()), RegisterError::Taken);
         assert_eq!(
             classify("Unable to register hotkey: x"),
             RegisterError::Other("Unable to register hotkey: x".into())
@@ -305,6 +317,8 @@ mod tests {
         log: Arc<Mutex<Vec<String>>>,
         taken: Option<Shortcut>,
         fail: bool,
+        /// 外すのを断る。
+        stuck: bool,
     }
 
     impl Backend for Fake {
@@ -318,11 +332,15 @@ mod tests {
             }
             Ok(())
         }
-        fn unregister(&mut self, s: Shortcut) {
+        fn unregister(&mut self, s: Shortcut) -> Result<(), String> {
             self.log
                 .lock()
                 .unwrap()
                 .push(format!("unregister {}", s.key));
+            if self.stuck {
+                return Err("x".into());
+            }
+            Ok(())
         }
     }
 
@@ -419,6 +437,30 @@ mod tests {
         // 登録できなかったキーは、後で外さない（登録していないため）
         assert_eq!(c.set(None, false).state, GlobalShortcutState::Off);
         assert_eq!(*log.lock().unwrap(), ["register KeyD"]);
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_removed_stays_registered_and_is_retried() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let c = controller(
+            Fake {
+                log: log.clone(),
+                stuck: true,
+                ..Default::default()
+            },
+            false,
+        );
+        c.set(Some("Mod+Shift+D"), false);
+        // 外せないので失敗を返し、新しいキーは登録しない。次に呼ばれたとき、もう一度外そうとする
+        assert_eq!(
+            c.set(Some("Mod+Shift+E"), false).state,
+            GlobalShortcutState::Failed
+        );
+        assert_eq!(c.set(None, false).state, GlobalShortcutState::Failed);
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["register KeyD", "unregister KeyD", "unregister KeyD"]
+        );
     }
 
     #[test]

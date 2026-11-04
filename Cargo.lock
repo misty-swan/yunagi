@@ -4614,6 +4614,7 @@ name = "yunagi-app"
 version = "0.0.0"
 dependencies = [
  "core-foundation",
+ "global-hotkey",
  "jiff",
  "rusqlite",
  "serde",

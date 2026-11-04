@@ -47,7 +47,8 @@
   /** OS 全体の操作を OS に登録できなかった理由と、Wayland の案内（登録できても、Wayland では出す）。 */
   function registration(): string | null {
     const s = globalShortcut.status;
-    if (!s) return null;
+    // 登録していない（割当が使えない）ときは、案内も出さない
+    if (!s || s.state === "off") return null;
     const reason =
       s.state === "taken" ? o.global.taken : s.state === "failed" ? o.global.failed : s.state === "unavailable" ? o.global.unavailable : null;
     return [reason, s.wayland ? o.global.wayland : null].filter(Boolean).join(" ") || null;
