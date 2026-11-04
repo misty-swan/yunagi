@@ -127,6 +127,12 @@
     else requestFocus({ key: row.key, field: "text", offset: "end" });
   }
 
+  /** 領域 `from` から前（-1）・次（+1）の領域へ。TODO・障害・振り返りの順に回る（Vim の Tab・Shift+Tab）。 */
+  function moveRegion(from: ItemKind, dir: -1 | 1) {
+    const order = ["todo", "blocker", "reflection"] as const;
+    focusRegion(order[(order.indexOf(from) + dir + order.length) % order.length]);
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.defaultPrevented) return;
     const a = boardActionOf(e, mac);
@@ -202,6 +208,7 @@
       reviewAt={prefs.reviewThreshold}
       {focusReq}
       onFocus={requestFocus}
+      onRegion={moveRegion}
       onOpenCarried={openCarried}
       {onOpenNoteSource}
       onActivity={activity}
@@ -215,6 +222,7 @@
       reviewAt={prefs.reviewThreshold}
       {focusReq}
       onFocus={requestFocus}
+      onRegion={moveRegion}
       onOpenCarried={openCarried}
       {onOpenNoteSource}
       onActivity={activity}

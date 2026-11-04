@@ -27,6 +27,7 @@ Range.prototype.getBoundingClientRect ??= () => new DOMRect();
 beforeEach(() => {
   prefs.lang = "ja";
   prefs.layout = "A";
+  prefs.vimMode = false;
 });
 
 afterEach(async () => {
@@ -366,6 +367,168 @@ test("持ち越し済みの項目と取りやめた TODO は、本文を変え�
   expect(notice.text).toBe("");
   await until(() => $$(".r-todo .item").length === 3);
   expect($$(".r-todo .item").map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "", "やめた"]);
+});
+
+/** Vim のノーマルモードのキー（行そのものへ）。 */
+function vimKey(row: HTMLElement | null, key: string, init: KeyboardEventInit = {}) {
+  const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+  row?.dispatchEvent(e);
+  flushSync();
+  return e;
+}
+
+const rowsOf = (sel: string) => $$(`${sel} .item`).map((r) => text(r.querySelector(".txt")));
+
+test("Vim モードの整理モードのリスト：ノーマルモードは行を選ぶだけで、j / k / gg / G で移り、o で足して挿入モード、Esc で戻る", async () => {
+  prefs.vimMode = true;
+  const { calls } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [bi(item(A, "一", { sortKey: "a0" })), bi(item(B, "二", { sortKey: "a1" })), bi(item(C, "三", { sortKey: "a2" }))],
+      },
+    },
+  });
+  const rows = () => $$(".r-todo .item");
+  // ノーマルモードの本文は入力欄でない
+  expect($$(".r-todo [contenteditable]").length).toBe(0);
+  rows()[0].focus();
+  const active = () => document.activeElement as HTMLElement;
+  vimKey(active(), "j");
+  await until(() => active() === rows()[1]);
+  vimKey(active(), "j");
+  vimKey(active(), "j");
+  await until(() => active() === rows()[2]);
+  vimKey(active(), "k");
+  await until(() => active() === rows()[1]);
+  vimKey(active(), "g");
+  vimKey(active(), "g");
+  await until(() => active() === rows()[0]);
+  vimKey(active(), "G");
+  await until(() => active() === rows()[2]);
+  // g の後に別のキーなら、g は捨てる（次の g では移らない）
+  vimKey(active(), "g");
+  vimKey(active(), "k");
+  await until(() => active() === rows()[1]);
+  vimKey(active(), "g");
+  expect(active()).toBe(rows()[1]);
+  // 文字のキーは入力にならない
+  expect(vimKey(active(), "z").defaultPrevented).toBe(true);
+  expect(rowsOf(".r-todo")).toEqual(["一", "二", "三"]);
+
+  // o：直下に足して挿入モード（入力欄になる）。Esc で行そのものに戻り、ノーマルモードになる
+  vimKey(active(), "o");
+  await until(() => $$(".r-todo .item").length === 4 && $(".r-todo [contenteditable]") !== null);
+  const added = $$(".r-todo .item")[2];
+  await until(() => added.contains(document.activeElement));
+  expect(document.activeElement?.getAttribute("contenteditable")).toBe("true");
+  document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  flushSync();
+  await until(() => $$(".r-todo [contenteditable]").length === 0);
+  expect(active()).toBe(added);
+  // 何も書かずに離れた行は消える
+  vimKey(active(), "j");
+  await until(() => $$(".r-todo .item").length === 3);
+  expect(calls.some((c) => c.cmd === "add_item")).toBe(false);
+});
+
+test("Vim モードの整理モードのリスト：i / a で編集（i は行頭、a は行末）、x で完了の切替、dd で削除、J / K で並べ替え、Ctrl+[ でも戻る", async () => {
+  prefs.vimMode = true;
+  const { calls } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [bi(item(A, "一", { sortKey: "a0" })), bi(item(B, "二", { sortKey: "a1" }))],
+      },
+    },
+  });
+  const rows = () => $$(".r-todo .item");
+  rows()[0].focus();
+  const active = () => document.activeElement as HTMLElement;
+  // x：完了の切替
+  vimKey(active(), "x");
+  await until(() => rows()[0].classList.contains("done"));
+  vimKey(active(), "x");
+  await until(() => !rows()[0].classList.contains("done"));
+  // i：編集を始める（入力欄になり、カーソルは行頭）
+  vimKey(active(), "i");
+  await until(() => document.activeElement?.getAttribute("contenteditable") === "true");
+  expect(window.getSelection()?.anchorOffset).toBe(0);
+  // Windows・Linux の Ctrl+[ は Esc と同じ
+  document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "[", code: "BracketLeft", ctrlKey: true, bubbles: true, cancelable: true }));
+  flushSync();
+  await until(() => $$(".r-todo [contenteditable]").length === 0 && active() === rows()[0]);
+  // a：行末
+  vimKey(active(), "a");
+  await until(() => document.activeElement?.getAttribute("contenteditable") === "true");
+  expect(window.getSelection()?.anchorOffset).toBe(1);
+  document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  flushSync();
+  await until(() => active() === rows()[0]);
+  // J：下へ動かす。K：上へ動かす
+  vimKey(active(), "J");
+  await until(() => rowsOf(".r-todo").join() === "二,一");
+  vimKey(active(), "K");
+  await until(() => rowsOf(".r-todo").join() === "一,二");
+  // dd：削除（d だけでは消えない）。次の行を選ぶ
+  vimKey(active(), "d");
+  expect(rows().length).toBe(2);
+  vimKey(active(), "d");
+  await until(() => rows().length === 1);
+  expect(rowsOf(".r-todo")).toEqual(["二"]);
+  await until(() => calls.some((c) => c.cmd === "delete_item"));
+  // u：取り消す
+  vimKey(active(), "u");
+  await until(() => rows().length === 2);
+});
+
+test("Vim モードで、持ち越し済みの項目と取りやめた TODO では、i / a / x が本文・状態を変えず、上部のバーに知らせる。o / O は足すだけで、dd と J / K は受ける", async () => {
+  prefs.vimMode = true;
+  const { calls, notice } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [
+          bi(item(C, "持ち越した", { sortKey: "a0" }), { carriedTo: { id: D, date: "2026-11-04" } }),
+          bi(item(B, "やめた", { sortKey: "a1", status: "dropped", closeReason: "dropped" })),
+        ],
+      },
+    },
+  });
+  const rows = () => $$(".r-todo .item");
+  const expected = ["11.04 Wed へ持ち越し済みです", "持ち越しの見直しで閉じた TODO は変更できません"];
+  for (const [i, row] of rows().entries()) {
+    for (const key of ["i", "a", "x"]) {
+      notice.text = "";
+      row.focus();
+      expect(vimKey(row, key).defaultPrevented).toBe(true);
+      expect(notice.text, key).toBe(expected[i]);
+      // 挿入モードに入らない（入力欄にならない）
+      expect($$(".r-todo [contenteditable]").length).toBe(0);
+    }
+    // 文字でない j k や、操作に当たらない文字では知らせない
+    for (const key of ["j", "k", "z"]) {
+      notice.text = "";
+      vimKey(row, key);
+      expect(notice.text, key).toBe("");
+    }
+  }
+  expect(calls.some((c) => c.cmd === "save_item" || c.cmd === "add_item")).toBe(false);
+  expect(rowsOf(".r-todo")).toEqual(["持ち越した", "やめた"]);
+  expect(rows().map((r) => r.classList.contains("done"))).toEqual([false, true]);
+
+  // o：直下に空の項目を足して挿入モード（知らせない）。足した項目は通常の項目
+  notice.text = "";
+  rows()[0].focus();
+  vimKey(rows()[0], "o");
+  await until(() => rows().length === 3 && $(".r-todo [contenteditable]") !== null);
+  expect(notice.text).toBe("");
+  expect(rowsOf(".r-todo")).toEqual(["持ち越した", "", "やめた"]);
+});
+
+test("Vim モードでない間は、整理モードのリストの本文は常に入力欄", async () => {
+  await start({ boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))] } } });
+  expect($$(".r-todo [contenteditable]").length).toBe(1);
 });
 
 test("持ち越し済みの障害の解消メモを押しても、入力欄を開かず知らせる", async () => {

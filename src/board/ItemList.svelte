@@ -5,6 +5,7 @@
   import type { CarriedTo, ItemKind, NoteSource } from "../lib/bindings";
   import type { BoardModel, FocusTarget } from "../lib/board.svelte";
   import { t } from "../lib/i18n";
+  import { prefs } from "../lib/prefs.svelte";
   import ItemRow from "./ItemRow.svelte";
 
   let {
@@ -15,6 +16,7 @@
     reviewAt,
     focusReq,
     onFocus,
+    onRegion,
     onOpenCarried,
     onOpenNoteSource,
     onActivity,
@@ -27,6 +29,8 @@
     reviewAt: number;
     focusReq: (FocusTarget & { n: number }) | null;
     onFocus: (target: FocusTarget | null) => void;
+    /** 領域 `kind` から前（-1）・次（+1）の領域へ移る（Vim のノーマルモードの Tab）。 */
+    onRegion: (kind: ItemKind, dir: -1 | 1) => void;
     onOpenCarried: (to: CarriedTo) => void;
     onOpenNoteSource: (source: NoteSource) => void;
     onActivity: () => void;
@@ -39,7 +43,15 @@
   const headingId = $props.id();
 
   function add() {
+    // Vim モードでは、足した行にそのまま書き始める（挿入モード）
+    if (prefs.vimMode) model.insert = true;
     onFocus(model.add(kind, null));
+  }
+
+  /** 領域の先頭（-1）・末尾（+1）の行へ移る（Vim の gg・G）。 */
+  function edge(dir: -1 | 1) {
+    const row = dir < 0 ? rows[0] : rows[rows.length - 1];
+    if (row !== undefined) onFocus({ key: row.key, field: "text", offset: 0 });
   }
 
   /** 隣の行へ移る（↑ / ↓）。カーソルは同じ文字位置（本文より後ろなら末尾）。 */
@@ -146,6 +158,8 @@
             {onFocus}
             onNeighbor={neighbor}
             onRemoving={removing}
+            onEdge={edge}
+            onRegion={(dir) => onRegion(kind, dir)}
             {onOpenCarried}
             {onOpenNoteSource}
             {onActivity}
