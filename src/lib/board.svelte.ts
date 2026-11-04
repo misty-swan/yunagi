@@ -175,6 +175,13 @@ export class BoardModel {
   #lastInputAt = 0;
   /** IME で変換している。 */
   composing = $state(false);
+  /**
+   * Vim モード（操作仕様書 4.3）で挿入モードか。挿入モードの間だけ、本文を入力欄にして文字を打てる。
+   * ノーマルモードでは、行を選ぶだけ（本文は入力欄にしない）。Vim モードでない間は使わない。
+   */
+  insert = $state(false);
+  /** ノーマルモードの、続きのキーを待っているキー（`g`・`d`）。 */
+  vimPending: "g" | "d" | null = null;
 
   constructor(deps: BoardDeps) {
     this.#deps = deps;

@@ -2,8 +2,8 @@
   // 設定（S-05。画面設計書 7章）。外枠の上に重ねるパネル（形は検索パレット S-04・持ち越し S-03 と同じ）。
   // 左に区分（General / Display / Operation / Data / Agents）、右にその区分の設定を並べる。
   // 変えた値はすぐ画面に当て、コアの setting に保存する（`SettingsStore.save`）。保存先・バックアップ・
-  // 書き出しは DataSection。ショートカット割当・Vim モード・エージェントの権限など、まだ無い機能の設定は
-  // 場所だけを置く（その機能のプロジェクトで足す）。
+  // 書き出しは DataSection、ショートカット割当は ShortcutsSection。エージェントの権限など、まだ無い機能の
+  // 設定は場所だけを置く（その機能のプロジェクトで足す）。
   //
   // キー：Esc で閉じる（保存先などの確かめる画面を出していれば、先にそれを閉じる）、Mod+, でも閉じる、
   // Tab はこの画面の中だけを回る。開いている間は、ほかの画面のキー（Mod+J・ノートの Mod+Shift+H など）を
@@ -23,7 +23,9 @@
   import type { DataSettings } from "../lib/settings_data.svelte";
   import { SETTINGS_SECTIONS, type SettingsPanel, type SettingsSection } from "../lib/settings_panel.svelte";
   import type { SettingsStore } from "../lib/settings.svelte";
+  import { ShortcutEditor } from "../lib/shortcuts_edit.svelte";
   import DataSection from "./DataSection.svelte";
+  import ShortcutsSection from "./ShortcutsSection.svelte";
 
   let {
     panel,
@@ -45,6 +47,13 @@
   const labels = $derived(m.labels.settings);
 
   let root = $state<HTMLElement | null>(null);
+
+  // ショートカット割当のキーの取り込み（閉じたら、取り込み中をやめる）
+  // svelte-ignore state_referenced_locally
+  const editor = new ShortcutEditor(store, mac);
+  $effect(() => {
+    if (!panel.open) editor.cancel();
+  });
 
   // 開いたら、いまの区分へフォーカスを置く。閉じたら、開く直前にフォーカスのあった所へ戻す
   let wasOpen = false;
@@ -288,14 +297,19 @@
             <input id="set-threshold" type="number" min="1" step="1" value={prefs.reviewThreshold} onchange={saveThreshold} />
           {/snippet}
           {@render row(o.reviewThreshold, "set-threshold", threshold, o.reviewThresholdNote)}
-          <div class="row placeholder">
-            <span class="name">{o.shortcuts}</span>
-            <p class="note">{o.notYet}</p>
-          </div>
-          <div class="row placeholder">
-            <span class="name">{o.vim}</span>
-            <p class="note">{o.notYet}</p>
-          </div>
+          {#snippet vim()}
+            <input
+              id="set-vim"
+              type="checkbox"
+              checked={prefs.vimMode}
+              onchange={(e) => void store.save({ vimMode: e.currentTarget.checked })}
+            />
+          {/snippet}
+          {@render row(o.vim, "set-vim", vim, o.vimNote)}
+          <!-- 「挿入モードで入力状態を戻す」（vim_ime_restore）の欄は、働きを作る課題（YUN-85）で足す -->
+          {#if prefs.vimMode && !mac}<p class="note vim-alt">{o.vimAltNote}</p>{/if}
+          <h3 class="label sub">{o.shortcuts}</h3>
+          <ShortcutsSection {editor} {mac} />
         {:else if panel.section === "data"}
           <h3 class="label">{labels.data}</h3>
           <DataSection {data} />
@@ -470,6 +484,16 @@
   }
 
   .panel :global(.placeholder .name) {
+    color: var(--text-muted);
+  }
+
+  .content :global(h3.label.sub) {
+    margin-top: calc(22 * var(--u));
+  }
+
+  .vim-alt {
+    margin: calc(6 * var(--u)) 0 0;
+    font-size: var(--fs-meta);
     color: var(--text-muted);
   }
 

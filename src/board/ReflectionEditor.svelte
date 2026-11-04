@@ -11,6 +11,8 @@
   import type { LogicalDate } from "../lib/bindings";
   import { selectMatch, TextDocEditor } from "../lib/doc_editor";
   import { t } from "../lib/i18n";
+  import { boardActionOf } from "../lib/board_keys";
+  import { isMacPlatform } from "../lib/keys";
   import { blank } from "../lib/note";
   import type { EditorPresence } from "../lib/ui_report.svelte";
 
@@ -94,8 +96,18 @@
     presence,
     onActivity: () => onActivity(),
     extensions: () => ({
-      extensions: [headingPlugin],
-      keys: [{ key: "Mod-Shift-r", run: insertTemplate, preventDefault: true }],
+      // テンプレートを入れるキーは、設定で変えた割当に従う（CodeMirror のキーに固定で結ばない）
+      extensions: [
+        headingPlugin,
+        EditorView.domEventHandlers({
+          keydown: (e, v) => {
+            if (boardActionOf(e, isMacPlatform()) !== "template") return false;
+            e.preventDefault();
+            return insertTemplate(v);
+          },
+        }),
+      ],
+      keys: [],
     }),
     label: () => t().reflectionLabel,
     onLoaded: (d) => (loaded = d),

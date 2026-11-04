@@ -127,6 +127,34 @@
     else requestFocus({ key: row.key, field: "text", offset: "end" });
   }
 
+  // Vim の挿入モード・続きのキー待ちは、Vim モードを切り替えたとき、日を移ったときに捨てる
+  $effect(() => {
+    void prefs.vimMode;
+    void model.date;
+    untrack(() => {
+      model.insert = false;
+      model.vimPending = null;
+    });
+  });
+
+  /** フォーカスが一覧の外（サイドバー・振り返りの欄など）へ移ったら、挿入モードを終える（戻ったとき、項目を選ぶだけにするため）。 */
+  function onFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget;
+    // フォーカスの行き先が無いとき：窓が前面から外れた（Alt+Tab など）なら、挿入モードを続ける。窓の中の
+    // フォーカスできない所を押したのなら、終える
+    const outside = next instanceof Element ? next.closest(".r-todo, .r-blk") === null : next === null && document.hasFocus();
+    if (outside) {
+      model.insert = false;
+      model.vimPending = null;
+    }
+  }
+
+  /** 領域 `from` から前（-1）・次（+1）の領域へ。TODO・障害・振り返りの順に回る（Vim の Tab・Shift+Tab）。 */
+  function moveRegion(from: ItemKind, dir: -1 | 1) {
+    const order = ["todo", "blocker", "reflection"] as const;
+    focusRegion(order[(order.indexOf(from) + dir + order.length) % order.length]);
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.defaultPrevented) return;
     const a = boardActionOf(e, mac);
@@ -192,7 +220,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="board" data-layout={layout} data-date={model.date ?? ""} onkeydown={onKeydown}>
+<div class="board" data-layout={layout} data-date={model.date ?? ""} onkeydown={onKeydown} onfocusout={onFocusOut}>
   {#if model.date !== null}
     <ItemList
       kind="todo"
@@ -202,6 +230,7 @@
       reviewAt={prefs.reviewThreshold}
       {focusReq}
       onFocus={requestFocus}
+      onRegion={moveRegion}
       onOpenCarried={openCarried}
       {onOpenNoteSource}
       onActivity={activity}
@@ -215,6 +244,7 @@
       reviewAt={prefs.reviewThreshold}
       {focusReq}
       onFocus={requestFocus}
+      onRegion={moveRegion}
       onOpenCarried={openCarried}
       {onOpenNoteSource}
       onActivity={activity}

@@ -4,6 +4,7 @@
 // （`labels.settings`）。設定の項目名と説明は、各言語で書く。
 
 import type { CloudService, Layout, NoteFont, RejectReason, Theme } from "./bindings";
+import type { ActionId, BindingProblem, Scope } from "./keymap";
 
 export interface SettingsMessages {
   /** 設定の画面の名前（読み上げ）。 */
@@ -41,8 +42,31 @@ export interface SettingsMessages {
     reviewThreshold: string;
     reviewThresholdNote: string;
     shortcuts: string;
+    shortcutsNote: string;
+    /** 操作の効く範囲ごとの見出し。 */
+    scopes: Record<Scope, string>;
+    /** 操作の名前。 */
+    actions: Record<ActionId, string>;
+    /** 割当のボタンの読み上げ（`action` の割当 `key` を変える）。 */
+    changeKey: (action: string, key: string) => string;
+    /** キーの取り込み中の表示。 */
+    pressKey: string;
+    reset: string;
+    resetAll: string;
+    /** 割当を変えられなかった理由。 */
+    problems: Record<BindingProblem | "unsupported", string>;
+    /** 同じキーをほかの操作が使っている。 */
+    conflict: (action: string) => string;
+    /** 変えた割当と重なって、初期割当のキーが使えない。 */
+    lost: (action: string) => string;
+    /** 設定の割当が使えないキーなので、初期割当にしている。 */
+    ignored: string;
     vim: string;
-    notYet: string;
+    vimNote: string;
+    /** Windows・Linux の Vim モードの割当の注意。 */
+    vimAltNote: string;
+    vimImeRestore: string;
+    vimImeRestoreNote: string;
   };
   data: {
     locationTitle: string;
@@ -133,8 +157,54 @@ const ja: SettingsMessages = {
     reviewThreshold: "持ち越し見直しの回数",
     reviewThresholdNote: "TODO の持ち越し回数がこの回数以上になると、持ち越しの画面に「分割する／やめる」を添え、回数の印の色を変えます。",
     shortcuts: "ショートカット割当",
+    shortcutsNote:
+      "「変更」を押してから、割り当てるキーを押します。Mod は macOS では ⌘、Windows・Linux では Ctrl です。取り消し・やり直し、コピー・貼り付けなどのキーは変えられません。",
+    scopes: { common: "共通", board: "整理モード", note: "ノートモード" },
+    actions: {
+      toggleMode: "ノートモード ⇄ 整理モード",
+      prevDay: "前日へ移動（ふりかえりでは前の週）",
+      nextDay: "翌日へ移動（ふりかえりでは次の週）",
+      today: "今日へ戻る",
+      palette: "検索パレット",
+      settings: "設定",
+      sidebar: "サイドバーを開く・閉じる",
+      archive: "ふりかえりを開く・閉じる",
+      regionTodo: "TODO の領域へ移る",
+      regionBlocker: "障害の領域へ移る",
+      regionReflection: "振り返りの領域へ移る",
+      toggle: "完了・解消の切替",
+      moveUp: "項目を上へ移動",
+      moveDown: "項目を下へ移動",
+      delete: "項目の削除",
+      template: "振り返りテンプレートの挿入",
+      toTodo: "現在行を TODO へ送る",
+      toBlocker: "現在行を障害へ送る",
+      timeHeading: "時刻付き見出しの挿入",
+    },
+    changeKey: (action, key) => `${action}のキーを変える（いまは ${key === "" ? "なし" : key}）`,
+    pressKey: "新しいキーを押してください（Esc で取り消し）",
+    reset: "初期値に戻す",
+    resetAll: "すべて初期値に戻す",
+    problems: {
+      no_modifier: "Mod か Alt と組み合わせたキーにしてください（文字の入力と区別できないため）。",
+      mac_option_alone: "macOS の Option は文字を打つキーなので、⌘ と組み合わせてください。",
+      edit_key: "このキーは文字の編集や移動に使うので割り当てられません（Mod と組み合わせられるのは Enter と Backspace、Alt だけで使えるのは上下の矢印だけです）。",
+      alt_gr: "Windows・Linux では Ctrl と Alt を同時に使えません（AltGr で文字を打つ配列があるため）。",
+      shifted_symbol: "記号のキーには Shift を付けられません（配列によって打つ文字が変わるため）。",
+      mac_option_symbol: "記号のキーには Option を付けられません（配列によって打つ文字が変わるため）。",
+      reserved: "このキーはほかの操作が使うので、割り当てられません。",
+      unsupported: "このキーは割り当てられません。",
+    },
+    conflict: (action) => `「${action}」と同じキーです。先にそちらを変えてください。`,
+    lost: (action) => `「${action}」に割り当てたキーと重なっているため、いまは使えません。`,
+    ignored: "設定の割当が使えないキーなので、初期割当にしています。",
     vim: "Vim モード",
-    notYet: "まだ変えられません。",
+    vimNote:
+      "ノートと振り返りのエディタ、整理モードの一覧を Vim のキーで操作します。Mod を使う標準のショートカットは、そのまま使えます。",
+    vimAltNote:
+      "Windows・Linux では Ctrl+[ が Vim の Esc と重なるため、前日・翌日の移動（ふりかえりでは週の移動）の初期割当を Alt+[ / Alt+] にします。",
+    vimImeRestore: "挿入モードで入力状態を戻す",
+    vimImeRestoreNote: "挿入モードに入ったとき、直前に挿入モードを抜けた時点の日本語入力の状態に戻します。",
   },
   data: {
     locationTitle: "保存先",
@@ -243,8 +313,54 @@ const en: SettingsMessages = {
     reviewThreshold: "Carry-over review count",
     reviewThresholdNote: "Once a TODO has been carried over this many times, the carry-over screen adds Split / Drop, and the count mark changes color.",
     shortcuts: "Keyboard shortcuts",
+    shortcutsNote:
+      "Press Change, then press the key to assign. Mod is ⌘ on macOS and Ctrl on Windows and Linux. Undo, redo, copy, paste and similar keys can't be changed.",
+    scopes: { common: "Everywhere", board: "Board mode", note: "Note mode" },
+    actions: {
+      toggleMode: "Switch Note ⇄ Board mode",
+      prevDay: "Previous day (previous week in Archive)",
+      nextDay: "Next day (next week in Archive)",
+      today: "Back to today",
+      palette: "Search palette",
+      settings: "Settings",
+      sidebar: "Open / close the sidebar",
+      archive: "Open / close Archive",
+      regionTodo: "Go to the TODO area",
+      regionBlocker: "Go to the Blockers area",
+      regionReflection: "Go to the Reflection area",
+      toggle: "Toggle done / resolved",
+      moveUp: "Move item up",
+      moveDown: "Move item down",
+      delete: "Delete item",
+      template: "Insert reflection template",
+      toTodo: "Send current line to TODO",
+      toBlocker: "Send current line to Blockers",
+      timeHeading: "Insert timestamp heading",
+    },
+    changeKey: (action, key) => `Change the key for ${action} (now ${key === "" ? "none" : key})`,
+    pressKey: "Press the new key (Esc to cancel)",
+    reset: "Reset",
+    resetAll: "Reset all",
+    problems: {
+      no_modifier: "Use a key combined with Mod or Alt (otherwise it can't be told from typing).",
+      mac_option_alone: "Option types characters on macOS. Combine the key with ⌘.",
+      edit_key: "This key is used for editing and moving the caret, so it can't be assigned (with Mod only Enter and Backspace are allowed; with Alt alone only the up and down arrows).",
+      alt_gr: "On Windows and Linux, Ctrl and Alt can't be used together (some layouts type characters with AltGr).",
+      shifted_symbol: "A symbol key can't be combined with Shift (the character depends on the layout).",
+      mac_option_symbol: "A symbol key can't be combined with Option (the character depends on the layout).",
+      reserved: "This key is used by another operation and can't be assigned.",
+      unsupported: "This key can't be assigned.",
+    },
+    conflict: (action) => `That key is already used by "${action}". Change that one first.`,
+    lost: (action) => `Disabled for now: the key is assigned to "${action}".`,
+    ignored: "The saved key can't be used, so the default is in effect.",
     vim: "Vim mode",
-    notYet: "Can't be changed yet.",
+    vimNote:
+      "Operate the Note and Reflection editors and the Board lists with Vim keys. The standard Mod shortcuts keep working.",
+    vimAltNote:
+      "On Windows and Linux, Ctrl+[ overlaps Vim's Esc, so the default for previous / next day (and week in Archive) becomes Alt+[ / Alt+].",
+    vimImeRestore: "Restore input state in Insert mode",
+    vimImeRestoreNote: "When entering Insert mode, return the Japanese input to the state it had when you last left Insert mode.",
   },
   data: {
     locationTitle: "Data folder",

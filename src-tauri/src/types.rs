@@ -5,6 +5,7 @@
 //! TypeScript の定義は ts-rs でここから作り、`src/lib/bindings.ts` に置く（`crate::bindings`）。
 //! 作るのはテストだけなので、ts-rs の derive はテストのビルドにだけ付ける（配るアプリに含めない）。
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -1345,6 +1346,13 @@ pub struct Settings {
     pub carryover_review_threshold: u32,
     /// サイドバーの開閉（広いウィンドウの整理モードでの状態。既定は開く）。
     pub sidebar_open: bool,
+    /// ショートカットの割当：操作の名前から割当の文字列へ。初期割当から変えたものだけ
+    /// （データモデル設計書 3章 setting）。
+    pub shortcuts: BTreeMap<String, String>,
+    /// Vim モード（既定 `false`）。
+    pub vim_mode: bool,
+    /// Vim モードの挿入モードで、直前の入力状態に戻す（既定 `true`）。
+    pub vim_ime_restore: bool,
 }
 
 impl From<settings::Settings> for Settings {
@@ -1361,6 +1369,9 @@ impl From<settings::Settings> for Settings {
             layout: s.layout.into(),
             carryover_review_threshold: s.carryover_review_threshold,
             sidebar_open: s.sidebar_open,
+            shortcuts: s.shortcuts,
+            vim_mode: s.vim_mode,
+            vim_ime_restore: s.vim_ime_restore,
         }
     }
 }
@@ -1399,6 +1410,9 @@ impl SettingsPatch {
             layout: self.layout.map(Into::into),
             carryover_review_threshold: self.carryover_review_threshold,
             sidebar_open: self.sidebar_open,
+            shortcuts: self.shortcuts,
+            vim_mode: self.vim_mode,
+            vim_ime_restore: self.vim_ime_restore,
         })
     }
 }
@@ -1431,6 +1445,13 @@ pub struct SettingsPatch {
     pub carryover_review_threshold: Option<u32>,
     #[cfg_attr(test, ts(optional))]
     pub sidebar_open: Option<bool>,
+    /// 割当の全体（欄ごと置き換える。初期割当と同じものは入れない）。
+    #[cfg_attr(test, ts(optional))]
+    pub shortcuts: Option<BTreeMap<String, String>>,
+    #[cfg_attr(test, ts(optional))]
+    pub vim_mode: Option<bool>,
+    #[cfg_attr(test, ts(optional))]
+    pub vim_ime_restore: Option<bool>,
 }
 
 /// クラウド同期のサービス（保存先の警告に使う。画面設計書 7章）。
@@ -1566,6 +1587,8 @@ pub enum InvalidReason {
     FontSize,
     /// 設定：持ち越し見直しの回数が 1 以上でない。
     ReviewThreshold,
+    /// 設定：ショートカットの割当の形が誤っている。
+    Shortcuts,
     /// 設定：`HH:MM` の形でない時刻。
     TimeOfDay,
 }
@@ -1725,6 +1748,7 @@ impl From<settings::SettingsError> for CommandError {
                     I::MeterHours => InvalidReason::MeterHours,
                     I::FontSize => InvalidReason::FontSize,
                     I::ReviewThreshold => InvalidReason::ReviewThreshold,
+                    I::Shortcuts => InvalidReason::Shortcuts,
                 },
             },
             settings::SettingsError::Storage(e) => Self::storage(&e),
