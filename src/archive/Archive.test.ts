@@ -20,6 +20,8 @@ const state = { today: TODAY, carry: null as unknown, failArchive: false };
 
 beforeEach(() => {
   prefs.lang = "ja";
+  prefs.vimMode = false;
+  prefs.shortcuts = {};
   state.today = TODAY;
   state.carry = null;
   state.failArchive = false;
@@ -340,6 +342,20 @@ test("ノートや振り返りのエディタにフォーカスがあっても M
   press(MOD_SHIFT_L);
   await until(() => $(".archive") === null);
   await until(() => document.activeElement === note);
+});
+
+test("Vim モードの Windows・Linux では、週の移動も Alt+[ / Alt+]（Ctrl+[ は Vim の Esc なので動かさない）", async () => {
+  prefs.vimMode = true;
+  const calls = await start();
+  await openArchive();
+  await until(() => selected() !== undefined);
+  const before = archiveCalls(calls).length;
+  press(MOD_LEFT);
+  expect(archiveCalls(calls).length).toBe(before);
+  press({ key: "[", code: "BracketLeft", altKey: true });
+  await until(() => text(".archive .range") === "10.26 Mon — 10.30 Fri");
+  press({ key: "]", code: "BracketRight", altKey: true });
+  await until(() => text(".archive .range") === "11.02 Mon — 11.06 Fri");
 });
 
 test("見ている日がある（今日でない）ときは、その日から始める", async () => {

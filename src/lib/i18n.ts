@@ -525,7 +525,7 @@ const enStartup: StartupMessages = {
 
 const ja: Messages = {
   labels,
-  withKey: (label, key) => `${label}（${key}）`,
+  withKey: (label, key) => (key === "" ? label : `${label}（${key}）`),
   sidebar: "サイドバー",
   boardMode: "整理モード",
   noteMode: "ノートモード",
@@ -626,7 +626,7 @@ const ja: Messages = {
 
 const en: Messages = {
   labels,
-  withKey: (label, key) => `${label} (${key})`,
+  withKey: (label, key) => (key === "" ? label : `${label} (${key})`),
   sidebar: "Sidebar",
   boardMode: "Board mode",
   noteMode: "Note mode",

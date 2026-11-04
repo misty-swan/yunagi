@@ -24,6 +24,9 @@ function applyPatch(patch: SettingsPatch) {
   if (patch.layout !== undefined) prefs.layout = patch.layout;
   if (patch.carryoverReviewThreshold !== undefined) prefs.reviewThreshold = patch.carryoverReviewThreshold;
   if (patch.sidebarOpen !== undefined) prefs.sidebarOpen = patch.sidebarOpen;
+  if (patch.shortcuts !== undefined) prefs.shortcuts = { ...patch.shortcuts };
+  if (patch.vimMode !== undefined) prefs.vimMode = patch.vimMode;
+  if (patch.vimImeRestore !== undefined) prefs.vimImeRestore = patch.vimImeRestore;
 }
 
 /** `prefs` のいまの値のうち、`patch` の欄だけ（失敗したときに戻すため）。 */
@@ -41,6 +44,9 @@ function snapshot(patch: SettingsPatch): SettingsPatch {
   if (keys.has("layout")) out.layout = prefs.layout;
   if (keys.has("carryoverReviewThreshold")) out.carryoverReviewThreshold = prefs.reviewThreshold;
   if (keys.has("sidebarOpen")) out.sidebarOpen = prefs.sidebarOpen;
+  if (keys.has("shortcuts")) out.shortcuts = prefs.shortcuts;
+  if (keys.has("vimMode")) out.vimMode = prefs.vimMode;
+  if (keys.has("vimImeRestore")) out.vimImeRestore = prefs.vimImeRestore;
   return out;
 }
 
@@ -82,6 +88,9 @@ export class SettingsStore {
       layout: 0,
       carryoverReviewThreshold: 0,
       sidebarOpen: 0,
+      shortcuts: 0,
+      vimMode: 0,
+      vimImeRestore: 0,
     } as unknown as SettingsPatch);
     beforeShown?.();
     this.loaded = true;

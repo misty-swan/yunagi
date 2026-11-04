@@ -41,8 +41,12 @@ test("コアの設定を当てる。言語の設定が無ければ OS の言語�
     layout: "B",
     carryoverReviewThreshold: 5,
     sidebarOpen: false,
+    shortcuts: { palette: "Mod+P" },
+    vimMode: true,
+    vimImeRestore: false,
   });
   expect(prefs.lang).toBe(before);
+  expect([prefs.shortcuts, prefs.vimMode, prefs.vimImeRestore]).toEqual([{ palette: "Mod+P" }, true, false]);
   expect(prefs.meterHours).toEqual({ start: 8 * 60 + 30, end: 18 * 60 });
   expect([prefs.theme, prefs.fontSize, prefs.noteFont, prefs.layout, prefs.reviewThreshold]).toEqual([
     "dark",
@@ -71,6 +75,9 @@ const DEFAULTS = {
   layout: "A",
   carryoverReviewThreshold: 3,
   sidebarOpen: true,
+  shortcuts: {},
+  vimMode: false,
+  vimImeRestore: true,
 } as const;
 
 test("文言は言語で切り替わり、英字ラベルは日英で同じ", () => {

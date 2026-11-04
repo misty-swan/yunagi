@@ -111,7 +111,7 @@
       />
     </svg>
     <span class="nl">{m.labels.nav.settings}</span>
-    <kbd>{keyLabel("settings", mac)}</kbd>
+    {#if keyLabel("settings", mac) !== ""}<kbd>{keyLabel("settings", mac)}</kbd>{/if}
   </button>
 
   <div class="status" role="status">

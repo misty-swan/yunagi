@@ -1,5 +1,6 @@
 // 設定の、画面が使う値：テーマ・言語・フォントサイズ・ノートの書体・レイアウト・凪メーターの時間帯・
-// 持ち越し見直しの回数・サイドバーの開閉・更新の自動確認（要件 F-12、画面設計書 7章、デザインガイド
+// 持ち越し見直しの回数・サイドバーの開閉・更新の自動確認・ショートカットの割当・Vim モード（要件 F-12、
+// 画面設計書 7章、デザインガイド
 // 3章・4章・7章）。
 //
 // 値の正本はコアの setting（データモデル設計書 3章）。起動のとき、外枠を出す前に読み込む
@@ -55,6 +56,15 @@ class Prefs {
   updateCheck = $state(true);
   /** 広いウィンドウの整理モードでのサイドバーの開閉。 */
   sidebarOpen = $state(true);
+  /**
+   * ショートカットの割当：操作の名前から割当の文字列へ。初期割当から変えたものだけ（keymap.ts）。
+   * 変えるときは新しい値を代入する（中身は書き換えない。失敗したときに前の値へ戻せるように）。
+   */
+  shortcuts = $state.raw<Record<string, string>>({});
+  /** Vim モード。 */
+  vimMode = $state(false);
+  /** Vim モードの挿入モードに入ったとき、直前の入力状態に戻す。 */
+  vimImeRestore = $state(true);
 
   /** 凪メーターの時間帯（分）。 */
   get meterHours(): { start: number; end: number } {
@@ -74,6 +84,9 @@ class Prefs {
     this.meterEnd = s.meterEnd;
     this.updateCheck = s.updateCheck;
     this.sidebarOpen = s.sidebarOpen;
+    this.shortcuts = { ...s.shortcuts };
+    this.vimMode = s.vimMode;
+    this.vimImeRestore = s.vimImeRestore;
   }
 }
 

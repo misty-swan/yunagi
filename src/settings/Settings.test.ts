@@ -41,6 +41,9 @@ const DEFAULTS: Settings = {
   layout: "A",
   carryoverReviewThreshold: 3,
   sidebarOpen: true,
+  shortcuts: {},
+  vimMode: false,
+  vimImeRestore: true,
 };
 
 const BACKUPS: BackupEntry[] = [
@@ -313,8 +316,138 @@ test("区分ごとに設定を変える：変えた欄だけを保存し、画�
   change($("#set-threshold"), "0");
   expect(($("#set-threshold") as HTMLInputElement).value).toBe("5");
   expect(core.count("save_settings")).toBe(10);
-  // まだ無い機能（ショートカット割当・Vim モード）は場所だけ
-  expect($$('[data-pane="operation"] .placeholder')).toHaveLength(2);
+
+  // Vim モード：入れると、入力状態を戻す欄が出る。どちらも保存する
+  expect($("#set-vim-ime")).toBeNull();
+  const vim = $("#set-vim") as HTMLInputElement;
+  vim.checked = true;
+  vim.dispatchEvent(new Event("change", { bubbles: true }));
+  await until(() => core.settings.vimMode && $("#set-vim-ime") !== null);
+  expect(prefs.vimMode).toBe(true);
+  const restore = $("#set-vim-ime") as HTMLInputElement;
+  expect(restore.checked).toBe(true);
+  restore.checked = false;
+  restore.dispatchEvent(new Event("change", { bubbles: true }));
+  await until(() => !core.settings.vimImeRestore);
+  expect(prefs.vimImeRestore).toBe(false);
+});
+
+/** 設定の「操作」区分で、操作 `id` の割当のボタン。 */
+const keyButton = (id: string) => $(`[data-pane="operation"] [data-action="${id}"] .key-btn`) as HTMLButtonElement;
+
+test("ショートカット割当：キーを押して変えると保存し、骨組みのキーと案内にすぐ当たる。初期割当と同じにすると持たない", async () => {
+  const core = await start();
+  await open("operation");
+  expect(keyButton("palette").textContent?.trim()).toBe("Ctrl+K");
+
+  keyButton("palette").click();
+  flushSync();
+  expect(keyButton("palette").textContent).toContain("新しいキーを押してください");
+  // 修飾キーだけの押下は待ち続ける。取り込み中のキーは、ほかの画面の操作にならない（Ctrl+J でモードが変わらない）
+  press({ key: "Control", code: "ControlLeft", ctrlKey: true }, keyButton("palette"));
+  expect(keyButton("palette").textContent).toContain("新しいキーを押してください");
+  press({ key: "p", code: "KeyP", ctrlKey: true }, keyButton("palette"));
+  await until(() => core.settings.shortcuts.palette === "Mod+P");
+  expect(core.last("save_settings")).toEqual({ patch: { shortcuts: { palette: "Mod+P" } } });
+  expect(keyButton("palette").textContent?.trim()).toBe("Ctrl+P");
+  expect($('[data-pane="operation"] [data-action="palette"] .btn')).not.toBeNull();
+
+  // 閉じると、新しい割当で動く（古い割当では動かない）
+  press({ key: "Escape" }, document.activeElement!);
+  expect(dialog()).toBeNull();
+  press({ key: "k", code: "KeyK", ctrlKey: true });
+  expect($("[data-palette]")).toBeNull();
+  press({ key: "p", code: "KeyP", ctrlKey: true });
+  await until(() => $("[data-palette]") !== null);
+  // 案内にも新しい割当が出る
+  expect($(".search kbd")?.textContent).toBe("Ctrl+P");
+  press({ key: "Escape" }, document.activeElement!);
+  await until(() => $("[data-palette]") === null);
+
+  // 初期割当と同じキーに戻すと、割当を持たない
+  await open("operation");
+  keyButton("palette").click();
+  flushSync();
+  press({ key: "k", code: "KeyK", ctrlKey: true }, keyButton("palette"));
+  await until(() => Object.keys(core.settings.shortcuts).length === 0);
+  expect(core.last("save_settings")).toEqual({ patch: { shortcuts: {} } });
+});
+
+test("ショートカット割当：ほかの操作と同じキーと、割り当てられないキーは、何も変えずに理由を出す。Esc で取り消す", async () => {
+  const core = await start();
+  await open("operation");
+  const before = core.count("save_settings");
+  const tryKey = (id: string, init: KeyboardEventInit) => {
+    keyButton(id).click();
+    flushSync();
+    press(init, keyButton(id));
+  };
+  // 検索パレットに、モードの切替（Mod+J）のキー
+  tryKey("palette", { key: "j", code: "KeyJ", ctrlKey: true });
+  expect(text('[data-action="palette"] .bad')).toBe("「ノートモード ⇄ 整理モード」と同じキーです。先にそちらを変えてください。");
+  // 修飾キーの無いキー、取り消し・やり直しのキー、Ctrl+Alt
+  tryKey("palette", { key: "a", code: "KeyA" });
+  expect(text('[data-action="palette"] .bad')).toContain("Mod か Alt と組み合わせた");
+  tryKey("palette", { key: "z", code: "KeyZ", ctrlKey: true });
+  expect(text('[data-action="palette"] .bad')).toContain("ほかの操作が使う");
+  tryKey("palette", { key: "[", code: "BracketLeft", ctrlKey: true, altKey: true });
+  expect(text('[data-action="palette"] .bad')).toContain("Ctrl と Alt を同時に");
+  // 整理モードの操作とノートモードの操作は重ならない（同じキーにできる）。共通の操作とは重なる
+  tryKey("toTodo", { key: "k", code: "KeyK", ctrlKey: true });
+  expect(text('[data-action="toTodo"] .bad')).toContain("「検索パレット」");
+  expect(core.count("save_settings")).toBe(before);
+
+  // 取り込み中の Esc は、取り消すだけで設定を閉じない
+  keyButton("today").click();
+  flushSync();
+  press({ key: "Escape" }, keyButton("today"));
+  expect(dialog()).not.toBeNull();
+  expect(keyButton("today").textContent?.trim()).toBe("Ctrl+T");
+});
+
+test("ショートカット割当：初期値に戻す。保存した割当が使えないときは、初期割当にして知らせる", async () => {
+  const core = await start({ shortcuts: { today: "Mod+Q", sidebar: "Mod+Alt+B", palette: "Mod+J" } });
+  await open("operation");
+  // Mod+Q は使える割当。Ctrl+Alt は使えないので初期割当。Mod+J は先に初期割当のモードの切替が使っているが、
+  // 変えた割当が勝ち、初期割当の側が使えなくなる
+  expect(keyButton("today").textContent?.trim()).toBe("Ctrl+Q");
+  expect(keyButton("sidebar").textContent?.trim()).toBe("Ctrl+\\");
+  expect(text('[data-action="sidebar"] .bad')).toBe("設定の割当が使えないキーなので、初期割当にしています。");
+  expect(keyButton("palette").textContent?.trim()).toBe("Ctrl+J");
+  expect(keyButton("toggleMode").textContent?.trim()).toBe("—");
+  expect(text('[data-action="toggleMode"] .bad')).toBe("「検索パレット」に割り当てたキーと重なっているため、いまは使えません。");
+
+  $('[data-action="palette"] .btn')?.click();
+  await until(() => core.settings.shortcuts.palette === undefined);
+  expect(keyButton("toggleMode").textContent?.trim()).toBe("Ctrl+J");
+  button("すべて初期値に戻す").click();
+  await until(() => Object.keys(core.settings.shortcuts).length === 0);
+  expect(keyButton("today").textContent?.trim()).toBe("Ctrl+T");
+});
+
+test("Vim モードの Windows・Linux は、前日・翌日の移動の初期割当が Alt+[ / Alt+] になる。変えた割当は残る", async () => {
+  const core = await start({ vimMode: true });
+  await open("operation");
+  expect(keyButton("prevDay").textContent?.trim()).toBe("Alt+[");
+  expect(keyButton("nextDay").textContent?.trim()).toBe("Alt+]");
+  expect(text('[data-pane="operation"]')).toContain("Ctrl+[ が Vim の Esc と重なる");
+  // 初期割当と同じ Alt+[ にしても、割当は持たない（Vim モードを切ったとき初期割当に従うため）
+  keyButton("prevDay").click();
+  flushSync();
+  press({ key: "[", code: "BracketLeft", altKey: true }, keyButton("prevDay"));
+  await until(() => core.count("save_settings") === 1);
+  expect(core.settings.shortcuts).toEqual({});
+  // Vim モード中は Ctrl+[ を割り当てられない（Esc と重なる）
+  keyButton("nextDay").click();
+  flushSync();
+  press({ key: "[", code: "BracketLeft", ctrlKey: true }, keyButton("nextDay"));
+  expect(text('[data-action="nextDay"] .bad')).toContain("ほかの操作が使う");
+  expect(core.count("save_settings")).toBe(1);
+  // Vim モードを切ると、初期割当に戻る
+  const vim = $("#set-vim") as HTMLInputElement;
+  vim.checked = false;
+  vim.dispatchEvent(new Event("change", { bubbles: true }));
+  await until(() => keyButton("prevDay").textContent?.trim() === "Ctrl+[");
 });
 
 test("コアが保存を断ったら、前の値に戻して理由を出す", async () => {

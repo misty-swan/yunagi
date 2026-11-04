@@ -691,13 +691,30 @@ carryoverReviewThreshold: number,
 /**
  * サイドバーの開閉（広いウィンドウの整理モードでの状態。既定は開く）。
  */
-sidebarOpen: boolean, };
+sidebarOpen: boolean, 
+/**
+ * ショートカットの割当：操作の名前から割当の文字列へ。初期割当から変えたものだけ
+ * （データモデル設計書 3章 setting）。
+ */
+shortcuts: { [key in string]: string }, 
+/**
+ * Vim モード（既定 `false`）。
+ */
+vimMode: boolean, 
+/**
+ * Vim モードの挿入モードで、直前の入力状態に戻す（既定 `true`）。
+ */
+vimImeRestore: boolean, };
 
 /**
  * 設定の保存：変える欄だけ（無い欄には触れない）。`meterStart`・`meterEnd` は、片方だけでも、
  * もう片方は今の値を使う。
  */
-export type SettingsPatch = { dayBoundary?: string, meterStart?: string, meterEnd?: string, locale?: Locale, updateCheck?: boolean, theme?: Theme, fontSize?: number, noteFont?: NoteFont, layout?: Layout, carryoverReviewThreshold?: number, sidebarOpen?: boolean, };
+export type SettingsPatch = { dayBoundary?: string, meterStart?: string, meterEnd?: string, locale?: Locale, updateCheck?: boolean, theme?: Theme, fontSize?: number, noteFont?: NoteFont, layout?: Layout, carryoverReviewThreshold?: number, sidebarOpen?: boolean, 
+/**
+ * 割当の全体（欄ごと置き換える。初期割当と同じものは入れない）。
+ */
+shortcuts?: { [key in string]: string }, vimMode?: boolean, vimImeRestore?: boolean, };
 
 /**
  * クラウド同期のサービス（保存先の警告に使う。画面設計書 7章）。
@@ -723,7 +740,7 @@ export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" }
 /**
  * 引数の誤りの種類。
  */
-export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line" | "meter_hours" | "font_size" | "review_threshold" | "time_of_day";
+export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line" | "meter_hours" | "font_size" | "review_threshold" | "shortcuts" | "time_of_day";
 
 /**
  * 選んだバックアップ・保存先を使えない理由。

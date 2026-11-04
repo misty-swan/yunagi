@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isMacPlatform, keyLabel, modEnterLabel, modShiftLabel, noteActionOf, shellActionOf } from "./keys";
+import { isMacPlatform, keyLabel, noteActionOf, shellActionOf } from "./keys";
 
 function key(init: Partial<KeyboardEvent>) {
   return {
@@ -20,8 +20,11 @@ test("macOS は ⌘、Windows・Linux は Ctrl で表示する", () => {
   expect(keyLabel("archive", true)).toBe("⇧⌘L");
   expect(keyLabel("sidebar", false)).toBe("Ctrl+\\");
   expect(keyLabel("archive", false)).toBe("Ctrl+Shift+L");
-  expect(modEnterLabel(true)).toBe("⌘↵");
-  expect(modShiftLabel("T", false)).toBe("Ctrl+Shift+T");
+  expect(keyLabel("toggle", true)).toBe("⌘↵");
+  expect(keyLabel("toggle", false)).toBe("Ctrl+Enter");
+  expect(keyLabel("toTodo", false)).toBe("Ctrl+Shift+T");
+  expect(keyLabel("moveUp", false)).toBe("Alt+↑");
+  expect(keyLabel("moveUp", true)).toBe("⌥↑");
   expect(isMacPlatform({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)" })).toBe(true);
   expect(isMacPlatform({ userAgent: "Mozilla/5.0 (X11; Linux x86_64)" })).toBe(false);
 });

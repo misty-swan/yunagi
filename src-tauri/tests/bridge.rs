@@ -1561,6 +1561,9 @@ fn settings_commands(default_dir: &Path) {
         "layout": "A",
         "carryoverReviewThreshold": 3,
         "sidebarOpen": true,
+        "shortcuts": {},
+        "vimMode": false,
+        "vimImeRestore": true,
     });
     assert_eq!(h.ok("get_settings", json!({})), defaults);
 
@@ -1594,6 +1597,7 @@ fn settings_commands(default_dir: &Path) {
         (json!({ "carryoverReviewThreshold": 0 }), "review_threshold"),
         (json!({ "dayBoundary": "4:00" }), "time_of_day"),
         (json!({ "meterEnd": "25:00" }), "time_of_day"),
+        (json!({ "shortcuts": { "palette": "" } }), "shortcuts"),
     ] {
         assert_eq!(
             h.err("save_settings", json!({ "patch": patch })),
@@ -1601,6 +1605,22 @@ fn settings_commands(default_dir: &Path) {
             "{patch}"
         );
     }
+    assert_eq!(h.ok("get_settings", json!({})), expected);
+    h.assert_no_event();
+
+    // ショートカットの割当（欄ごと置き換える）と Vim モード
+    let saved = h.ok(
+        "save_settings",
+        json!({ "patch": {
+            "shortcuts": { "palette": "Mod+P" }, "vimMode": true, "vimImeRestore": false
+        } }),
+    );
+    expected["shortcuts"] = json!({ "palette": "Mod+P" });
+    expected["vimMode"] = json!(true);
+    expected["vimImeRestore"] = json!(false);
+    assert_eq!(saved, expected);
+    h.ok("save_settings", json!({ "patch": { "shortcuts": {} } }));
+    expected["shortcuts"] = json!({});
     assert_eq!(h.ok("get_settings", json!({})), expected);
     h.assert_no_event();
 

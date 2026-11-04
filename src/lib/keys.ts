@@ -1,120 +1,79 @@
-// 画面の骨組みのキー（操作仕様書 2章。初期割当。割当の変更は設定の課題で作る）と、その表示。
+// 画面の骨組みのキー（操作仕様書 2章）と、その表示。割当は初期割当に、設定で変えたもの
+// （`prefs.shortcuts`）と Vim モード（`prefs.vimMode`）を当てたもの（keymap.ts）。割当の値は呼ぶたびに
+// 読む（設定を変えたら、次のキーの押下とキーの案内にすぐ当たる）。
 //
 // - `Mod` は macOS では ⌘、Windows・Linux では Ctrl。
 // - IME の変換中のキーはショートカットとして扱わない（操作仕様書 3章）。
 
-/** 画面の骨組みが受け持つ操作。 */
-export type ShellAction =
-  | "toggleMode"
-  | "prevDay"
-  | "nextDay"
-  | "today"
-  | "palette"
-  | "settings"
-  | "sidebar"
-  | "archive";
+import {
+  ACTIONS,
+  label,
+  matches,
+  resolveKeymap,
+  type ActionId,
+  type Keymap,
+  type KeyLike as MatchKey,
+  type NoteAction,
+  type ShellAction,
+} from "./keymap";
+import { prefs } from "./prefs.svelte";
 
-interface Binding {
-  /**
-   * 文字のキーは `KeyboardEvent.code`（配列によらず同じ位置のキー。ロシア語の配列などでも動く）。
-   * 記号のキーは `KeyboardEvent.key`（押した文字。JIS 配列では `[` `]` `\` の位置が US 配列と
-   * ずれ、`code` では別のキーに当たるため）。`shift` は文字のキーにだけ使う。
-   */
-  match: { code: string } | { keys: readonly string[] };
-  shift: boolean;
-  /** 表示するキーの文字。 */
-  key: string;
-}
-
-const BINDINGS: Record<ShellAction, Binding> = {
-  toggleMode: { match: { code: "KeyJ" }, shift: false, key: "J" },
-  prevDay: { match: { keys: ["["] }, shift: false, key: "[" },
-  nextDay: { match: { keys: ["]"] }, shift: false, key: "]" },
-  today: { match: { code: "KeyT" }, shift: false, key: "T" },
-  palette: { match: { code: "KeyK" }, shift: false, key: "K" },
-  settings: { match: { keys: [","] }, shift: false, key: "," },
-  // JIS 配列の macOS では、\ のキーが ¥ を打つ（既定の設定）
-  sidebar: { match: { keys: ["\\", "¥"] }, shift: false, key: "\\" },
-  archive: { match: { code: "KeyL" }, shift: true, key: "L" },
-};
-
-/** 記号のキーの、US 配列での位置（押した文字が当たらなかったときに使う）。 */
-const SYMBOL_POSITIONS: Partial<Record<string, ShellAction>> = {
-  BracketLeft: "prevDay",
-  BracketRight: "nextDay",
-  Backslash: "sidebar",
-  Comma: "settings",
-};
+export type { NoteAction, ShellAction };
 
 /** macOS か（WebView の利用者エージェントから決める）。 */
 export function isMacPlatform(nav: Pick<Navigator, "userAgent"> = navigator): boolean {
   return /Mac|iPhone|iPad/.test(nav.userAgent);
 }
 
-/** 操作のキーの表示（macOS は `⇧⌘L`、Windows・Linux は `Ctrl+Shift+L`）。 */
-export function keyLabel(action: ShellAction, mac: boolean): string {
-  const b = BINDINGS[action];
-  return mac ? `${b.shift ? "⇧" : ""}⌘${b.key}` : `Ctrl+${b.shift ? "Shift+" : ""}${b.key}`;
+let cache: { shortcuts: unknown; vim: boolean; mac: boolean; map: Keymap } | null = null;
+
+/** いまの割当（設定を当てたもの）。同じ設定と OS で続けて呼ぶ間は、求め直さない。 */
+export function currentKeymap(mac: boolean): Keymap {
+  const shortcuts = prefs.shortcuts;
+  const vim = prefs.vimMode;
+  if (cache === null || cache.shortcuts !== shortcuts || cache.vim !== vim || cache.mac !== mac) {
+    cache = { shortcuts, vim, mac, map: resolveKeymap(shortcuts, vim, mac) };
+  }
+  return cache.map;
 }
 
-/** Mod と Enter（完了・解消の切替）の表示。 */
-export function modEnterLabel(mac: boolean): string {
-  return mac ? "⌘↵" : "Ctrl+Enter";
+/** 操作の割当の表記（`Ctrl+Shift+L`・`⇧⌘L`）。使えない割当のときは空。 */
+export function keyLabel(action: ActionId, mac: boolean): string {
+  const b = currentKeymap(mac).get(action)?.binding;
+  return b === null || b === undefined ? "" : label(b, mac);
 }
 
-/** Mod と Shift と文字のキーの表示（ノートモードの送る操作など、骨組みが受け持たない操作）。 */
-export function modShiftLabel(key: string, mac: boolean): string {
-  return mac ? `⇧⌘${key}` : `Ctrl+Shift+${key}`;
+type KeyLike = MatchKey & Pick<KeyboardEvent, "isComposing" | "keyCode">;
+
+/** IME の変換中か（WebKit 系では keyCode 229 で届くことがある）。 */
+export function composing(e: Pick<KeyboardEvent, "isComposing" | "keyCode">): boolean {
+  return e.isComposing || e.keyCode === 229;
 }
 
-type KeyLike = Pick<
-  KeyboardEvent,
-  "code" | "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "isComposing" | "keyCode"
->;
+/** キーの押下が、`ids` のうちどの操作に当たるか。当たらなければ `null`。 */
+export function actionIn<T extends ActionId>(e: KeyLike, mac: boolean, ids: readonly T[]): T | null {
+  if (composing(e)) return null;
+  const map = currentKeymap(mac);
+  for (const id of ids) {
+    const b = map.get(id)?.binding;
+    if (b !== null && b !== undefined && matches(e, mac, b)) return id;
+  }
+  return null;
+}
+
+const SHELL_IDS = ACTIONS.filter((a) => a.scope === "common").map((a) => a.id as ShellAction);
 
 /** キーの押下が、骨組みの操作のどれに当たるか。当たらなければ `null`。 */
 export function shellActionOf(e: KeyLike, mac: boolean): ShellAction | null {
-  // IME の変換中（WebKit 系では keyCode 229 で届くことがある）は扱わない
-  if (e.isComposing || e.keyCode === 229) return null;
-  const mod = mac ? e.metaKey : e.ctrlKey;
-  const other = mac ? e.ctrlKey : e.metaKey;
-  if (!mod || other) return null;
-  // Windows・Linux の Alt 付き（AltGr は Ctrl+Alt として届く）は、文字の入力かもしれないので扱わない
-  // （ドイツ語の配列の AltGr+8 で [ を打つとき、前日へ移ってしまわないように）
-  if (!mac && e.altKey) return null;
-  const bindings = Object.entries(BINDINGS) as [ShellAction, Binding][];
-  for (const [action, b] of bindings) {
-    if ("code" in b.match) {
-      if (e.code === b.match.code && b.shift === e.shiftKey && !e.altKey) return action;
-    } else if (b.match.keys.includes(e.key)) {
-      // macOS で記号を Option と打つ配列（ドイツ語の配列の Option+5 で [ など）でも動くよう、
-      // 押した文字が合えば Option と Shift は問わない
-      return action;
-    }
-  }
-  // 記号を単独のキーで打てない配列（ドイツ語の配列など）でも動くよう、Alt の無いときは、
-  // US 配列の記号のキーの位置でも受ける
-  const fallback = e.altKey ? undefined : SYMBOL_POSITIONS[e.code];
-  return fallback !== undefined && !e.shiftKey ? fallback : null;
+  return actionIn(e, mac, SHELL_IDS);
 }
 
-/** ノートモードの部品が受け持つ操作：時刻付き見出しの挿入と、TODO・障害への行送り。 */
-export type NoteAction = "timeHeading" | "toTodo" | "toBlocker";
-
-/** ノートモードの操作のキー（Mod+Shift と文字のキー。文字のキーなので位置で判定する）。 */
-const NOTE_KEYS = new Map<string, NoteAction>([
-  ["KeyH", "timeHeading"],
-  ["KeyT", "toTodo"],
-  ["KeyB", "toBlocker"],
-]);
+const NOTE_IDS = ACTIONS.filter((a) => a.scope === "note").map((a) => a.id as NoteAction);
 
 /**
- * キーの押下が、ノートモードの操作に当たるか（Mod+Shift+H・T・B。操作仕様書 2章）。当たらなければ `null`。
+ * キーの押下が、ノートモードの操作に当たるか（初期割当は Mod+Shift+H・T・B。操作仕様書 2章）。
+ * 当たらなければ `null`。
  */
 export function noteActionOf(e: KeyLike, mac: boolean): NoteAction | null {
-  if (e.isComposing || e.keyCode === 229) return null;
-  const mod = mac ? e.metaKey : e.ctrlKey;
-  const other = mac ? e.ctrlKey : e.metaKey;
-  if (!mod || other || e.altKey || !e.shiftKey) return null;
-  return NOTE_KEYS.get(e.code) ?? null;
+  return actionIn(e, mac, NOTE_IDS);
 }

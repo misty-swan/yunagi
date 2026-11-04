@@ -216,7 +216,8 @@ export interface CommandContext {
  * 理由は保存に失敗している間だけ出す。`other` はもう一方の言語の文言（どちらの言語の名前でも探せる）。
  */
 export function paletteCommands(ctx: CommandContext, m: Messages, other: Messages): PaletteCommand[] {
-  const key = (a: ShellAction) => keyLabel(a, ctx.mac);
+  // 割当が使えない操作（同じキーをほかの操作が使っている）は、キーを出さない
+  const key = (a: ShellAction) => keyLabel(a, ctx.mac) || undefined;
   const list: { id: PaletteCommandId; label: (x: Messages) => string; key?: string; active?: boolean; when?: boolean }[] = [
     { id: "carryover", label: (x) => x.palette.commands.carryover, when: ctx.carryPending },
     { id: "saveDetail", label: (x) => x.palette.commands.saveDetail, when: ctx.saveFailing },

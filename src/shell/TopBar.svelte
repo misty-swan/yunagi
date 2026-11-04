@@ -152,7 +152,8 @@
           aria-label={m.withKey(m.backToday, keyLabel("today", mac))}
           onclick={onToday}
         >
-          {m.labels.today} <kbd>{keyLabel("today", mac)}</kbd>
+          {m.labels.today}
+          {#if keyLabel("today", mac) !== ""}<kbd>{keyLabel("today", mac)}</kbd>{/if}
         </button>
       {/if}
     </div>
@@ -178,7 +179,7 @@
       <path d="M7 2.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM10.4 10.4 13.5 13.5" />
     </svg>
     <span>{m.searchLabel}</span>
-    <kbd>{keyLabel("palette", mac)}</kbd>
+    {#if keyLabel("palette", mac) !== ""}<kbd>{keyLabel("palette", mac)}</kbd>{/if}
   </button>
 
   {#if unseen > 0}

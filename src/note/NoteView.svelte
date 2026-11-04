@@ -26,7 +26,7 @@
   import type { NoteFind } from "../lib/palette.svelte";
   import { FONT_WAIT_MS, monoFont, type FontLoader } from "../lib/fonts.svelte";
   import { t } from "../lib/i18n";
-  import { modShiftLabel, noteActionOf } from "../lib/keys";
+  import { keyLabel, noteActionOf } from "../lib/keys";
   import { continueList, insertTimeHeading, timeHeadingOf, type Edit, type TimeHeading } from "../lib/note";
   import { markedLine, marksField, sendRange, sentCounts, setMarks } from "../lib/note_marks";
   import type { Notice } from "../lib/notice.svelte";
@@ -618,10 +618,10 @@
     onkeydown={onMenuKey}
   >
     <button type="button" role="menuitem" onclick={() => fromMenu("todo")}>
-      {m.lineMenu.toTodo}<span class="key">{modShiftLabel("T", mac)}</span>
+      {m.lineMenu.toTodo}<span class="key">{keyLabel("toTodo", mac)}</span>
     </button>
     <button type="button" role="menuitem" onclick={() => fromMenu("blocker")}>
-      {m.lineMenu.toBlocker}<span class="key">{modShiftLabel("B", mac)}</span>
+      {m.lineMenu.toBlocker}<span class="key">{keyLabel("toBlocker", mac)}</span>
     </button>
   </div>
 {/if}

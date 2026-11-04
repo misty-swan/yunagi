@@ -8,8 +8,10 @@
 //! - 書くとき：形に合わない値は、何も書かずに断る（[`SettingsError::Invalid`]）。
 //!
 //! 画面（S-05）が扱うのは、日付の切り替わり時刻・凪メーターの時間帯・言語・更新の自動確認・テーマ・
-//! フォントサイズ・ノートの書体・レイアウト・持ち越し見直しの回数・サイドバーの開閉。ショートカット割当・
-//! Vim モード・ライセンスは、その機能を作るときに足す。
+//! フォントサイズ・ノートの書体・レイアウト・持ち越し見直しの回数・サイドバーの開閉・ショートカット割当・
+//! Vim モード。ライセンスは、その機能を作るときに足す。
+
+use std::collections::BTreeMap;
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -37,6 +39,12 @@ pub const UPDATE_CHECK_KEY: &str = "update_check";
 pub const METER_HOURS_KEY: &str = "meter_hours";
 /// 設定のキー：サイドバーの開閉（広いウィンドウの整理モードでの状態）。
 pub const SIDEBAR_KEY: &str = "sidebar";
+/// 設定のキー：ショートカットの割当（初期割当から変えたものだけ）。
+pub const SHORTCUTS_KEY: &str = "shortcuts";
+/// 設定のキー：Vim モード。
+pub const VIM_MODE_KEY: &str = "vim_mode";
+/// 設定のキー：Vim モードの挿入モードで、直前の入力状態に戻すか。
+pub const VIM_IME_RESTORE_KEY: &str = "vim_ime_restore";
 
 /// フォントサイズの範囲（px）。
 pub const FONT_SIZE_RANGE: std::ops::RangeInclusive<u8> = 13..=19;
@@ -154,7 +162,7 @@ fn minutes(t: DayBoundary) -> u32 {
 }
 
 /// 画面に出す設定（既定値を当てた後のもの）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// 日付の切り替わり時刻（既定 4:00）。
     pub day_boundary: DayBoundary,
@@ -173,6 +181,13 @@ pub struct Settings {
     pub carryover_review_threshold: u32,
     /// サイドバーの開閉（広いウィンドウの整理モード。既定は開く）。
     pub sidebar_open: bool,
+    /// ショートカットの割当：操作の名前から割当の文字列（`Mod+Shift+L` など）へ。利用者が初期割当から
+    /// 変えたものだけを持つ。名前と文字列の決まりは画面側が持つ（コアは形だけを守る。`valid_shortcuts`）。
+    pub shortcuts: BTreeMap<String, String>,
+    /// Vim モード（既定 `false`）。
+    pub vim_mode: bool,
+    /// Vim モードの挿入モードに入ったとき、直前の入力状態に戻す（既定 `true`）。
+    pub vim_ime_restore: bool,
 }
 
 impl Default for Settings {
@@ -188,12 +203,15 @@ impl Default for Settings {
             layout: Layout::default(),
             carryover_review_threshold: carryover::DEFAULT_REVIEW_THRESHOLD as u32,
             sidebar_open: true,
+            shortcuts: BTreeMap::new(),
+            vim_mode: false,
+            vim_ime_restore: true,
         }
     }
 }
 
 /// 変える設定：変える欄だけ `Some`。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettingsPatch {
     pub day_boundary: Option<DayBoundary>,
     /// 始業と終業。始業が終業より前でなければ断る。
@@ -208,6 +226,10 @@ pub struct SettingsPatch {
     /// 1 以上でなければ断る。
     pub carryover_review_threshold: Option<u32>,
     pub sidebar_open: Option<bool>,
+    /// 割当の全体（欄ごと置き換える）。形に合わなければ断る（`valid_shortcuts`）。
+    pub shortcuts: Option<BTreeMap<String, String>>,
+    pub vim_mode: Option<bool>,
+    pub vim_ime_restore: Option<bool>,
 }
 
 /// 設定を変えられなかった理由。
@@ -228,6 +250,23 @@ pub enum InvalidSetting {
     FontSize,
     /// 持ち越し見直しの回数（1 以上でない）。
     ReviewThreshold,
+    /// ショートカットの割当（形に合わない）。
+    Shortcuts,
+}
+
+/// 割当の件数の上限（壊れた値や誤った呼び出しで、設定が際限なく大きくならないように）。
+pub const MAX_SHORTCUTS: usize = 64;
+/// 割当の名前・文字列の長さの上限（文字数）。
+pub const MAX_SHORTCUT_TEXT: usize = 64;
+
+/// 割当の形が守られているか：件数が [`MAX_SHORTCUTS`] 以下で、名前と文字列がどちらも空でなく、
+/// [`MAX_SHORTCUT_TEXT`] 文字以下で、制御文字を含まない。どの名前がどの文字列を取れるかは、キーを
+/// 受ける画面側が決める（コアは受けないので、2つの決まりがずれないよう形だけを守る）。
+pub fn valid_shortcuts(map: &BTreeMap<String, String>) -> bool {
+    let ok = |s: &String| {
+        !s.is_empty() && s.chars().count() <= MAX_SHORTCUT_TEXT && !s.chars().any(char::is_control)
+    };
+    map.len() <= MAX_SHORTCUTS && map.iter().all(|(k, v)| ok(k) && ok(v))
 }
 
 impl std::fmt::Display for SettingsError {
@@ -297,6 +336,11 @@ pub fn load(conn: &Connection) -> Result<Settings, StorageError> {
         layout: read_enum(conn, LAYOUT_KEY, Layout::parse)?.unwrap_or(d.layout),
         carryover_review_threshold: carryover::review_threshold(conn)? as u32,
         sidebar_open: read(conn, SIDEBAR_KEY)?.unwrap_or(d.sidebar_open),
+        shortcuts: read::<BTreeMap<String, String>>(conn, SHORTCUTS_KEY)?
+            .filter(valid_shortcuts)
+            .unwrap_or(d.shortcuts),
+        vim_mode: read(conn, VIM_MODE_KEY)?.unwrap_or(d.vim_mode),
+        vim_ime_restore: read(conn, VIM_IME_RESTORE_KEY)?.unwrap_or(d.vim_ime_restore),
     })
 }
 
@@ -317,6 +361,13 @@ pub fn save(conn: &Connection, patch: &SettingsPatch) -> Result<bool, SettingsEr
     }
     if patch.carryover_review_threshold == Some(0) {
         return Err(SettingsError::Invalid(InvalidSetting::ReviewThreshold));
+    }
+    if patch
+        .shortcuts
+        .as_ref()
+        .is_some_and(|m| !valid_shortcuts(m))
+    {
+        return Err(SettingsError::Invalid(InvalidSetting::Shortcuts));
     }
     in_transaction(conn, || {
         let before = load(conn)?;
@@ -350,6 +401,15 @@ pub fn save(conn: &Connection, patch: &SettingsPatch) -> Result<bool, SettingsEr
         if let Some(v) = patch.sidebar_open {
             write(conn, SIDEBAR_KEY, &v)?;
         }
+        if let Some(v) = &patch.shortcuts {
+            write(conn, SHORTCUTS_KEY, v)?;
+        }
+        if let Some(v) = patch.vim_mode {
+            write(conn, VIM_MODE_KEY, &v)?;
+        }
+        if let Some(v) = patch.vim_ime_restore {
+            write(conn, VIM_IME_RESTORE_KEY, &v)?;
+        }
         Ok::<_, SettingsError>(load(conn)? != before)
     })
 }
@@ -361,6 +421,13 @@ mod tests {
 
     fn hhmm(s: &str) -> DayBoundary {
         s.parse().unwrap()
+    }
+
+    fn shortcuts(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -394,6 +461,9 @@ mod tests {
             layout: Some(Layout::C),
             carryover_review_threshold: Some(5),
             sidebar_open: Some(false),
+            shortcuts: Some(shortcuts(&[("palette", "Mod+P"), ("prevDay", "Alt+[")])),
+            vim_mode: Some(true),
+            vim_ime_restore: Some(false),
         };
         assert!(save(conn, &patch).unwrap());
         let s = load(conn).unwrap();
@@ -406,6 +476,15 @@ mod tests {
             (Theme::Dark, NoteFont::Mono, Layout::C)
         );
         assert_eq!((s.font_size, s.carryover_review_threshold), (17, 5));
+        assert_eq!(
+            s.shortcuts,
+            shortcuts(&[("palette", "Mod+P"), ("prevDay", "Alt+[")])
+        );
+        assert!(s.vim_mode && !s.vim_ime_restore);
+        assert_eq!(
+            setting::get(conn, SHORTCUTS_KEY).unwrap().as_deref(),
+            Some(r#"{"palette":"Mod+P","prevDay":"Alt+["}"#)
+        );
         // 保存した形（データモデル設計書 3章 setting）
         assert_eq!(
             setting::get(conn, METER_HOURS_KEY).unwrap().as_deref(),
@@ -477,6 +556,45 @@ mod tests {
             },
             InvalidSetting::ReviewThreshold,
         );
+        // 割当の形：空の名前・文字列、長すぎる文字列、制御文字、多すぎる件数
+        let too_many: Vec<(String, String)> = (0..=MAX_SHORTCUTS)
+            .map(|i| (format!("a{i}"), "Mod+P".to_string()))
+            .collect();
+        let long = "x".repeat(MAX_SHORTCUT_TEXT + 1);
+        for map in [
+            shortcuts(&[("", "Mod+P")]),
+            shortcuts(&[("palette", "")]),
+            shortcuts(&[("palette", &long)]),
+            shortcuts(&[("palette", "Mod+\n")]),
+            too_many.into_iter().collect(),
+        ] {
+            bad(
+                SettingsPatch {
+                    shortcuts: Some(map),
+                    ..SettingsPatch::default()
+                },
+                InvalidSetting::Shortcuts,
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_shortcut_map_clears_the_overrides() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let set = |map| SettingsPatch {
+            shortcuts: Some(map),
+            ..SettingsPatch::default()
+        };
+        assert!(save(conn, &set(shortcuts(&[("today", "Mod+Y")]))).unwrap());
+        // 割当は欄ごと置き換える（変わらない欄の割当は残らない）
+        assert!(save(conn, &set(shortcuts(&[("palette", "Mod+P")]))).unwrap());
+        assert_eq!(
+            load(conn).unwrap().shortcuts,
+            shortcuts(&[("palette", "Mod+P")])
+        );
+        assert!(save(conn, &set(BTreeMap::new())).unwrap());
+        assert!(load(conn).unwrap().shortcuts.is_empty());
     }
 
     #[test]
@@ -498,6 +616,11 @@ mod tests {
             (METER_HOURS_KEY, "900"),
             (SIDEBAR_KEY, "1"),
             (REVIEW_THRESHOLD_KEY, "0"),
+            (SHORTCUTS_KEY, r#"["Mod+P"]"#),
+            (SHORTCUTS_KEY, r#"{"palette":3}"#),
+            (SHORTCUTS_KEY, r#"{"palette":""}"#),
+            (VIM_MODE_KEY, r#""on""#),
+            (VIM_IME_RESTORE_KEY, "0"),
         ] {
             setting::set(conn, key, bad).unwrap();
         }
