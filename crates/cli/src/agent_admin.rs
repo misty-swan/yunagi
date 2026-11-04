@@ -14,6 +14,7 @@
 //! `agent history` は読み取りなので、ここには無い（ふつうの操作として `output` が整える）。
 
 use serde_json::{Map, Value, json};
+use yunagi_core::domain::agent_admin;
 use yunagi_core::storage::Ulid;
 use yunagi_core::storage::table::agent_client::Scope;
 
@@ -115,9 +116,7 @@ pub fn permissions(
         return crate::fail(&error::internal("no client given"), false, io);
     };
     // 識別子のない接続（`unknown`）に足せるのは `read` だけ。確認の後で断るより先に断る
-    if client == "unknown"
-        && let Some(scope) = allow.iter().find(|s| **s != Scope::Read)
-    {
+    if let Some(scope) = agent_admin::forbidden_scope(client, allow) {
         return crate::fail(
             &error::invalid_argument(format!(
                 "The unknown client (connections without an identifier) can only have the read \
@@ -149,10 +148,7 @@ pub fn permissions(
         );
     };
     let before = names(&current["scopes"]);
-    let after: Vec<Scope> = Scope::ALL
-        .into_iter()
-        .filter(|s| (before.contains(s) || allow.contains(s)) && !deny.contains(s))
-        .collect();
+    let after = agent_admin::apply_scopes(&before, allow, deny);
     if after == before {
         out(
             io,

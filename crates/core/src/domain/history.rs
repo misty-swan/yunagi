@@ -412,7 +412,6 @@ pub enum Effect {
     Text {
         doc: TextDoc,
         date: LogicalDate,
-        rev: i64,
         diff: TextDiff,
     },
 }
@@ -598,12 +597,16 @@ fn plan_in(conn: &Connection, change_id: Ulid) -> Result<Plan, RevertError> {
                     close_reason: item.close_reason.unwrap_or(CloseReason::Dropped),
                 }));
             }
+            if after.is_empty() {
+                return Err(unsupported());
+            }
             let mut fields = Vec::new();
             for (name, after_value) in &after {
                 let current = field_value(&item, name).ok_or_else(unsupported)?;
                 let restore = before.get(name).cloned().ok_or_else(unsupported)?;
                 fields.push(FieldPlan {
-                    changed_since: &current != after_value,
+                    // すでに戻したい値になっている欄は、上書きするものが無いので、変えられた扱いにしない
+                    changed_since: &current != after_value && current != restore,
                     name: name.clone(),
                     current,
                     restore,
@@ -643,19 +646,15 @@ fn plan_in(conn: &Connection, change_id: Ulid) -> Result<Plan, RevertError> {
             let before = body_of(&log.before).ok_or_else(unsupported)?;
             let after = body_of(&log.after).ok_or_else(unsupported)?;
             let current = text_doc::get(conn, doc, date)?;
-            let token = format!("rev:{}", current.rev);
+            // 版の番号ではなく本文そのもの（同じ本文の保存で版だけが進んでも、止めないため）
+            let token = format!("body:{}", current.body);
             let diff = text_diff(&current.body, &before);
             if current.body == before {
                 return Ok(Plan {
                     log,
                     client_name,
                     state: PlanState::AlreadyRestored,
-                    effect: Effect::Text {
-                        doc,
-                        date,
-                        rev: current.rev,
-                        diff,
-                    },
+                    effect: Effect::Text { doc, date, diff },
                     drift: Vec::new(),
                     token,
                 });
@@ -669,12 +668,7 @@ fn plan_in(conn: &Connection, change_id: Ulid) -> Result<Plan, RevertError> {
                 log,
                 client_name,
                 state: PlanState::Apply,
-                effect: Effect::Text {
-                    doc,
-                    date,
-                    rev: current.rev,
-                    diff,
-                },
+                effect: Effect::Text { doc, date, diff },
                 drift,
                 token,
             })
@@ -1387,7 +1381,7 @@ mod tests {
         let (before_body, rev) = note_body(conn, TextDoc::Note, "2026-11-03");
         assert!(before_body.contains("二行目"));
         let plan = preview(conn, second.id).unwrap();
-        assert_eq!(plan.token, format!("rev:{rev}"));
+        assert_eq!(plan.token, format!("body:{before_body}"));
         match &plan.effect {
             Effect::Text { diff, .. } => {
                 assert!(diff.removed.iter().any(|l| l.contains("二行目")));
@@ -1481,6 +1475,46 @@ mod tests {
         assert!(matches!(
             r,
             Err(RevertError::Conflict(RevertConflict::UserEditing))
+        ));
+    }
+
+    #[test]
+    fn a_field_already_back_to_the_old_value_is_not_overwritten_and_empty_records_are_refused() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let t = add(conn, "調査");
+        item::complete_todo(conn, &cli(), t.id, at(T1)).unwrap();
+        let record = last_log(conn, t.id);
+        // 人が状態だけを未完了に戻し、完了時刻は残っている：状態は上書きするものが無い
+        let changes = ItemChanges {
+            status: Some(ItemStatus::Open),
+            ..ItemChanges::default()
+        };
+        item_table::update_fields(conn, t.id, &changes, at(T2)).unwrap();
+        let plan = preview(conn, record.id).unwrap();
+        assert_eq!(plan.state, PlanState::Apply);
+        assert_eq!(plan.drift, Vec::<String>::new());
+        assert!(do_revert(conn, record.id, false, T3).unwrap().updated);
+        assert_eq!(get(conn, t.id).completed_at, None);
+
+        // `after` が空の記録は、何も戻さずに取り消し済みにしない
+        let empty = ChangeLog {
+            id: Ulid::generate(),
+            actor: Actor::Agent,
+            agent_client_id: Some(CLI_ID),
+            operation: "todo.edit".into(),
+            target: Target::Item(t.id),
+            before: Some("{}".into()),
+            after: Some("{}".into()),
+            created_at: at(T3),
+            reverted_at: None,
+            revert_of_id: None,
+            seen_at: None,
+        };
+        change_log::insert(conn, &empty).unwrap();
+        assert!(matches!(
+            do_revert(conn, empty.id, false, T3),
+            Err(RevertError::InvalidArgument(RevertArgument::Unsupported))
         ));
     }
 

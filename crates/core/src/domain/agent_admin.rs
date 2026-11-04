@@ -120,17 +120,14 @@ pub fn change_scopes(
             return Err(ScopeError::NotFound);
         };
         if client.id == agent_client::UNKNOWN_ID
-            && let Some(&scope) = allow.iter().find(|&&s| s != Scope::Read)
+            && let Some(scope) = forbidden_scope("unknown", allow)
         {
             return Err(ScopeError::InvalidArgument(ScopeArgument::UnknownWrite(
                 scope,
             )));
         }
         let before = ordered(&client.scopes);
-        let after: Vec<Scope> = Scope::ALL
-            .into_iter()
-            .filter(|s| (before.contains(s) || allow.contains(s)) && !deny.contains(s))
-            .collect();
+        let after = apply_scopes(&before, allow, deny);
         let updated = after != before;
         if updated {
             agent_client::update_scopes(conn, client.id, &after)?;
@@ -142,6 +139,23 @@ pub fn change_scopes(
             updated,
         })
     })
+}
+
+/// `before` のスコープに `allow` を足し、`deny` を外した結果（[`Scope::ALL`] の順）。確認の前に
+/// 見せる「変えた後」を、書き込みと同じ計算で求めるために公開している。
+pub fn apply_scopes(before: &[Scope], allow: &[Scope], deny: &[Scope]) -> Vec<Scope> {
+    Scope::ALL
+        .into_iter()
+        .filter(|s| (before.contains(s) || allow.contains(s)) && !deny.contains(s))
+        .collect()
+}
+
+/// 識別子 `name` のクライアントに、`allow` の中で足せないスコープ（`unknown` に `read` 以外）があれば、
+/// それ。確認の前に断るために公開している（[`change_scopes`] も同じ判定）。
+pub fn forbidden_scope(name: &str, allow: &[Scope]) -> Option<Scope> {
+    (name == "unknown")
+        .then(|| allow.iter().copied().find(|s| *s != Scope::Read))
+        .flatten()
 }
 
 /// スコープを [`Scope::ALL`] の順に並べる。

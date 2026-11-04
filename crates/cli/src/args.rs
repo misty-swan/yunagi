@@ -504,6 +504,12 @@ fn command(
 fn take_scopes(opts: &mut Options, name: &str) -> Result<Vec<Scope>, ErrorObject> {
     let mut scopes = Vec::new();
     for value in opts.take_all(name)? {
+        // 空の値は、一覧と取り違えて「変えた」つもりにならないよう、誤りにする
+        if value.split(',').all(|p| p.trim().is_empty()) {
+            return Err(error::invalid_argument(format!(
+                "option --{name} needs a scope (read, todo, blocker, append or note_edit)"
+            )));
+        }
         for part in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
             let scope = part.parse::<Scope>().map_err(|_| {
                 error::invalid_argument(format!(
@@ -1245,6 +1251,8 @@ mod tests {
         );
         // 確認の質問を含む形は --json を断る。見るだけなら JSON も出せる
         assert!(parse_args(&["agent", "permissions", "--json"]).is_ok());
+        assert!(message(&["agent", "permissions", "x", "--allow="]).contains("needs a scope"));
+        assert!(message(&["agent", "permissions", "x", "--deny", ","]).contains("needs a scope"));
         assert!(
             message(&["agent", "permissions", "x", "--deny", "read", "--json"])
                 .contains("--json is not supported")
