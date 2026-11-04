@@ -139,9 +139,20 @@
 
   function onTextKey(e: KeyboardEvent) {
     // IME の変換中のキー（候補を選ぶ ↑↓ など）は、IME に任せる（操作仕様書 3章）
-    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    if (e.defaultPrevented) return;
     // 変えられない行では、行そのもの（li）へのキーだけを扱う（行の中のボタンのキーは、そのボタンに任せる）
     if (lock !== null && e.target !== li) return;
+    if (e.isComposing || e.keyCode === 229) {
+      // 変えられない行では、日本語入力の変換を始めようとしたことを知らせる（本文は入力欄でないので、通常は届かない）
+      if (lock !== null) model.refuseEdit(row.key);
+      return;
+    }
+    // 貼り付け・切り取りのキー（クリップボードのイベントが届かない WebView でも知らせる）
+    if (lock !== null && (mac ? e.metaKey : e.ctrlKey) && !e.altKey && (e.code === "KeyV" || e.code === "KeyX")) {
+      e.preventDefault();
+      model.refuseEdit(row.key);
+      return;
+    }
     if (justComposed && e.key === "Enter") {
       justComposed = false;
       e.preventDefault();
@@ -203,6 +214,8 @@
     if (e.key === "Backspace" || e.key === "Delete") return true;
     if (e.key.length !== 1) return false;
     if (e.getModifierState?.("AltGraph") === true) return true;
+    // Windows の AltGr は Ctrl+Alt として届く（AltGraph を報告しない WebView もある）
+    if (!mac && e.ctrlKey && e.altKey && !e.metaKey) return true;
     if (e.ctrlKey || e.metaKey) return false;
     // Windows・Linux の Alt+文字はメニューなどのキー。文字を打つのは macOS の Option だけ
     return mac || !e.altKey;
@@ -210,8 +223,23 @@
 
   // 変えられない行への貼り付け・切り取り・文のドロップ（入力欄が無いので何も起きないが、知らせる）
   function onLockedEdit(e: Event) {
+    // 行の中の入力欄（行が変えられなくなったとき開いていた解消メモ）の貼り付けは、その欄に任せる
+    if ((e.target as Element | null)?.closest?.("[contenteditable]")) return;
     e.preventDefault();
     model.refuseEdit(row.key);
+  }
+
+  /** 文や URL・ファイルを運ぶ drag か（行の並べ替えは別の仕組みで、ここで受けない）。 */
+  const carriesContent = (e: DragEvent) =>
+    [...(e.dataTransfer?.types ?? [])].some((t) => t === "Files" || t === "text/plain" || t === "text/html" || t === "text/uri-list");
+
+  function onLockedDragOver(e: DragEvent) {
+    // drop が届くよう、運んでいるものがあれば受ける
+    if (carriesContent(e)) e.preventDefault();
+  }
+
+  function onLockedDrop(e: DragEvent) {
+    if (carriesContent(e)) onLockedEdit(e);
   }
 
   function onMemoKey(e: KeyboardEvent) {
@@ -274,8 +302,8 @@
   onkeydown={lock !== null ? onTextKey : undefined}
   onpaste={lock !== null ? onLockedEdit : undefined}
   oncut={lock !== null ? onLockedEdit : undefined}
-  ondragover={lock !== null ? (e) => e.preventDefault() : undefined}
-  ondrop={lock !== null ? onLockedEdit : undefined}
+  ondragover={lock !== null ? onLockedDragOver : undefined}
+  ondrop={lock !== null ? onLockedDrop : undefined}
 >
   {#if row.unseen}
     <span class="mk-agent lead" role="img" aria-label={m.agentUnseen} title={m.agentUnseen}></span>
@@ -369,6 +397,7 @@
       tabindex="-1"
       aria-label={m.openCarriedTo(shortDate(to.date))}
       title={m.openCarriedTo(shortDate(to.date))}
+      onmousedown={(e) => e.preventDefault()}
       onclick={() => onOpenCarried(to)}
     >
       → {monthDay(to.date)}

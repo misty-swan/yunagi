@@ -305,12 +305,42 @@ test("持ち越し済みの項目と取りやめた TODO は、本文を変え�
       expect(tryKey(row, init)).toBe(true);
       expect(notice.text).toBe(expected[i]);
     }
-    for (const type of ["paste", "cut", "drop"]) {
+    // jsdom には DragEvent が無いので、運ぶものの種類（dataTransfer.types）を足した Event で確かめる
+    const drag = (type: string, types: string[]) => {
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, "dataTransfer", { value: { types } });
+      row.dispatchEvent(e);
+      flushSync();
+      return e;
+    };
+    for (const type of ["paste", "cut"]) {
       notice.text = "";
       const e = new Event(type, { bubbles: true, cancelable: true });
       row.dispatchEvent(e);
       flushSync();
       expect(e.defaultPrevented).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    for (const types of [["text/plain"], ["Files"]]) {
+      notice.text = "";
+      expect(drag("dragover", types).defaultPrevented).toBe(true);
+      expect(drag("drop", types).defaultPrevented).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    // 運ぶものが無い drag（行の並べ替えなど）は、受けず知らせない
+    notice.text = "";
+    expect(drag("dragover", []).defaultPrevented).toBe(false);
+    expect(drag("drop", []).defaultPrevented).toBe(false);
+    expect(notice.text).toBe("");
+    // 貼り付け・切り取りのキー、日本語入力の変換、AltGr（Ctrl+Alt）で打つ文字も知らせる
+    for (const init of [
+      { key: "v", code: "KeyV", ctrlKey: true },
+      { key: "x", code: "KeyX", ctrlKey: true },
+      { key: "Process", keyCode: 229 },
+      { key: "@", ctrlKey: true, altKey: true },
+    ]) {
+      notice.text = "";
+      tryKey(row, init);
       expect(notice.text).toBe(expected[i]);
     }
     // Option+Backspace も拒む。Mod との組み合わせ（コピーなど）と、Windows・Linux の Alt+文字は知らせず、止めない
@@ -322,10 +352,6 @@ test("持ち越し済みの項目と取りやめた TODO は、本文を変え�
       expect(tryKey(row, init)).toBe(false);
       expect(notice.text).toBe("");
     }
-    // 落とせる場所にして、ドロップを受ける（dragover を止めないと drop が届かない）
-    const over = new Event("dragover", { bubbles: true, cancelable: true });
-    row.dispatchEvent(over);
-    expect(over.defaultPrevented).toBe(true);
     // 行の中のボタンのキーは、行が奪わない
     const btn = row.querySelector<HTMLElement>(".chk")!;
     const inner = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
