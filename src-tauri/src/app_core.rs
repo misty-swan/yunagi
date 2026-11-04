@@ -428,7 +428,8 @@ impl AppCore {
                 return Err(CommandError::storage(&e.error));
             }
         };
-        let result = f(&held);
+        // `f` が panic しても、開き直してから伝える（データベースを開けないまま残さない）
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&held)));
         let reopened = open_slot(held, Database::open);
         let opened = matches!(reopened, Slot::Open(_));
         *slot = reopened;
@@ -436,7 +437,12 @@ impl AppCore {
         if !opened {
             self.notify(Notice::Startup(self.startup()));
         }
-        result
+        match result {
+            Err(panic) => std::panic::resume_unwind(panic),
+            // 開き直せなかったときは、成功を返さない（画面は起動時の画面に移っている）
+            Ok(Ok(_)) if !opened => Err(CommandError::NotReady),
+            Ok(result) => result,
+        }
     }
 
     /// いまの保存先（データベースの `yunagi.db` と `backups/` を置くフォルダ）。開いていなければ
@@ -507,6 +513,8 @@ impl AppCore {
                 backup_error(&e)
             })?;
         }
+        // 中身が変わったので、その日の定期バックアップを作り直す
+        lock(&self.backup).done_for = None;
         self.notify_changed(ChangeSource::Screen);
         Ok(())
     }

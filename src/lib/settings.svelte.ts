@@ -50,6 +50,8 @@ export class SettingsStore {
   /** 最後の保存の失敗（次の保存を始めると消す）。 */
   error = $state<CallError | null>(null);
   #queue: Promise<void> = Promise.resolve();
+  #seq = 0;
+  #latest: Record<string, number> = {};
 
   /**
    * 設定を読んで当てる。読めなくても既定の値のまま終える。`beforeShown` は、読んだ値を当てた後、外枠を
@@ -70,17 +72,23 @@ export class SettingsStore {
    * 設定を変えて保存する。変える欄だけ `patch` に入れる。画面にはすぐ当て、保存できなかったら前の
    * 値に戻す。保存し終えたら `true`、失敗したら `false`。
    */
-  save(patch: SettingsPatch): Promise<boolean> {
+  save(patch: SettingsPatch, opts: { silent?: boolean } = {}): Promise<boolean> {
     const before = snapshot(patch);
     applyPatch(patch);
+    // 欄ごとに、最後に変えた保存の番号を持つ。失敗したときは、その後にもっと新しい保存が同じ欄を
+    // 変えていなければ（番号が自分のままなら）だけ戻す（新しい値を古い値で上書きしないため）
+    const mine = ++this.#seq;
+    for (const key of Object.keys(patch)) this.#latest[key] = mine;
     const run = this.#queue.then(async () => {
-      this.error = null;
+      if (!opts.silent) this.error = null;
       try {
         await core.saveSettings(patch);
         return true;
       } catch (e) {
-        applyPatch(before);
-        this.error = errorOf(e);
+        const revert: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(before)) if (this.#latest[key] === mine) revert[key] = value;
+        applyPatch(revert as SettingsPatch);
+        if (!opts.silent) this.error = errorOf(e);
         return false;
       }
     });

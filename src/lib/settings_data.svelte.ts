@@ -117,6 +117,8 @@ export class DataSettings {
     } catch {
       // 判定できなければ警告しない（判定できない場所と同じ）
     }
+    // ダイアログを開いている間にほかの操作が始まっていたら、その状態を上書きしない
+    if (this.busy !== null || this.flow !== null) return;
     this.flow = { kind, dir, cloud };
   }
 
@@ -140,6 +142,9 @@ export class DataSettings {
     this.result = null;
     try {
       if (flow.kind === "move") {
+        // 中身は同じなので、保存できていない入力があっても行う（保存先が外れて保存に失敗しているとき、
+        // 保存先を変えて直すため）。入力は先に送り（送れなければ内容を持ったまま、移した後の保存先へ再試行する）
+        await this.#opts.flush();
         const done = await core.changeDataDir(flow.dir);
         this.result = { kind: "moved", leftovers: done.leftovers };
         this.flow = null;

@@ -79,7 +79,7 @@
         // 保存してあった、広いウィンドウでのサイドバーの開閉（最初に外枠を描くときから当てる）。
         // 利用者が開け閉めしたら保存する
         shell.setWideOpen(prefs.sidebarOpen);
-        shell.onWideOpenChange = (open) => void settingsStore.save({ sidebarOpen: open });
+        shell.onWideOpenChange = (open) => void settingsStore.save({ sidebarOpen: open }, { silent: true });
       });
     });
   });

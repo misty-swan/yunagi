@@ -397,10 +397,11 @@ impl Changes for SettingsSaved {
 #[tauri::command]
 pub async fn save_settings(core: Core<'_>, patch: SettingsPatch) -> Result<Settings, CommandError> {
     blocking(&core, move |core| {
-        let current = core.read(settings::load)?;
-        let patch = patch.into_core(&current)?;
         let moves_today = patch.day_boundary.is_some();
         let saved = core.screen_write(ScreenWrite::Operation, |conn| {
+            // 片方だけの始業・終業にもう片方の今の値を当てるのは、書く処理と同じ接続の中で行う
+            // （続けて届いた保存が、古い値と組にならないように。接続は1つで順に使う）
+            let patch = patch.clone().into_core(&settings::load(conn)?)?;
             let changed = settings::save(conn, &patch)?;
             Ok::<_, CommandError>(SettingsSaved {
                 settings: Settings::from(settings::load(conn)?),
