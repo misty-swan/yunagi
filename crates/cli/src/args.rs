@@ -175,6 +175,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
             }
         }
     }
+    // `yunagi mcp` の標準出力は MCP のメッセージだけにする：`--json` を付けても、引数の誤りは標準エラーに
+    // テキストで出す（05 4.5）
+    let json = json && positionals.first() != Some(&"mcp");
     let fail = |error| ParseError { error, json };
     if help {
         return Ok(Parsed {
@@ -699,6 +702,18 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn mcp_ignores_json_so_that_errors_stay_off_standard_output() {
+        assert!(!parse_args(&["mcp", "--json"]).unwrap().json);
+        let args: Vec<String> = ["--json", "mcp", "--client", "Bad Name"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let e = parse(&args).unwrap_err();
+        assert!(!e.json);
+        assert_eq!(error::code(&e.error), "invalid_argument");
     }
 
     #[test]

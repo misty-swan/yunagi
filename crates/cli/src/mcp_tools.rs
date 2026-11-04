@@ -195,10 +195,9 @@ fn tools() -> Vec<Tool> {
                 ("date", date()),
                 (
                     "heading",
-                    json!({
-                        "type": ["string", "null"],
-                        "description": "If given, first insert a heading \"## HH:MM <heading>\" with the current time (\"\" gives just the time). Omit it or send null for no heading."
-                    }),
+                    string(
+                        "If given, first insert a heading \"## HH:MM <heading>\" with the current time (\"\" gives just the time). Omit it for no heading.",
+                    ),
                 ),
             ],
             required: &["text"],

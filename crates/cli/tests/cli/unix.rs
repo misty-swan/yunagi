@@ -1230,9 +1230,15 @@ fn mcp_handshake(w: &World) {
     let empty = exec_with_stdin(w, &["mcp"], b"");
     assert_eq!((empty.code, empty.stdout.as_str()), (0, ""));
     // 識別子の形の誤りは、起動のときに終了コード 2 で断る（標準出力には何も出さない）
-    let bad = exec_with_stdin(w, &["mcp", "--client", "Bad Name"], b"");
-    assert_eq!((bad.code, bad.stdout.as_str()), (2, ""));
-    assert!(bad.stderr.contains("invalid_argument"), "{}", bad.stderr);
+    // `--json` を付けても、標準出力には何も出さない
+    for args in [
+        &["mcp", "--client", "Bad Name"][..],
+        &["--json", "mcp", "--client", "Bad Name"],
+    ] {
+        let bad = exec_with_stdin(w, args, b"");
+        assert_eq!((bad.code, bad.stdout.as_str()), (2, ""), "{args:?}");
+        assert!(bad.stderr.contains("invalid_argument"), "{}", bad.stderr);
+    }
 }
 
 fn mcp_scopes(w: &World) {
