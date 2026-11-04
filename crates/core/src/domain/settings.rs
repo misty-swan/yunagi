@@ -75,50 +75,38 @@ macro_rules! string_enum {
 
 string_enum! {
     /// テーマ（既定は OS に合わせる）。
+    #[derive(Default)]
     Theme {
+        #[default]
         System => "system",
         Light => "light",
         Dark => "dark",
     }
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Self::System
-    }
-}
-
 string_enum! {
     /// ノートの書体（デザインガイド 4章。既定は本文と同じ）。
+    #[derive(Default)]
     NoteFont {
         /// 本文と同じ。
+        #[default]
         Body => "body",
         /// 等幅。
         Mono => "mono",
     }
 }
 
-impl Default for NoteFont {
-    fn default() -> Self {
-        Self::Body
-    }
-}
-
 string_enum! {
     /// 整理モードのレイアウト（画面設計書 3章「レイアウト」。既定は A）。
+    #[derive(Default)]
     Layout {
         /// 2段。
+        #[default]
         A => "A",
         /// 3列。
         B => "B",
         /// 縦積み。
         C => "C",
-    }
-}
-
-impl Default for Layout {
-    fn default() -> Self {
-        Self::A
     }
 }
 
@@ -315,18 +303,22 @@ pub fn load(conn: &Connection) -> Result<Settings, StorageError> {
 /// `patch` の欄を書く。誤った値が1つでもあれば、何も書かずに断る。書いたら、書く前と変わったかを返す。
 pub fn save(conn: &Connection, patch: &SettingsPatch) -> Result<bool, SettingsError> {
     let hours = match patch.meter_hours {
-        Some((start, end)) => {
-            Some(MeterHours::new(start, end).ok_or(SettingsError::Invalid(InvalidSetting::MeterHours))?)
-        }
+        Some((start, end)) => Some(
+            MeterHours::new(start, end)
+                .ok_or(SettingsError::Invalid(InvalidSetting::MeterHours))?,
+        ),
         None => None,
     };
-    if patch.font_size.is_some_and(|n| !FONT_SIZE_RANGE.contains(&n)) {
+    if patch
+        .font_size
+        .is_some_and(|n| !FONT_SIZE_RANGE.contains(&n))
+    {
         return Err(SettingsError::Invalid(InvalidSetting::FontSize));
     }
     if patch.carryover_review_threshold == Some(0) {
         return Err(SettingsError::Invalid(InvalidSetting::ReviewThreshold));
     }
-    Ok(in_transaction(conn, || {
+    in_transaction(conn, || {
         let before = load(conn)?;
         if let Some(v) = patch.day_boundary {
             write(conn, DAY_BOUNDARY_KEY, &v.to_string())?;
@@ -359,7 +351,7 @@ pub fn save(conn: &Connection, patch: &SettingsPatch) -> Result<bool, SettingsEr
             write(conn, SIDEBAR_KEY, &v)?;
         }
         Ok::<_, SettingsError>(load(conn)? != before)
-    })?)
+    })
 }
 
 #[cfg(test)]
@@ -380,7 +372,10 @@ mod tests {
         assert_eq!(s.meter_hours.to_value(), "09:00-19:00");
         assert_eq!(s.locale, None);
         assert!(s.update_check && s.sidebar_open);
-        assert_eq!((s.theme, s.note_font, s.layout), (Theme::System, NoteFont::Body, Layout::A));
+        assert_eq!(
+            (s.theme, s.note_font, s.layout),
+            (Theme::System, NoteFont::Body, Layout::A)
+        );
         assert_eq!((s.font_size, s.carryover_review_threshold), (15, 3));
     }
 
@@ -406,14 +401,20 @@ mod tests {
         assert_eq!(s.meter_hours.to_value(), "08:30-18:00");
         assert_eq!(s.locale, Some(Locale::Ja));
         assert!(!s.update_check && !s.sidebar_open);
-        assert_eq!((s.theme, s.note_font, s.layout), (Theme::Dark, NoteFont::Mono, Layout::C));
+        assert_eq!(
+            (s.theme, s.note_font, s.layout),
+            (Theme::Dark, NoteFont::Mono, Layout::C)
+        );
         assert_eq!((s.font_size, s.carryover_review_threshold), (17, 5));
         // 保存した形（データモデル設計書 3章 setting）
         assert_eq!(
             setting::get(conn, METER_HOURS_KEY).unwrap().as_deref(),
             Some(r#""08:30-18:00""#)
         );
-        assert_eq!(setting::get(conn, DAY_BOUNDARY_KEY).unwrap().as_deref(), Some(r#""05:30""#));
+        assert_eq!(
+            setting::get(conn, DAY_BOUNDARY_KEY).unwrap().as_deref(),
+            Some(r#""05:30""#)
+        );
         // 同じ値を書いても、変わらない。欄の無い patch も何も変えない
         assert!(!save(conn, &patch).unwrap());
         assert!(!save(conn, &SettingsPatch::default()).unwrap());
@@ -424,7 +425,10 @@ mod tests {
         };
         assert!(save(conn, &one).unwrap());
         let s = load(conn).unwrap();
-        assert_eq!((s.theme, s.font_size, s.layout), (Theme::Light, 17, Layout::C));
+        assert_eq!(
+            (s.theme, s.font_size, s.layout),
+            (Theme::Light, 17, Layout::C)
+        );
     }
 
     #[test]
@@ -503,7 +507,15 @@ mod tests {
     #[test]
     fn meter_hours_need_the_start_before_the_end() {
         assert!(MeterHours::parse("00:00-23:59").is_some());
-        for bad in ["09:00-09:00", "10:00-09:00", "09:00", "09:00-", "-19:00", "09:00-24:00", ""] {
+        for bad in [
+            "09:00-09:00",
+            "10:00-09:00",
+            "09:00",
+            "09:00-",
+            "-19:00",
+            "09:00-24:00",
+            "",
+        ] {
             assert_eq!(MeterHours::parse(bad), None, "{bad}");
         }
     }

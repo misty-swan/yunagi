@@ -1268,9 +1268,10 @@ impl SettingsPatch {
     ) -> Result<settings::SettingsPatch, CommandError> {
         let time = |s: Option<String>| -> Result<_, CommandError> {
             s.map(|s| {
-                s.parse::<DayBoundary>().map_err(|_| CommandError::InvalidArgument {
-                    reason: InvalidReason::TimeOfDay,
-                })
+                s.parse::<DayBoundary>()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        reason: InvalidReason::TimeOfDay,
+                    })
             })
             .transpose()
         };

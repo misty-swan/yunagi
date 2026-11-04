@@ -395,12 +395,9 @@ impl Changes for SettingsSaved {
 /// 設定の保存は、保存の失敗中（アーキテクチャ設計書 4.1）を始め・終えない（再試行を待つ入力では
 /// なく、失敗は画面に出して選び直すため）。日付の切り替わり時刻を変えたときは、すぐに今日を求め直す。
 #[tauri::command]
-pub async fn save_settings(
-    core: Core<'_>,
-    patch: SettingsPatch,
-) -> Result<Settings, CommandError> {
+pub async fn save_settings(core: Core<'_>, patch: SettingsPatch) -> Result<Settings, CommandError> {
     blocking(&core, move |core| {
-        let current = core.read(|conn| settings::load(conn))?;
+        let current = core.read(settings::load)?;
         let patch = patch.into_core(&current)?;
         let moves_today = patch.day_boundary.is_some();
         let saved = core.screen_write(ScreenWrite::Operation, |conn| {

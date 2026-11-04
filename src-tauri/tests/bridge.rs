@@ -1539,7 +1539,10 @@ fn settings_commands(default_dir: &Path) {
     // 誤った値は、同じ保存の正しい欄も含めて何も書かない
     for (patch, reason) in [
         (json!({ "meterStart": "19:00" }), "meter_hours"),
-        (json!({ "meterStart": "20:00", "theme": "light" }), "meter_hours"),
+        (
+            json!({ "meterStart": "20:00", "theme": "light" }),
+            "meter_hours",
+        ),
         (json!({ "fontSize": 12, "theme": "light" }), "font_size"),
         (json!({ "fontSize": 20 }), "font_size"),
         (json!({ "carryoverReviewThreshold": 0 }), "review_threshold"),
@@ -1557,7 +1560,10 @@ fn settings_commands(default_dir: &Path) {
 
     // 日付の切り替わり時刻を変えると、30 秒を待たずに今日を求め直し、変わっていれば知らせる
     let before = h.today();
-    h.ok("save_settings", json!({ "patch": { "dayBoundary": "23:59" } }));
+    h.ok(
+        "save_settings",
+        json!({ "patch": { "dayBoundary": "23:59" } }),
+    );
     assert_eq!(h.next_event(), changed_by("screen"));
     let after = h.today();
     if after != before {
@@ -1576,7 +1582,10 @@ fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
     create_with_backup(default_dir, &base, "seed");
     let h = Harness::opened();
     let ready = json!({ "state": "ready" });
-    assert_eq!(h.ok("get_data_dir", json!({})), json!(base.display().to_string()));
+    assert_eq!(
+        h.ok("get_data_dir", json!({})),
+        json!(base.display().to_string())
+    );
 
     // 復元：定期バックアップ（TODO を足す前）に戻す。今のデータは「復元前」に残る
     let today = h.today();
@@ -1616,16 +1625,25 @@ fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
     h.drain();
     let moved = root.join("operations-moved");
     assert_eq!(
-        h.ok("check_data_dir", json!({ "dir": moved.display().to_string() })),
+        h.ok(
+            "check_data_dir",
+            json!({ "dir": moved.display().to_string() })
+        ),
         Value::Null
     );
     assert_eq!(
-        h.ok("change_data_dir", json!({ "dir": moved.display().to_string() })),
+        h.ok(
+            "change_data_dir",
+            json!({ "dir": moved.display().to_string() })
+        ),
         json!({ "leftovers": [] })
     );
     h.assert_no_event();
     assert_eq!(h.ok("startup_status", json!({})), ready);
-    assert_eq!(h.ok("get_data_dir", json!({})), json!(moved.display().to_string()));
+    assert_eq!(
+        h.ok("get_data_dir", json!({})),
+        json!(moved.display().to_string())
+    );
     assert!(moved.join("yunagi.db").is_file());
     assert!(!base.join("yunagi.db").exists());
     let board = h.ok("get_board", json!({ "date": today }));
@@ -1640,7 +1658,10 @@ fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
     // 使えない保存先は、理由を付けて断り、何も変えない
     for (dir, reason) in [
         (moved.display().to_string(), "same_directory"),
-        (moved.join("backups").join("in").display().to_string(), "inside_backups"),
+        (
+            moved.join("backups").join("in").display().to_string(),
+            "inside_backups",
+        ),
         ("relative/path".to_owned(), "invalid_path"),
     ] {
         assert_eq!(
@@ -1649,13 +1670,19 @@ fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
             "{dir}"
         );
     }
-    assert_eq!(h.ok("get_data_dir", json!({})), json!(moved.display().to_string()));
+    assert_eq!(
+        h.ok("get_data_dir", json!({})),
+        json!(moved.display().to_string())
+    );
     h.drain();
 
     // 選び直し：データベースの無いフォルダは断る。ある保存先を選び直すと、開き直してデータを読める
     for (dir, reason) in [
         (base.display().to_string(), "no_database"),
-        (root.join("operations-none").display().to_string(), "not_a_directory"),
+        (
+            root.join("operations-none").display().to_string(),
+            "not_a_directory",
+        ),
     ] {
         assert_eq!(
             h.err("use_data_dir", json!({ "dir": dir })),
@@ -1663,7 +1690,10 @@ fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
             "{dir}"
         );
     }
-    h.ok("use_data_dir", json!({ "dir": moved.display().to_string() }));
+    h.ok(
+        "use_data_dir",
+        json!({ "dir": moved.display().to_string() }),
+    );
     assert_eq!(h.next_event(), changed_by("screen"));
     assert_eq!(h.ok("startup_status", json!({})), ready);
     let board = h.ok("get_board", json!({ "date": today }));
