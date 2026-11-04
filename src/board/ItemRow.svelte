@@ -8,6 +8,7 @@
   import type { CarriedTo, NoteSource } from "../lib/bindings";
   import { lockOf, showsMemo, type BoardModel, type FocusTarget, type Row } from "../lib/board.svelte";
   import { boardActionOf } from "../lib/board_keys";
+  import { composing } from "../lib/keys";
   import { monthDay, shortDate } from "../lib/dates";
   import { agentLabel, t } from "../lib/i18n";
   import { prefs } from "../lib/prefs.svelte";
@@ -97,11 +98,11 @@
 
   // ---- Vim（操作仕様書 4.3） ----
 
-  /** 挿入モードを抜けるキー（Esc。Windows・Linux は Ctrl+[ も。`[` は位置でも受ける）。 */
+  /** 挿入モードを抜けるキー（Esc と Ctrl+[。操作仕様書 4.4。macOS の Ctrl は Mod でないので、どの OS でも受ける）。 */
   function isVimEsc(e: KeyboardEvent): boolean {
-    if (e.isComposing || e.keyCode === 229) return false;
-    if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) return true;
-    return !mac && e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "[" || e.code === "BracketLeft");
+    if (composing(e)) return false;
+    if (e.altKey || e.metaKey || e.shiftKey) return false;
+    return (e.key === "Escape" && !e.ctrlKey) || (e.key === "[" && e.ctrlKey);
   }
 
   /** ノーマルモードへ戻る。行そのものへフォーカスを移してから、入力欄を外す。 */
@@ -244,7 +245,7 @@
     // 変えられない行と、Vim のノーマルモードでは、行そのもの（li）へのキーだけを扱う（行の中のボタンの
     // キーは、そのボタンに任せる）
     if ((lock !== null || vimNormal) && e.target !== li) return;
-    if (e.isComposing || e.keyCode === 229) {
+    if (composing(e)) {
       // 変えられない行では、日本語入力の変換を始めようとしたことを知らせる（本文は入力欄でないので、通常は届かない）
       if (lock !== null) model.refuseEdit(row.key);
       return;
@@ -365,7 +366,7 @@
   }
 
   function onMemoKey(e: KeyboardEvent) {
-    if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    if (e.defaultPrevented || composing(e)) return;
     if (justComposed && e.key === "Enter") {
       justComposed = false;
       e.preventDefault();
@@ -391,6 +392,8 @@
   }
 
   function onFocusIn(e: FocusEvent) {
+    // 続きのキーを待っていた g・d は、別の行へ移ったら捨てる（続けて押したことにならないため）
+    if (model.focus?.key !== row.key) model.vimPending = null;
     model.setFocus({ key: row.key, field: e.target === memoEl ? "memo" : "text" });
     onActivity();
   }

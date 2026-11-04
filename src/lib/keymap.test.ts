@@ -139,6 +139,19 @@ test("割り当てられないキー", () => {
   expect(p("Mod+[", false)).toBeNull();
 });
 
+test("Alt だけの名前のキーは上下の矢印だけ。位置の代わりの照合は、押したキーが別の記号を打つときは使わない", () => {
+  for (const s of ["Alt+Backspace", "Alt+ArrowLeft", "Alt+Enter"]) {
+    expect(problemOf(parse(s), false, false), s).toBe("alt_edit_key");
+  }
+  expect(problemOf(parse("Mod+Backspace"), false, false)).toBeNull();
+  // フランス語の配列：US 配列の , の位置は ; を打つ。Mod+; はその割当に、Mod+, には当たらない
+  const azerty = key({ code: "Comma", key: ";", ctrlKey: true });
+  expect(matches(azerty, false, parse("Mod+;"))).toBe(true);
+  expect(matches(azerty, false, parse("Mod+,"))).toBe(false);
+  // JIS 配列の Ctrl+@（US 配列の [ の位置）は、[ の割当として記録しない
+  expect(bindingFromEvent(key({ code: "BracketLeft", key: "@", ctrlKey: true }), false)).toBeNull();
+});
+
 test("同じキーを割り当てた操作は、重なる範囲の中でだけ衝突する", () => {
   const map = resolveKeymap({}, false, false);
   // 共通は、ほかのどの範囲とも重なる
@@ -226,7 +239,9 @@ test("キーの押下から割当を作る", () => {
   expect(f({ key: "ArrowUp", altKey: true })).toBe("Alt+ArrowUp");
   expect(f({ key: " ", ctrlKey: true })).toBe("Mod+Space");
   expect(f({ key: "F5", code: "F5", ctrlKey: true })).toBeNull();
-  // 記号に Shift を付けると、記号の割当に Shift が付く（割り当てられないとして断る）
-  const shifted = bindingFromEvent(key({ code: "BracketLeft", key: "{", ctrlKey: true, shiftKey: true }), false)!;
+  // 記号に Shift を付けて別の記号になるキー（Shift+[ は {）は、割り当てられないキーとして断る
+  expect(f({ code: "BracketLeft", key: "{", ctrlKey: true, shiftKey: true })).toBeNull();
+  // ASCII でない文字を打つキーの位置で、Shift を付けた記号の割当は、記号と Shift の組み合わせとして断る
+  const shifted = bindingFromEvent(key({ code: "BracketLeft", key: "Ü", ctrlKey: true, shiftKey: true }), false)!;
   expect(problemOf(shifted, false, false)).toBe("shifted_symbol");
 });

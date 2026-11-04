@@ -6,7 +6,7 @@
 //   扱わない（WebKit 系では compositionend の後に Enter の keydown が届く）が、それは画面の部品が
 //   compositionend を見て判定する。
 
-import { ACTIONS, type BoardAssigned } from "./keymap";
+import { idsOf, type BoardAssigned } from "./keymap";
 import { actionIn, composing } from "./keys";
 
 /** 一覧の操作。 */
@@ -17,7 +17,7 @@ type KeyLike = Pick<
   "code" | "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "isComposing" | "keyCode"
 > & { getModifierState?: KeyboardEvent["getModifierState"] };
 
-const BOARD_IDS = ACTIONS.filter((a) => a.scope === "board").map((a) => a.id as BoardAssigned);
+const BOARD_IDS = idsOf<BoardAssigned>("board");
 
 /** キーの押下が、一覧の操作のどれに当たるか。当たらなければ `null`。 */
 export function boardActionOf(e: KeyLike, mac: boolean): BoardAction | null {

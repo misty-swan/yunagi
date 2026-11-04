@@ -6,7 +6,7 @@
 // - IME の変換中のキーはショートカットとして扱わない（操作仕様書 3章）。
 
 import {
-  ACTIONS,
+  idsOf,
   label,
   matches,
   resolveKeymap,
@@ -61,14 +61,14 @@ export function actionIn<T extends ActionId>(e: KeyLike, mac: boolean, ids: read
   return null;
 }
 
-const SHELL_IDS = ACTIONS.filter((a) => a.scope === "common").map((a) => a.id as ShellAction);
+const SHELL_IDS = idsOf<ShellAction>("common");
 
 /** キーの押下が、骨組みの操作のどれに当たるか。当たらなければ `null`。 */
 export function shellActionOf(e: KeyLike, mac: boolean): ShellAction | null {
   return actionIn(e, mac, SHELL_IDS);
 }
 
-const NOTE_IDS = ACTIONS.filter((a) => a.scope === "note").map((a) => a.id as NoteAction);
+const NOTE_IDS = idsOf<NoteAction>("note");
 
 /**
  * キーの押下が、ノートモードの操作に当たるか（初期割当は Mod+Shift+H・T・B。操作仕様書 2章）。

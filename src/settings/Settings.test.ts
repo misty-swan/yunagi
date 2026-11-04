@@ -317,19 +317,13 @@ test("区分ごとに設定を変える：変えた欄だけを保存し、画�
   expect(($("#set-threshold") as HTMLInputElement).value).toBe("5");
   expect(core.count("save_settings")).toBe(10);
 
-  // Vim モード：入れると、入力状態を戻す欄が出る。どちらも保存する
-  expect($("#set-vim-ime")).toBeNull();
+  // Vim モード：保存する（入力状態を戻す欄は、働きを作る課題で足すので、まだ出さない）
   const vim = $("#set-vim") as HTMLInputElement;
   vim.checked = true;
   vim.dispatchEvent(new Event("change", { bubbles: true }));
-  await until(() => core.settings.vimMode && $("#set-vim-ime") !== null);
+  await until(() => core.settings.vimMode);
   expect(prefs.vimMode).toBe(true);
-  const restore = $("#set-vim-ime") as HTMLInputElement;
-  expect(restore.checked).toBe(true);
-  restore.checked = false;
-  restore.dispatchEvent(new Event("change", { bubbles: true }));
-  await until(() => !core.settings.vimImeRestore);
-  expect(prefs.vimImeRestore).toBe(false);
+  expect($("#set-vim-ime")).toBeNull();
 });
 
 /** 設定の「操作」区分で、操作 `id` の割当のボタン。 */

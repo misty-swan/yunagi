@@ -28,6 +28,7 @@ beforeEach(() => {
   prefs.lang = "ja";
   prefs.layout = "A";
   prefs.vimMode = false;
+  prefs.shortcuts = {};
 });
 
 afterEach(async () => {
@@ -524,6 +525,41 @@ test("Vim モードで、持ち越し済みの項目と取りやめた TODO で�
   await until(() => rows().length === 3 && $(".r-todo [contenteditable]") !== null);
   expect(notice.text).toBe("");
   expect(rowsOf(".r-todo")).toEqual(["持ち越した", "", "やめた"]);
+});
+
+test("Vim の挿入モードは、フォーカスが一覧の外へ移ると終わる。戻ったときは項目を選ぶだけ", async () => {
+  prefs.vimMode = true;
+  await start({ boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))] } } });
+  const row = $$(".r-todo .item")[0];
+  row.focus();
+  vimKey(row, "i");
+  await until(() => $(".r-todo [contenteditable]") !== null);
+  // 振り返りの欄へ移る（Mod+3）
+  const ctrl3 = new KeyboardEvent("keydown", { key: "3", code: "Digit3", ctrlKey: true, bubbles: true, cancelable: true });
+  document.activeElement!.dispatchEvent(ctrl3);
+  flushSync();
+  await until(() => $$(".r-todo [contenteditable]").length === 0);
+  // 戻っても、挿入モードのままにならない
+  const ctrl1 = new KeyboardEvent("keydown", { key: "1", code: "Digit1", ctrlKey: true, bubbles: true, cancelable: true });
+  document.activeElement!.dispatchEvent(ctrl1);
+  flushSync();
+  await until(() => $$(".r-todo .item")[0].contains(document.activeElement));
+  expect($$(".r-todo [contenteditable]").length).toBe(0);
+});
+
+test("振り返りテンプレートの挿入は、設定で変えた割当に従う（元のキーでは入らない）", async () => {
+  prefs.shortcuts = { template: "Mod+Shift+E" };
+  await start();
+  const content = $(".ref-ed .cm-content")!;
+  const press = (init: KeyboardEventInit) => {
+    content.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    flushSync();
+  };
+  press({ key: "R", code: "KeyR", ctrlKey: true, shiftKey: true });
+  expect(content.textContent).toBe("");
+  press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true });
+  await until(() => (content.textContent ?? "") !== "");
+  prefs.shortcuts = {};
 });
 
 test("Vim モードでない間は、整理モードのリストの本文は常に入力欄", async () => {

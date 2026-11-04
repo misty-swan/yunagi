@@ -306,18 +306,8 @@
             />
           {/snippet}
           {@render row(o.vim, "set-vim", vim, o.vimNote)}
-          {#if prefs.vimMode}
-            {#snippet vimIme()}
-              <input
-                id="set-vim-ime"
-                type="checkbox"
-                checked={prefs.vimImeRestore}
-                onchange={(e) => void store.save({ vimImeRestore: e.currentTarget.checked })}
-              />
-            {/snippet}
-            {@render row(o.vimImeRestore, "set-vim-ime", vimIme, o.vimImeRestoreNote)}
-            {#if !mac}<p class="note vim-alt">{o.vimAltNote}</p>{/if}
-          {/if}
+          <!-- 「挿入モードで入力状態を戻す」（vim_ime_restore）の欄は、働きを作る課題（YUN-85）で足す -->
+          {#if prefs.vimMode && !mac}<p class="note vim-alt">{o.vimAltNote}</p>{/if}
           <h3 class="label sub">{o.shortcuts}</h3>
           <ShortcutsSection {editor} {mac} />
         {:else if panel.section === "data"}

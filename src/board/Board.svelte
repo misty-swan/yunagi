@@ -127,6 +127,25 @@
     else requestFocus({ key: row.key, field: "text", offset: "end" });
   }
 
+  // Vim の挿入モード・続きのキー待ちは、Vim モードを切り替えたとき、日を移ったときに捨てる
+  $effect(() => {
+    void prefs.vimMode;
+    void model.date;
+    untrack(() => {
+      model.insert = false;
+      model.vimPending = null;
+    });
+  });
+
+  /** フォーカスが一覧の外（サイドバー・振り返りの欄など）へ移ったら、挿入モードを終える（戻ったとき、項目を選ぶだけにするため）。 */
+  function onFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget;
+    if (next instanceof Element && next.closest(".r-todo, .r-blk") === null) {
+      model.insert = false;
+      model.vimPending = null;
+    }
+  }
+
   /** 領域 `from` から前（-1）・次（+1）の領域へ。TODO・障害・振り返りの順に回る（Vim の Tab・Shift+Tab）。 */
   function moveRegion(from: ItemKind, dir: -1 | 1) {
     const order = ["todo", "blocker", "reflection"] as const;
@@ -198,7 +217,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="board" data-layout={layout} data-date={model.date ?? ""} onkeydown={onKeydown}>
+<div class="board" data-layout={layout} data-date={model.date ?? ""} onkeydown={onKeydown} onfocusout={onFocusOut}>
   {#if model.date !== null}
     <ItemList
       kind="todo"

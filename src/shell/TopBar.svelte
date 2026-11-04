@@ -50,6 +50,7 @@
   } = $props();
 
   const m = $derived(t());
+  const paletteKey = $derived(keyLabel("palette", mac));
   const isToday = $derived(date !== null && date === today);
   /** 保存の失敗の原因の文（内部のエラーの文は出さない。画面設計書 3章）。 */
   const cause = $derived.by((): SaveCause | null => {
@@ -146,14 +147,15 @@
       {#if isToday}
         <span class="today-pill is-today">{m.labels.today}</span>
       {:else}
+        {@const todayKey = keyLabel("today", mac)}
         <button
           type="button"
           class="today-pill go"
-          aria-label={m.withKey(m.backToday, keyLabel("today", mac))}
+          aria-label={m.withKey(m.backToday, todayKey)}
           onclick={onToday}
         >
           {m.labels.today}
-          {#if keyLabel("today", mac) !== ""}<kbd>{keyLabel("today", mac)}</kbd>{/if}
+          {#if todayKey !== ""}<kbd>{todayKey}</kbd>{/if}
         </button>
       {/if}
     </div>
@@ -179,7 +181,7 @@
       <path d="M7 2.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zM10.4 10.4 13.5 13.5" />
     </svg>
     <span>{m.searchLabel}</span>
-    {#if keyLabel("palette", mac) !== ""}<kbd>{keyLabel("palette", mac)}</kbd>{/if}
+    {#if paletteKey !== ""}<kbd>{paletteKey}</kbd>{/if}
   </button>
 
   {#if unseen > 0}

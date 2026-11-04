@@ -74,6 +74,11 @@ export const ACTIONS: readonly ActionDef[] = [
 
 const SCOPE_OF = new Map(ACTIONS.map((a) => [a.id, a.scope]));
 
+/** 範囲 `scope` の操作の名前（`T` はその範囲の操作の型。範囲と型が合うのは `ACTIONS` の並びで保つ）。 */
+export function idsOf<T extends ActionId>(scope: Scope): readonly T[] {
+  return ACTIONS.filter((a) => a.scope === scope).map((a) => a.id as T);
+}
+
 /** 操作の効く範囲どうしが重なるか。 */
 function overlaps(a: Scope, b: Scope): boolean {
   return a === "common" || b === "common" || a === b;
@@ -182,6 +187,8 @@ export type BindingProblem =
   | "no_modifier"
   /** macOS の Option だけ（文字や記号と）。Option は文字を打つキーなので、Mod と組み合わせる。 */
   | "mac_option_alone"
+  /** Alt だけと、上下の矢印以外の名前のキー（Backspace・左右の矢印など。文字の編集や戻る・進むに使う）。 */
+  | "alt_edit_key"
   /** Windows・Linux の Ctrl と Alt の組み合わせ（AltGr で文字を打つ配列があるため）。 */
   | "alt_gr"
   /** 記号のキーと Shift（配列で打つ文字が変わる）。 */
@@ -212,6 +219,10 @@ export function problemOf(b: Binding, vim: boolean, mac: boolean): BindingProble
     if (mac && b.alt) return "mac_option_symbol";
   }
   if (mac && !b.mod && b.alt && b.key.kind !== "named") return "mac_option_alone";
+  // Alt だけの名前のキーは、上下の矢印だけ（Option・Alt と Backspace・左右の矢印などは、文字の編集や戻る・進むに使う）
+  if (!b.mod && b.alt && b.key.kind === "named" && b.key.name !== "ArrowUp" && b.key.name !== "ArrowDown") {
+    return "alt_edit_key";
+  }
   const f = format(b);
   if (RESERVED.includes(f)) return "reserved";
   if (!mac && f === "Mod+Y") return "reserved";
@@ -284,6 +295,7 @@ export function resolveKeymap(shortcuts: Readonly<Record<string, string>>, vim: 
       out.set(a.id, { binding: null, initial, changed: false, status: "lost", takenBy: other });
       continue;
     }
+    take(a.id, initial);
     out.set(a.id, { binding: parseBinding(initial), initial, changed: false, status: previous?.status ?? "ok" });
   }
   return out;
@@ -346,7 +358,8 @@ export function matches(e: KeyLike, mac: boolean, b: Binding): boolean {
   if (!mac && e.altKey !== b.alt) return false;
   if (e.key === k.text || (k.text === "\\" && e.key === YEN)) return true;
   // 記号を単独のキーで打てない配列（ドイツ語の配列など）でも動くよう、Option の無いときは、US 配列の
-  // 記号のキーの位置でも受ける
+  // 記号のキーの位置でも受ける。ただし、押したキーがほかの割り当てられる記号を打つときは、その記号のキーなので受けない
+  if (e.key in SYMBOLS || e.key === YEN) return false;
   return (mac ? !e.altKey : true) && !e.shiftKey && e.code === SYMBOLS[k.text];
 }
 
@@ -369,8 +382,9 @@ export function bindingFromEvent(e: KeyLike, mac: boolean): Binding | null {
     else {
       const text = e.key === YEN ? "\\" : e.key;
       if (text in SYMBOLS) key = { kind: "symbol", text };
-      else {
-        // 押した文字が当たらないとき（記号を AltGr や Option と打つ配列）は、US 配列での位置から決める
+      else if (!/^[\x20-\x7e]$/.test(e.key)) {
+        // 押した文字が ASCII でないとき（ドイツ語の配列の ü など）は、US 配列での位置から決める。ASCII の
+        // 記号を打つキー（JIS 配列の @ など）は、位置では決めない（別のキーとして記録してしまうため）
         const at = Object.entries(SYMBOLS).find(([, code]) => code === e.code);
         if (at) key = { kind: "symbol", text: at[0] };
       }

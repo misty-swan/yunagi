@@ -36,6 +36,7 @@
   } = $props();
 
   const m = $derived(t());
+  const settingsKey = $derived(keyLabel("settings", mac));
   const todayCounts = $derived(overview?.recent.find((d) => d.date === today)?.counts);
   const todayLeft = $derived(todayCounts ? progressOf(todayCounts).left : 0);
   const unseen = $derived(overview?.unseenChanges ?? 0);
@@ -111,7 +112,7 @@
       />
     </svg>
     <span class="nl">{m.labels.nav.settings}</span>
-    {#if keyLabel("settings", mac) !== ""}<kbd>{keyLabel("settings", mac)}</kbd>{/if}
+    {#if settingsKey !== ""}<kbd>{settingsKey}</kbd>{/if}
   </button>
 
   <div class="status" role="status">
