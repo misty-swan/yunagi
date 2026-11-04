@@ -6,6 +6,7 @@
 //! - [`args`]：引数の読み取りと、`TEXT` の `-`（標準入力）。
 //! - [`output`]：テキスト出力と、エラーの表示。
 //! - [`doctor`]：`yunagi doctor`。
+//! - [`mcp`]：`yunagi mcp`（MCP サーバー。stdio）。ツールの定義は `mcp_tools`。
 //! - [`error`]：エラー（05 4.3）と終了コード（05 4.1）。
 //!
 //! 実行ファイルの `main` は [`run`] を呼ぶだけにして、試験が同じプロセスの中で、入出力と環境を差し替えて
@@ -15,9 +16,11 @@ pub mod args;
 pub mod connect;
 pub mod doctor;
 pub mod error;
+pub mod mcp;
+mod mcp_tools;
 pub mod output;
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Value, json};
@@ -28,7 +31,7 @@ use error::ErrorObject;
 
 /// 入出力。
 pub struct Io<'a> {
-    pub stdin: &'a mut dyn Read,
+    pub stdin: &'a mut dyn BufRead,
     pub stdout: &'a mut dyn Write,
     pub stderr: &'a mut dyn Write,
 }
@@ -70,6 +73,7 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
         }
         Command::Operation(op) => operation(op, json, env, io),
         Command::Doctor => run_doctor(json, env, io),
+        Command::Mcp { client } => mcp::run(client.as_deref(), env, io),
     }
 }
 
@@ -94,9 +98,10 @@ pub fn invalid_utf8_argument(json: bool, io: &mut Io<'_>) -> i32 {
 /// 警告（環境を分けている形。4.5 の 3）をためておく入れ物。標準エラーには、操作の後にまとめて出す。
 type Warnings = Arc<Mutex<Vec<String>>>;
 
-fn connector(env: &Env, warnings: &Warnings) -> Result<Connector, ErrorObject> {
+/// 識別子 `client`（CLI は `cli`、`yunagi mcp` は `--client` の値か `unknown`）の接続の道具。
+fn connector(env: &Env, warnings: &Warnings, client: &str) -> Result<Connector, ErrorObject> {
     let sink = Arc::clone(warnings);
-    let connector = Connector::from_env("cli", move |line| {
+    let connector = Connector::from_env(client, move |line| {
         sink.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(line.to_owned());
@@ -123,7 +128,7 @@ fn operation(mut op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     }
     let warnings = Warnings::default();
     let Operation { method, params, .. } = op;
-    let result = connector(env, &warnings).and_then(|c| c.call(method, params));
+    let result = connector(env, &warnings, "cli").and_then(|c| c.call(method, params));
     flush_warnings(&warnings, io);
     match result {
         Ok(value) => {
@@ -142,7 +147,7 @@ fn operation(mut op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
 
 fn run_doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     let warnings = Warnings::default();
-    let report = match connector(env, &warnings) {
+    let report = match connector(env, &warnings, "cli") {
         Ok(c) => doctor::diagnose(&c),
         Err(e) => doctor::diagnose_without_dir(error::message(&e)),
     };

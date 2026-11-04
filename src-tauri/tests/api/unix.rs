@@ -44,10 +44,14 @@ pub fn main() {
     }
     let dir = data_dir::default_dir().unwrap();
     assert!(dir.path().starts_with(&home));
-    let tests: [(&str, Test); 10] = [
+    let tests: [(&str, Test); 11] = [
         (
             "the_cli_goes_through_the_app_and_follows_its_permissions",
             the_cli_goes_through_the_app_and_follows_its_permissions,
+        ),
+        (
+            "the_mcp_server_goes_through_the_app_and_follows_its_permissions",
+            the_mcp_server_goes_through_the_app_and_follows_its_permissions,
         ),
         (
             "listens_only_while_open_and_cleans_up",
@@ -944,8 +948,13 @@ fn request_form_errors_use_the_standard_codes(dir: &DefaultDir) {
 /// `yunagi`（CLI）を、同じプロセスの中で動かす。アプリが `yunagi.lock` を持っているので、直接モードでは
 /// 5 秒待って `busy` になる。成功すれば、ローカル API を通った証拠になる。
 fn yunagi(args: &[&str]) -> (i32, String, String) {
+    yunagi_with_stdin(args, b"")
+}
+
+/// 標準入力 `input` を渡して `yunagi` を動かす（`yunagi mcp` は入力が終わるまで動く）。
+fn yunagi_with_stdin(args: &[&str], input: &[u8]) -> (i32, String, String) {
     let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
-    let (mut stdin, mut stdout, mut stderr) = (&b""[..], Vec::new(), Vec::new());
+    let (mut stdin, mut stdout, mut stderr) = (input, Vec::new(), Vec::new());
     let code = yunagi_cli::run(
         &args,
         &yunagi_cli::Env {
@@ -964,6 +973,76 @@ fn yunagi(args: &[&str]) -> (i32, String, String) {
         String::from_utf8(stdout).unwrap(),
         String::from_utf8(stderr).unwrap(),
     )
+}
+
+/// `yunagi mcp`（YUN-92）を、アプリ経由で動かす。直接モードならロックが取れず 5 秒待って `busy` になる
+/// ので、すぐ成功すればローカル API を通った証拠になる。権限の判定（`permission_denied`）は、アプリ
+/// （コア）のエラーがそのままツールの結果に載る。
+fn the_mcp_server_goes_through_the_app_and_follows_its_permissions(dir: &DefaultDir) {
+    let h = Harness::opened(dir);
+    h.grant("claude-code", &[Scope::Todo]);
+    h.drain();
+    let call = |id: u64, name: &str, arguments: Value| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": arguments}}).to_string()
+    };
+    let run = |args: &[&str], lines: &[String]| -> Vec<Value> {
+        let input = lines.join("\n") + "\n";
+        let started = std::time::Instant::now();
+        let (code, out, err) = yunagi_with_stdin(args, input.as_bytes());
+        assert_eq!(code, 0, "{err}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        out.lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect()
+    };
+    let outcome = |response: &Value| -> (bool, Value) {
+        let result = &response["result"];
+        (
+            result["isError"].as_bool().unwrap(),
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap(),
+        )
+    };
+    let r = run(
+        &["mcp", "--client", "claude-code"],
+        &[
+            call(1, "add_todo", json!({"text": "mcp via app"})),
+            call(2, "append_note", json!({"text": "not allowed"})),
+            call(3, "get_board", json!({})),
+        ],
+    );
+    // 許可された書き込みは、画面と同じ `changed`（`by: agent`）を出す
+    let (is_error, added) = outcome(&r[0]);
+    assert!(!is_error, "{added}");
+    assert_eq!(h.next_changed(), "agent");
+    // 許可されていない書き込みは、アプリのエラーがそのまま載り、何も変わらない
+    let (is_error, denied) = outcome(&r[1]);
+    assert!(is_error);
+    assert_eq!(denied["error"]["code"], "permission_denied");
+    assert_eq!(denied["error"]["required_scope"], "append");
+    h.assert_no_changed();
+    let (is_error, board) = outcome(&r[2]);
+    assert!(!is_error);
+    assert!(
+        board["todos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["text"] == "mcp via app" && t["origin"] == "agent")
+    );
+    // 識別子の無い接続は unknown クライアント：書き込みは permission_denied、読み取りはできる
+    let r = run(
+        &["mcp"],
+        &[
+            call(1, "add_todo", json!({"text": "unknown client"})),
+            call(2, "get_board", json!({})),
+        ],
+    );
+    let (is_error, denied) = outcome(&r[0]);
+    assert!(is_error);
+    assert_eq!(denied["error"]["code"], "permission_denied");
+    assert_eq!(denied["error"]["required_scope"], "todo");
+    assert!(!outcome(&r[1]).0);
+    h.assert_no_changed();
 }
 
 fn the_cli_goes_through_the_app_and_follows_its_permissions(dir: &DefaultDir) {
