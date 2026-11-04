@@ -12,6 +12,7 @@ pub mod app_core;
 #[cfg(test)]
 mod bindings;
 pub mod commands;
+pub mod ime;
 mod screen;
 pub mod types;
 
@@ -63,6 +64,9 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::confirm_carryover,
         commands::search,
         commands::report_ui_state,
+        commands::ime_status,
+        commands::ime_leave_insert,
+        commands::ime_enter_insert,
         commands::export_markdown,
         commands::get_settings,
         commands::save_settings,
@@ -80,6 +84,8 @@ pub fn manage_core<R: Runtime>(app: &AppHandle<R>) -> Arc<AppCore> {
     let handle = app.clone();
     let core = AppCore::new(Box::new(move |notice| emit(&handle, notice)));
     app.manage(Arc::clone(&core));
+    // IME の切替（操作仕様書 4.4）。データベースとは関係しないので、コアとは別に持つ
+    app.manage(ime::ImeWorker::system(app.clone()));
     core
 }
 

@@ -8,7 +8,7 @@
   import type { CarriedTo, NoteSource } from "../lib/bindings";
   import { lockOf, showsMemo, type BoardModel, type FocusTarget, type Row } from "../lib/board.svelte";
   import { boardActionOf } from "../lib/board_keys";
-  import { composing } from "../lib/keys";
+  import { asVimKeyEvent, composing, vimKeyOfCode } from "../lib/keys";
   import { monthDay, shortDate } from "../lib/dates";
   import { agentLabel, t } from "../lib/i18n";
   import { prefs } from "../lib/prefs.svelte";
@@ -250,6 +250,15 @@
     // 変えられない行と、Vim のノーマルモードでは、行そのもの（li）へのキーだけを扱う（行の中のボタンの
     // キーは、そのボタンに任せる）
     if ((lock !== null || vimNormal) && e.target !== li) return;
+    // Vim のノーマルモードは、IME の状態にかかわらずキーを Vim の操作として扱う（操作仕様書 4.4 の 2）。
+    // IME が先に受けたキー（変換中の印が付く）は、押した物理キーから読み直す（読めなければ何もしない。
+    // 本文は入力欄でないので、変換は始まらない）
+    if (vimNormal && composing(e)) {
+      const key = vimKeyOfCode(e);
+      if (key === null) return;
+      e.preventDefault();
+      e = asVimKeyEvent(e, key);
+    }
     if (composing(e)) {
       // 変えられない行では、日本語入力の変換を始めようとしたことを知らせる（本文は入力欄でないので、通常は届かない）
       if (lock !== null) model.refuseEdit(row.key);

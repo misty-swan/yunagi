@@ -317,13 +317,43 @@ test("区分ごとに設定を変える：変えた欄だけを保存し、画�
   expect(($("#set-threshold") as HTMLInputElement).value).toBe("5");
   expect(core.count("save_settings")).toBe(10);
 
-  // Vim モード：保存する（入力状態を戻す欄は、働きを作る課題で足すので、まだ出さない）
+  // Vim モード：保存する。入力状態を戻す欄は、Vim モードが有効なときだけ出る
+  expect($("#set-vim-ime-restore")).toBeNull();
   const vim = $("#set-vim") as HTMLInputElement;
   vim.checked = true;
   vim.dispatchEvent(new Event("change", { bubbles: true }));
   await until(() => core.settings.vimMode);
   expect(prefs.vimMode).toBe(true);
-  expect($("#set-vim-ime")).toBeNull();
+  await until(() => $("#set-vim-ime-restore") !== null);
+  const restore = $("#set-vim-ime-restore") as HTMLInputElement;
+  expect(restore.checked).toBe(true);
+  restore.checked = false;
+  restore.dispatchEvent(new Event("change", { bubbles: true }));
+  await until(() => core.settings.vimImeRestore === false);
+  expect(prefs.vimImeRestore).toBe(false);
+});
+
+test("IME を切り替えられない環境（Linux で fcitx5 も IBus も動いていない）では、Vim モードの欄に制約を出す", async () => {
+  const core = await start({ vimMode: true });
+  core.answer.ime_status = { available: false, method: null };
+  await open("operation");
+  await until(() => $(".ime-unavailable") !== null);
+  expect(text(".ime-unavailable")).toContain("自動で切り替えられません");
+  expect(core.count("ime_status")).toBe(1);
+  // 切り替えられる環境では出さない（開き直したとき、問い合わせ直す）
+  press({ key: "Escape", code: "Escape" }, $("[data-settings]")!);
+  await until(() => dialog() === null);
+  core.answer.ime_status = { available: true, method: "fcitx5" };
+  await open("operation");
+  await until(() => core.count("ime_status") === 2);
+  await until(() => $(".ime-unavailable") === null);
+  // 問い合わせに失敗したときは、切り替えられないと決めつけない
+  press({ key: "Escape", code: "Escape" }, $("[data-settings]")!);
+  await until(() => dialog() === null);
+  core.answer.ime_status = { kind: "internal", detail: "x" };
+  await open("operation");
+  await until(() => core.count("ime_status") === 3);
+  expect($(".ime-unavailable")).toBeNull();
 });
 
 /** 設定の「操作」区分で、操作 `id` の割当のボタン。 */

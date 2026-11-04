@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isMacPlatform, keyLabel, noteActionOf, shellActionOf } from "./keys";
+import { asVimKeyEvent, isMacPlatform, keyLabel, noteActionOf, shellActionOf, vimKeyOfCode } from "./keys";
 
 function key(init: Partial<KeyboardEvent>) {
   return {
@@ -84,4 +84,26 @@ test("ノートの時刻付き見出しは Mod+Shift+H（キーの位置で判�
   expect(noteActionOf(key({ code: "KeyB", key: "B", metaKey: true, shiftKey: true }), true)).toBe("toBlocker");
   expect(noteActionOf(key({ code: "KeyT", key: "t", ctrlKey: true }), false)).toBeNull();
   expect(noteActionOf(key({ code: "KeyX", key: "X", ctrlKey: true, shiftKey: true }), false)).toBeNull();
+});
+
+test("IME が先に受けたキーは、押した物理キーから Vim のキーにする（英字・数字だけ。Ctrl・Alt・⌘ 付きは作らない）", () => {
+  const k = (code: string, init: Partial<KeyboardEvent> = {}) => vimKeyOfCode(key({ code, ...init }));
+  expect(k("KeyA")).toBe("a");
+  expect(k("KeyG", { shiftKey: true })).toBe("G");
+  expect(k("Digit3")).toBe("3");
+  expect(k("Digit4", { shiftKey: true })).toBeNull();
+  expect(k("Space")).toBeNull();
+  expect(k("BracketLeft")).toBeNull();
+  expect(k("Escape")).toBeNull();
+  expect(k("KeyR", { ctrlKey: true })).toBeNull();
+  expect(k("KeyR", { altKey: true })).toBeNull();
+  expect(k("KeyR", { metaKey: true })).toBeNull();
+});
+
+test("Vim のキーとして読み直した押下は、変換中の印を持たず、止める操作は元の押下に伝わる", () => {
+  const original = new KeyboardEvent("keydown", { key: "Process", code: "KeyJ", keyCode: 229, isComposing: true, cancelable: true });
+  const e = asVimKeyEvent(original, "j");
+  expect([e.key, e.code, e.isComposing, e.keyCode, e.ctrlKey, e.altKey, e.metaKey]).toEqual(["j", "KeyJ", false, 0, false, false, false]);
+  e.preventDefault();
+  expect(original.defaultPrevented).toBe(true);
 });

@@ -17,10 +17,11 @@ use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
+use crate::ime::ImeWorker;
 use crate::types::{
     Archive, BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList,
-    CarryoverStatus, CloudService, CommandError, DataDirChanged, Date, Deleted, Id, Item,
-    ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, SearchHit, SendResult,
+    CarryoverStatus, CloudService, CommandError, DataDirChanged, Date, Deleted, Id, ImeStatus,
+    Item, ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, SearchHit, SendResult,
     Settings, SettingsPatch, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
@@ -594,6 +595,37 @@ pub async fn confirm_carryover(
         })
     })
     .await
+}
+
+/// この環境で IME の切替ができるか（設定画面の制約の表示。操作仕様書 4.4 の 4）。コマンドを呼んで調べる
+/// ので、止めてよいスレッドで行う。
+#[tauri::command]
+pub async fn ime_status() -> Result<ImeStatus, CommandError> {
+    tauri::async_runtime::spawn_blocking(crate::ime::status)
+        .await
+        .map_err(|e| CommandError::Internal {
+            detail: e.to_string(),
+        })
+}
+
+/// Vim の挿入モードを抜けた：IME を英数入力に切り替える（操作仕様書 4.4 の 1）。切替は専用のスレッドが
+/// 順に行うので、待たずに返る。切り替えられなくても失敗にしない（ベストエフォート）。
+///
+/// この 2 つのコマンドだけは同期のコマンドにする（画面のスレッドで、届いた順に動く）。非同期のコマンドは
+/// 別々のスレッドで動き、Esc の直後の `i` で、入ったことの知らせが抜けたことの知らせを追い越しうるため。
+/// 中身は専用のスレッドへ知らせを送るだけで、待たない。
+#[tauri::command]
+pub fn ime_leave_insert(ime: State<'_, ImeWorker>) -> Result<(), CommandError> {
+    ime.leave_insert();
+    Ok(())
+}
+
+/// Vim の挿入モードに入った：覚えていた入力状態を捨て、`restore`（設定 `vim_ime_restore`）なら抜けた
+/// 時点の入力状態に戻す（操作仕様書 4.4 の 3）。
+#[tauri::command]
+pub fn ime_enter_insert(ime: State<'_, ImeWorker>, restore: bool) -> Result<(), CommandError> {
+    ime.enter_insert(restore);
+    Ok(())
 }
 
 /// 画面の入力中の状態を知らせる（変わるたびに全体を知らせ直す。アーキテクチャ設計書 4.1）。

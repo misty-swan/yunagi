@@ -52,6 +52,40 @@ export function composing(e: Pick<KeyboardEvent, "isComposing" | "keyCode">): bo
   return e.isComposing || e.keyCode === 229;
 }
 
+/**
+ * IME が先に受けたキーの押下（`keyCode` 229、`key` が "Process" など）を、押した物理キー（`code`）から
+ * Vim のキーにする（ノーマルモード中は IME の状態にかかわらずキーを Vim の操作として扱う。操作仕様書 4.4 の 2）。
+ * 作るのは英字（Shift で大文字）と数字（回数指定）だけで、Ctrl・Alt・⌘ 付きと、それ以外のキーは `null`。
+ * `code` は配列に対する物理の位置なので、QWERTY 系（US・JIS）の配列でだけ正しい（日本語入力を使う配列）。
+ */
+export function vimKeyOfCode(e: Pick<KeyboardEvent, "code" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey">): string | null {
+  if (e.ctrlKey || e.altKey || e.metaKey) return null;
+  const letter = /^Key([A-Z])$/.exec(e.code);
+  if (letter !== null) return e.shiftKey ? letter[1]! : letter[1]!.toLowerCase();
+  const digit = /^Digit([0-9])$/.exec(e.code);
+  return digit !== null && !e.shiftKey ? digit[1]! : null;
+}
+
+/** IME が先に受けたキーの押下 `e` を、Vim のキー `key` の押下として読み直したもの（変換中の印は付けない）。 */
+export function asVimKeyEvent(e: KeyboardEvent, key: string): KeyboardEvent {
+  return {
+    key,
+    code: e.code,
+    shiftKey: e.shiftKey,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    isComposing: false,
+    keyCode: 0,
+    repeat: e.repeat,
+    target: e.target,
+    defaultPrevented: false,
+    preventDefault: () => e.preventDefault(),
+    stopPropagation: () => e.stopPropagation(),
+    getModifierState: (k: string) => e.getModifierState(k),
+  } as unknown as KeyboardEvent;
+}
+
 /** キーの押下が、`ids` のうちどの操作に当たるか。当たらなければ `null`。 */
 export function actionIn<T extends ActionId>(e: KeyLike, mac: boolean, ids: readonly T[]): T | null {
   if (composing(e)) return null;

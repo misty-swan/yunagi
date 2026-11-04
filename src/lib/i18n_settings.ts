@@ -67,6 +67,8 @@ export interface SettingsMessages {
     vimAltNote: string;
     vimImeRestore: string;
     vimImeRestoreNote: string;
+    /** Linux で IME の切替ができない環境の制約（操作仕様書 4.4 の 4）。 */
+    imeUnavailable: string;
   };
   data: {
     locationTitle: string;
@@ -205,6 +207,8 @@ const ja: SettingsMessages = {
       "Windows・Linux では Ctrl+[ が Vim の Esc と重なるため、前日・翌日の移動（ふりかえりでは週の移動）の初期割当を Alt+[ / Alt+] にします。",
     vimImeRestore: "挿入モードで入力状態を戻す",
     vimImeRestoreNote: "挿入モードに入ったとき、直前に挿入モードを抜けた時点の日本語入力の状態に戻します。",
+    imeUnavailable:
+      "この環境では日本語入力（IME）を自動で切り替えられません（fcitx5 か IBus が動いていません）。ノーマルモード中は、日本語入力がオンでもキーを Vim の操作として扱います。挿入モードを抜けたら、日本語入力を手で英数に切り替えてください。",
   },
   data: {
     locationTitle: "保存先",
@@ -361,6 +365,8 @@ const en: SettingsMessages = {
       "On Windows and Linux, Ctrl+[ overlaps Vim's Esc, so the default for previous / next day (and week in Archive) becomes Alt+[ / Alt+].",
     vimImeRestore: "Restore input state in Insert mode",
     vimImeRestoreNote: "When entering Insert mode, return the Japanese input to the state it had when you last left Insert mode.",
+    imeUnavailable:
+      "Yunagi can't switch the Japanese input (IME) automatically here (neither fcitx5 nor IBus is running). In Normal mode, keys still work as Vim commands even when the IME is on. After leaving Insert mode, switch the IME to English by hand.",
   },
   data: {
     locationTitle: "Data folder",

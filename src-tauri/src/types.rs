@@ -1487,6 +1487,33 @@ pub struct DataDirChanged {
     pub leftovers: Vec<String>,
 }
 
+// ---- 日本語入力（IME）の切替 ----
+
+/// IME の切替に使う仕組み（操作仕様書 4.4。`src-tauri/src/ime.rs`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum ImeMethod {
+    /// Linux：fcitx5（`fcitx5-remote`）。
+    Fcitx5,
+    /// Linux：IBus（`ibus engine`）。
+    Ibus,
+    /// macOS：入力ソース API。
+    MacosInputSource,
+    /// Windows：IMM のオープン状態。
+    WindowsImm,
+}
+
+/// この環境で IME の切替ができるか（`ime_status`）。できないとき（Linux で fcitx5 も IBus も動いていない
+/// など）、設定画面が制約を表示する（画面設計書 7章「操作」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ImeStatus {
+    pub available: bool,
+    pub method: Option<ImeMethod>,
+}
+
 // ---- エラー ----
 
 /// コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める

@@ -94,6 +94,8 @@ fn render() -> String {
         decl::<SettingsPatch>(&cfg),
         decl::<CloudService>(&cfg),
         decl::<DataDirChanged>(&cfg),
+        decl::<ImeMethod>(&cfg),
+        decl::<ImeStatus>(&cfg),
         decl::<CommandError>(&cfg),
         decl::<InvalidReason>(&cfg),
         decl::<RejectReason>(&cfg),

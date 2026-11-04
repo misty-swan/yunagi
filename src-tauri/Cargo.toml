@@ -21,6 +21,13 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# IME の英数入力への切替（src/ime.rs）。Linux は外部コマンドを呼ぶので、依存を足さない
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation.workspace = true
+
 [dev-dependencies]
 # 結合テスト（tests/）で、WebView を開かずにコマンドとイベントを呼ぶ（tauri::test）
 tauri = { workspace = true, features = ["test"] }

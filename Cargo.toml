@@ -27,6 +27,11 @@ redundant_explicit_links = "deny"
 
 [workspace.dependencies]
 yunagi-core = { path = "crates/core" }
+# IME の英数入力への切替（Vim モード。docs/design/01-architecture.md 3.4、src-tauri/src/ime.rs）。
+# どちらも Tauri がすでに使っている版にそろえ、新しく取り込むコードを増やさない（Cargo.lock の版）。
+# Windows：IMM の呼び出し。macOS：入力ソース API が返す文字列・配列の扱い
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Input_Ime", "Win32_UI_WindowsAndMessaging"] }
+core-foundation = "0.10"
 # Tauri は正確な版で固定する。画面側の @tauri-apps/api・@tauri-apps/cli（package.json）と
 # 版の 2.12 系をそろえる（Tauri は major.minor が食い違うと警告する）
 tauri = { version = "=2.12.5", features = [] }
