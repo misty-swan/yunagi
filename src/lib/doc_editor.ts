@@ -12,11 +12,12 @@
 //   文の改行は LF にそろえる（操作仕様書 2章「ノートの編集」）。
 
 import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
-import { Annotation, Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Prec, Transaction, type Extension } from "@codemirror/state";
 import { EditorView, highlightSpecialChars, keymap, type KeyBinding, type ViewUpdate } from "@codemirror/view";
 import { DocSaver, type SaveStatus } from "./autosave.svelte";
 import type { LogicalDate, Snapshot, TextDoc } from "./bindings";
 import { core } from "./core";
+import { onVimMode, vimExtension, type VimMode } from "./editor_vim";
 import { findMatch } from "./search_match";
 import type { EditorPresence } from "./ui_report.svelte";
 
@@ -34,6 +35,8 @@ export interface TextDocEditorOptions {
   label: () => string;
   /** その日の本文を読み終え、入力を受け付け始めたとき（`open` の終わり）。 */
   onLoaded?: (d: LogicalDate) => void;
+  /** Vim のモードが変わったとき（Vim が無効になったら `null`）。 */
+  onVimMode?: (mode: VimMode | null) => void;
 }
 
 /** 本文 `cur` を `next` にする、変わった所だけの置き換え（前後の同じ部分を除く）。 */
@@ -91,6 +94,9 @@ export class TextDocEditor {
   /** `refresh` で読み直した最新の版（保存の待ちのため、まだ取り込んでいなくても読み直さない）。 */
   #pulled: { saver: DocSaver; rev: number } | null = null;
   readonly #label = new Compartment();
+  /** Vim のキー（有効のときだけ中身がある。状態を作り直しても `#vimOn` に従う）。 */
+  readonly #vim = new Compartment();
+  #vimOn = false;
   /** 最後にこのエディタから写した（ドラッグで動かした）文。 */
   #copied: string | null = null;
 
@@ -110,6 +116,7 @@ export class TextDocEditor {
     this.#closeSaver();
     this.view?.destroy();
     this.view = null;
+    this.#o.onVimMode?.(null);
     // 片付けでは focusChanged が届かないので、ここで入力中を終える
     this.#o.presence.focused = false;
     this.#o.presence.cursorLines = [];
@@ -125,6 +132,21 @@ export class TextDocEditor {
     return EditorView.contentAttributes.of({ "aria-label": this.#o.label(), spellcheck: "false" });
   }
 
+  /**
+   * Vim のキーを有効・無効にする（設定の Vim モード。開いているエディタにすぐ反映する）。有効にすると
+   * 標準のキーより先に Vim が受ける（ノートの Enter などの、部品のキーより先）。
+   */
+  setVim(on: boolean) {
+    if (this.#vimOn === on) return;
+    this.#vimOn = on;
+    this.view?.dispatch({ effects: this.#vim.reconfigure(this.#vimExt()) });
+    if (!on) this.#o.onVimMode?.(null);
+  }
+
+  #vimExt(): Extension {
+    return this.#vimOn ? [vimExtension(), onVimMode.of((m) => this.#o.onVimMode?.(m))] : [];
+  }
+
   /** 状態を置き換える（setState では更新を聞けないので、フォーカスとカーソル行をここで読み直す）。 */
   #setState(state: EditorState) {
     const v = this.view;
@@ -133,6 +155,8 @@ export class TextDocEditor {
     const p = this.#o.presence;
     p.focused = v.hasFocus;
     p.cursorLines = cursorLines(v.state);
+    // 状態を置き換えると Vim の状態も作り直しになる（有効なら、新しい Vim が最初のモードを知らせる）
+    if (!this.#vimOn) this.#o.onVimMode?.(null);
   }
 
   /** `editable` が偽なら入力を受け付けない（その日の本文を読み終えるまで）。 */
@@ -154,6 +178,8 @@ export class TextDocEditor {
         highlightSpecialChars(),
         EditorView.editable.of(editable),
         history(),
+        // Vim のキーは、部品のキー（ノートの Enter）と標準のキーより先に受ける
+        Prec.high(this.#vim.of(this.#vimExt())),
         keymap.of([...own.keys, ...historyKeymap, ...standardKeymap]),
         EditorView.lineWrapping,
         ...own.extensions,

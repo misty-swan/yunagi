@@ -74,9 +74,9 @@ The shortcuts listed here can be viewed and changed in Settings → Input → Ke
 
 ## 5. Vim mode
 
-Enable it in Settings → Input → Vim mode. Notes and reflections support Normal, Insert, and Visual modes. In notes, `<Space>t` sends a line to TODOs and `<Space>b` to Blockers. In Board mode, use j / k to move, o to add, i to edit, x to toggle done/resolved, dd to delete, and u to undo. When you leave Insert mode, your Japanese (or other) input method switches back to direct input automatically.
+Enable it in Settings → Input → Vim mode. Notes and reflections support Normal, Insert, and Visual modes. In notes, `<Space>t` sends a line to TODOs and `<Space>b` to Blockers (in Visual mode, the selected lines), and `<Space>h` inserts a timed heading so you can type its title right away. In reflections the `<Space>` keys do nothing. The current mode is shown in small letters at the bottom right of the editor. In Board mode, use j / k to move, o to add, i to edit, x to toggle done/resolved, dd to delete, and u to undo. When you leave Insert mode, your Japanese (or other) input method switches back to direct input automatically.
 
-On Windows and Linux, enabling Vim mode changes previous/next day (and previous/next week in Archive) to **Alt+[ / Alt+]**, because Ctrl+[ acts as Esc in Vim. Keys you have changed yourself stay as they are when you switch Vim mode on or off.
+On Windows and Linux, enabling Vim mode changes previous/next day (and previous/next week in Archive) to **Alt+[ / Alt+]**, because Ctrl+[ acts as Esc in Vim. Keys you have changed yourself stay as they are when you switch Vim mode on or off. Also on Windows and Linux, Vim's Ctrl keys (Ctrl+V, Ctrl+A, Ctrl+X, Ctrl+D and so on) are not Vim commands, so your usual shortcuts such as undo (Ctrl+Z), copy and paste keep working. Only Ctrl+R (redo) and Ctrl+[ (Esc) are Vim commands.
 
 ## 6. Working with Claude Code and Codex
 

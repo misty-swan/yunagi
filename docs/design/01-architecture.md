@@ -35,7 +35,7 @@ CLI と MCP サーバーは、GUI とは別のコンソール用バイナリ `yu
 | アプリ基盤 | Tauri 2 | 軽量、3 OS 対応、Rust コアと Web UI の分離 |
 | コア言語 | Rust | Tauri と同一言語。CLI・MCP とアプリが同じコアのクレート（`yunagi-core`）を使い、ドメイン層を共有できる |
 | フロントエンド | TypeScript（6 系）＋ Svelte 5 | 起動と入力の速さを優先して、軽量な UI フレームワークから選んだ。試作で SolidJS と比べて決めた（3.1）。TypeScript の版は 3.2 |
-| エディタ | CodeMirror 6 ＋ Vim 拡張 | Vim のノーマル・挿入・ビジュアルモードと IME の扱いに実績がある |
+| エディタ | CodeMirror 6 ＋ Vim 拡張（`@replit/codemirror-vim`。3.3） | Vim のノーマル・挿入・ビジュアルモードと IME の扱いに実績がある |
 | データベース | SQLite（WAL モード、`synchronous=NORMAL`）、FTS5 | 単一ファイルで堅牢。全文検索を内蔵。`synchronous=NORMAL` では電源断時に失うのは最後のチェックポイント以降の直近の書き込みに限られ、要件の「直前数秒以上は失わない」を満たす見込み（08 で確認） |
 | 秘密情報 | OS キーチェーン（`keyring` クレート等） | 外部ツールの認証情報を平文で持たない |
 | 自動更新 | Tauri Updater（独自鍵で署名） | OS の有料署名に依存しない |
@@ -63,6 +63,17 @@ Svelte と SolidJS で同じ小さな画面を Tauri 2 上に作って比べた�
 - 確かめた手順と結果は `experiments/yun-14-typescript/RESULTS.md` にある。
 - 2026-11-03 に、`svelte-check` を最新の 4.7.8 に上げたときにも確かめ、7 系へは移行しないと決めた（YUN-31）。4.7.8 の依存の宣言は 5 系と 6 系のままで、説明書（README）も 7 系には 6 系と 7 系の両方と `--tsgo` か `--tsgo-experimental-api` の指定が要るとしている。`--tsgo-experimental-api`（TypeScript 7 の試験的な API を使う方式）でも 2 件の型エラーをどちらも見つけられたが、`svelte-check` 自身が「試験的な機能で、予告なく壊れうる」と示している。どちらの指定も試験的な扱いで、正式な対応ではない。7 系の入れ方（パッケージの名前）は説明書の中でも食い違っている（中身は `RESULTS.md` 3章）ため、試すときは `RESULTS.md` のコマンドに従う。
 - `svelte-check` が 7 系に正式に対応したら、移行を検討する（svelte-check を上げるときに確かめる）。正式な対応とは、依存の宣言に 7 系が入り、7 系を使うのに要る指定や入れ方が説明書で試験的な扱いでなくなることをいう（6 系を一緒に入れる必要が残ってもよい）。そのうえで、`RESULTS.md` の手順の版をその時点の最新に差し替えて、2 件の型エラーを見つけられることを確かめる。
+
+### 3.3 エディタの Vim 拡張（2026-11-04 決定）
+
+ノートと振り返りのエディタ（CodeMirror 6）の Vim のキーは、`@replit/codemirror-vim`（MIT。CodeMirror 6 用の Vim 拡張で、npm で `@codemirror/` の名前のものは無い）で作る。完全な互換は目指さない（操作仕様書 4.1）。
+
+- 版は `package.json` に正確な版で書いて固定する（`6.4.0`。ほかの依存と同じ）。この拡張が要求する `@codemirror/language`・`@codemirror/search` も、同じく固定して直接の依存に加える（拡張は `@codemirror/state` などを1つだけ使う必要があるため、`pnpm why @codemirror/state` で版が1つであることを依存を足すたびに確かめる）。
+- 使い方は `src/lib/editor_vim.ts` にまとめる。有効・無効は設定の Vim モード（`prefs.vimMode`）に従い、開いているエディタにすぐ反映する（`TextDocEditor.setVim`。日を移ってエディタの状態を作り直しても従う）。Vim のキーは、部品のキー（ノートの Enter）と標準のキーより先に受ける。
+- Vim は、使ったキーを以降に渡さない（アプリ全体のキー処理に届かない）。そのため、Windows・Linux では Ctrl を押した押下（Mod と重なる）を、`<C-r>`（やり直し）と `<C-[>`（Esc）を除いて Vim に渡さない（`leavesToApp`。押下から Vim のキーの名前を作る関数を包んで実現する。Vim の標準の割当を `Vim.unmap` で外す方法は、Vim の内部の記録とずれて照合が壊れるため使わない）。macOS の Mod は ⌘ で Vim が使わないので何もしない。Ctrl+R は Vim がやり直しに使うので、割当に使えないキーにする（`src/lib/keymap.ts` の `problemOf`。Ctrl+[ と同じ扱い）。
+- Yunagi 固有の `<Space>t`・`<Space>b`・`<Space>h` は、Vim の対応表が全体で1つなので、読み込み時に一度だけ登録し、動かすエディタは押したエディタに結んだ操作（`setVimHost`）で決める。振り返り欄は結ばず、キーだけを受けて何もしない。Vim の標準の `<Space>`（右へ移動。`l` と同じ）は、押した時点で確定して続きのキーを待たないので、この割当だけを外す。
+- モードの表示は、拡張の下端の帯（`status`）を使わず、画面の部品（`src/shell/VimBadge.svelte`）が右下に出す。モードの変化は `onVimMode` で部品に知らせる。`/` `?` の検索欄（拡張が下端に出す）と、ブロックのカーソル・検索の一致の色は、色のトークンに置き換える（`src/styles/base.css`）。
+- IME との両立（操作仕様書 4.4）は、この上に別の課題（YUN-85）で作る。
 
 ## 4. 書き込み経路と同時実行
 

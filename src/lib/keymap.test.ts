@@ -137,6 +137,10 @@ test("割り当てられないキー", () => {
   expect(p("Mod+[", true)).toBe("reserved");
   expect(p("Mod+[", true, true)).toBeNull();
   expect(p("Mod+[", false)).toBeNull();
+  // Ctrl+R は、Vim モードの Windows・Linux ではやり直し（<C-r>）と重なる
+  expect(p("Mod+R", true)).toBe("reserved");
+  expect(p("Mod+R", true, true)).toBeNull();
+  expect(p("Mod+R", false)).toBeNull();
 });
 
 test("Alt だけの名前のキーは上下の矢印だけ。位置の代わりの照合は、押したキーが別の記号を打つときは使わない", () => {

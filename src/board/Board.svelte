@@ -150,7 +150,7 @@
   }
 
   /** 領域 `from` から前（-1）・次（+1）の領域へ。TODO・障害・振り返りの順に回る（Vim の Tab・Shift+Tab）。 */
-  function moveRegion(from: ItemKind, dir: -1 | 1) {
+  function moveRegion(from: ItemKind | "reflection", dir: -1 | 1) {
     const order = ["todo", "blocker", "reflection"] as const;
     focusRegion(order[(order.indexOf(from) + dir + order.length) % order.length]);
   }
@@ -259,6 +259,7 @@
           presence={tracker.reflection}
           rev={session.board?.reflectionRev ?? 0}
           onActivity={activity}
+          onRegion={(dir) => moveRegion("reflection", dir)}
           find={reflectionFind}
           onFound={onTargetDone}
           bind:view={editor}
