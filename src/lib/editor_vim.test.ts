@@ -385,6 +385,31 @@ test("ノーマルモードで IME が先に受けたキー（key が Process）
   expect(big.state.doc.toString()).toBe("one two three");
 });
 
+test("IME が先に受けたキーが入力より先に続けて押されても、押した順に使う", () => {
+  const v = make("one two three four");
+  press(v, { key: "Process", code: "KeyW", keyCode: 229 });
+  press(v, { key: "Process", code: "KeyW", keyCode: 229 });
+  typed(v, "ｗ");
+  expect(v.state.selection.main.head).toBe(4);
+  v.destroy();
+  // 実際のキーの押下が来たら、待たせていたキーは捨てる（l だけが効き、w は効かない）
+  const r = make("one two three four");
+  press(r, { key: "Process", code: "KeyW", keyCode: 229 });
+  press(r, { key: "l", code: "KeyL" });
+  typed(r, "ｗ");
+  expect(r.state.selection.main.head).toBe(1);
+});
+
+test("挿入モードのままエディタを閉じたら、抜けたものとして IME を英数にする。ノーマルモードで閉じたときは呼ばない", () => {
+  const a = make("one");
+  a.destroy();
+  expect(imeLeaveInsert).not.toHaveBeenCalled();
+  const b = make("one");
+  keys(b, "i");
+  b.destroy();
+  expect(imeLeaveInsert).toHaveBeenCalledTimes(1);
+});
+
 test("覚えた物理キーは、押下から 0.5 秒を過ぎた入力には使わない（届かなかった押下のキーが、後の入力を置き換えない）", () => {
   vi.useFakeTimers();
   try {

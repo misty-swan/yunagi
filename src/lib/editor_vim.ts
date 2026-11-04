@@ -133,9 +133,11 @@ export const onVimMode = Facet.define<(mode: VimMode) => void, readonly ((mode: 
 const modeListener = ViewPlugin.fromClass(
   class {
     readonly #off: (() => void) | null;
+    #mode: () => VimMode | null = () => null;
     constructor(v: EditorView) {
       const cm = getCM(v);
       let last: VimMode | null = null;
+      this.#mode = () => last;
       // ビジュアルモードを抜けるときなどに同じモードを続けて知らせてくるので、変わったときだけ伝える
       const tell = (mode: VimMode) => {
         if (mode === last) return;
@@ -159,6 +161,9 @@ const modeListener = ViewPlugin.fromClass(
     }
     destroy() {
       this.#off?.();
+      // 挿入モードのまま閉じた（日を移った・エディタを作り直したなど）ときも、抜けたものとして扱う
+      // （ノーマルモードで始まる新しいエディタに、日本語入力が残らないように）
+      if (this.#mode() === "insert") imeLeaveInsert();
     }
   },
 );
@@ -181,7 +186,7 @@ const keepSpaceOut = EditorView.domEventHandlers({
  * なる（`a` `i` `o` が Vim のキーにならない）。そこで、押下のときに物理キーから Vim のキーを作って
  * 覚え、入力の文字を、その Vim のキーに置き換えて Vim 拡張に渡す。
  */
-const imeKeys = new WeakMap<EditorView, { key: string; at: number }>();
+const imeKeys = new WeakMap<EditorView, { key: string; at: number }[]>();
 
 /** 覚えたキーを使える時間（ミリ秒）。IME の入力は押下の直後に届くので、長く持たない（届かなかった押下の
  * キーが、後の貼り付けなどの入力を置き換えないため）。 */
@@ -194,22 +199,30 @@ function processKey(e: KeyboardEvent): boolean {
 
 const imeKeydown = EditorView.domEventHandlers({
   keydown: (e, v) => {
-    imeKeys.delete(v);
+    // 実際のキーの押下が来たら、待たせていたキーは捨てる。IME が受けたキーは、入力が届く前に続けて
+    // 押されることがあるので、押した順に溜める
+    if (!processKey(e)) imeKeys.delete(v);
     const mode = vimModeOf(v);
     if (mode !== null && mode !== "insert" && processKey(e)) {
       const key = vimKeyOfCode(e);
-      if (key !== null) imeKeys.set(v, { key, at: Date.now() });
+      const now = Date.now();
+      const queue = (imeKeys.get(v) ?? []).filter((k) => now - k.at <= IME_KEY_TTL);
+      if (key !== null) queue.push({ key, at: now });
+      imeKeys.set(v, queue);
     }
     return false;
   },
 });
 
 const imeInput: Parameters<typeof EditorView.inputHandler.of>[0] = (v, from, to, text, insert) => {
-  const hit = imeKeys.get(v);
+  const queue = imeKeys.get(v);
+  if (queue === undefined) return false;
+  const now = Date.now();
+  while (queue.length > 0 && now - queue[0]!.at > IME_KEY_TTL) queue.shift();
+  const hit = queue.shift();
   if (hit === undefined) return false;
-  imeKeys.delete(v);
   const key = hit.key;
-  if (Date.now() - hit.at > IME_KEY_TTL || vimModeOf(v) === "insert" || text === key) return false;
+  if (vimModeOf(v) === "insert" || text === key) return false;
   // ほかの入力の処理（Vim 拡張）に、置き換えたキーを渡す
   return v.state.facet(EditorView.inputHandler).some((h) => h !== imeInput && h(v, from, to, key, insert));
 };

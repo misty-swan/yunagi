@@ -95,8 +95,10 @@ impl Session {
         };
         if let Err(e) = result {
             eprintln!("yunagi: failed to switch the input method to English: {e}");
-            // 仕組みが使えなくなったのかもしれないので、次はもう一度探す
+            // 仕組みが使えなくなったのかもしれないので、しばらく置いてからもう一度探す（失敗が続く環境で、
+            // Esc のたびにコマンドを起動し続けない）
             self.backend = None;
+            self.none_until = Some(Instant::now() + DETECT_BACKOFF);
         }
     }
 
@@ -423,14 +425,24 @@ mod mac {
             f: impl FnOnce() -> T + Send + 'static,
         ) -> Result<T, Failure> {
             let (tx, rx) = mpsc::channel();
+            // 待ちきれなかった処理は、メインスレッドが空いてから遅れて走らないよう取り消す（遅れて走ると、
+            // 後に頼んだ切替と順序が入れ替わる）
+            let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = std::sync::Arc::clone(&cancelled);
             self.app
                 .run_on_main_thread(move || {
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
                     let _ = tx.send(f());
                 })
                 .map_err(|e| e.to_string())?;
             // メインスレッドが固まっていても、切替のスレッドが止まり続けないよう、待つ時間に上限を置く
             rx.recv_timeout(std::time::Duration::from_secs(2))
-                .map_err(|e| e.to_string())
+                .map_err(|e| {
+                    cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    e.to_string()
+                })
         }
     }
 
@@ -691,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_is_not_reported_and_the_backend_is_looked_up_again() {
+    fn a_failure_is_not_reported_and_the_backend_is_not_used_again_right_away() {
         let fake = Fake::default();
         let counter = Arc::new(Mutex::new(0));
         let c = Arc::clone(&counter);
@@ -704,8 +716,14 @@ mod tests {
         s.leave_insert();
         s.enter_insert(true);
         assert!(fake.log.lock().unwrap().is_empty());
+        // 失敗の直後は探し直さず、何もしない
         *fake.fail.lock().unwrap() = false;
         *fake.state.lock().unwrap() = "kana".into();
+        s.leave_insert();
+        assert_eq!(*counter.lock().unwrap(), 1);
+        assert_eq!(*fake.state.lock().unwrap(), "kana");
+        // 間隔を過ぎれば、探し直して使える
+        s.none_until = Some(Instant::now());
         s.leave_insert();
         assert_eq!(*counter.lock().unwrap(), 2);
         assert_eq!(*fake.state.lock().unwrap(), "english");
