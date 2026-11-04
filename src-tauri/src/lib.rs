@@ -72,6 +72,7 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::ime_leave_insert,
         commands::ime_enter_insert,
         commands::set_global_shortcut,
+        commands::take_show_note,
         commands::export_markdown,
         commands::get_settings,
         commands::save_settings,
@@ -112,9 +113,29 @@ fn emit<R: Runtime>(app: &AppHandle<R>, notice: Notice) {
 
 /// 窓を前面に出し（OS 全体のショートカットと同じ部品。[`global_shortcut::bring_to_front`]）、画面に
 /// `show-requested` を知らせる。窓が無くても、画面への知らせは出す（窓の操作の失敗はログに出るだけ）。
+///
+/// 窓の操作はメインスレッドに頼み、待たずに返る。ローカル API の接続のスレッドから呼ばれるので、メイン
+/// スレッドの完了を待つと、アプリの終了（[`AppCore::close`] が接続の終わりを待つ）と行き違って止まるため。
 fn show_window<R: Runtime>(app: &AppHandle<R>, request: types::ShowRequested) -> tauri::Result<()> {
-    global_shortcut::bring_to_front(app);
+    let handle = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || global_shortcut::bring_to_front(&handle)) {
+        eprintln!("yunagi: failed to bring the window to the front: {e}");
+    }
     app.emit(EVENT_SHOW_REQUESTED, request)
+}
+
+/// 2 つ目の起動の引き渡し（`tauri-plugin-single-instance`）。引数に `--note` があれば（`yunagi show
+/// --note` が起動したとき）、ノートモードで前面に出す。コアは、画面が準備できる前でも頼みを覚える。
+fn handover<R: Runtime>(app: &AppHandle<R>, args: &[String]) {
+    let note = args.iter().any(|a| a == "--note");
+    match app.try_state::<Arc<AppCore>>() {
+        Some(core) => core.request_show(note),
+        None => {
+            if let Err(e) = show_window(app, types::ShowRequested { note }) {
+                eprintln!("yunagi: failed to notify the screen: {e}");
+            }
+        }
+    }
 }
 
 /// アプリを起動する。画面のスレッドを止めないよう、データベースは別のスレッドで開く。
@@ -124,10 +145,8 @@ pub fn run() {
         // ため）。動いているアプリは窓を前面に出す。データベースを見つけられない・開けない間の起動時の
         // 画面は、ロックも待ち受けも持たないので、`yunagi show` はこの引き渡しで前面に出す
         // （アーキテクチャ設計書 3.5）。D-Bus が使えないなど、見つけられない環境では、そのまま起動する
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Err(e) = show_window(app, types::ShowRequested { note: false }) {
-                eprintln!("yunagi: failed to notify the screen: {e}");
-            }
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            handover(app, &args);
         }))
         // フォルダを選ぶ OS のダイアログ（画面から使う。capabilities/default.json）
         .plugin(tauri_plugin_dialog::init())

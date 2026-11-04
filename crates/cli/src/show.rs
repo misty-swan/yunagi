@@ -88,8 +88,15 @@ pub enum Target {
 ///   `yunagi-app.exe`。
 pub fn locate(exe: &Path, app_env: Option<&OsStr>, os: &str) -> Option<Target> {
     if let Some(path) = app_env.filter(|v| !v.is_empty()) {
+        // 実行ファイル（macOS は `.app` のフォルダも）を指していなければ、見つからないものとする
+        // （実行できないものを指して、起動の失敗に見せないため）
         let path = PathBuf::from(path);
-        return path.exists().then(|| as_target(path, os));
+        let target = as_target(path, os);
+        let valid = match &target {
+            Target::MacApp(app) => app.is_dir(),
+            Target::Program(path) => path.is_file(),
+        };
+        return valid.then_some(target);
     }
     let dir = exe.parent()?;
     let parent = dir.parent();
@@ -135,15 +142,29 @@ fn as_target(path: PathBuf, os: &str) -> Target {
 /// 起動したアプリ。
 struct Launched {
     child: Child,
+    /// 実行ファイルを直接起動したか（macOS の `open` ではなく）。直接起動したプロセスが、待ち受けが
+    /// 開く前に成功で終わったのは、動いているアプリに引き渡した（単一インスタンス）ということ。`open` は
+    /// アプリの起動を待たずに成功で終わるので、そうは言えない。
+    direct: bool,
 }
 
-/// アプリを起動する。この実行が終わっても動き続けるよう、標準入出力を閉じて切り離す。
-fn spawn(target: &Target) -> io::Result<Child> {
+/// アプリを起動する。この実行が終わっても動き続けるよう、標準入出力を閉じて切り離す。`note` が真なら、
+/// 引数 `--note` を付ける（引き渡しを受けた、動いているアプリが、ノートモードで出す。`lib.rs` の `handover`）。
+fn spawn(target: &Target, note: bool) -> io::Result<Child> {
     let mut command = match target {
-        Target::Program(path) => Command::new(path),
+        Target::Program(path) => {
+            let mut c = Command::new(path);
+            if note {
+                c.arg("--note");
+            }
+            c
+        }
         Target::MacApp(app) => {
             let mut c = Command::new("open");
             c.arg(app);
+            if note {
+                c.args(["--args", "--note"]);
+            }
             c
         }
     };
@@ -259,7 +280,7 @@ pub fn run(
         // 待ち受けが無い（アプリが動いていない、まだデータベースを開いていない）ときは、起動する。
         // 待ち受けがあって一時的につながらないだけのときは、アプリがいるので起動しない
         if launched.is_none() && no_listener {
-            launched = Some(start(options, warn)?);
+            launched = Some(start(options, note, warn)?);
             deadline = Instant::now() + options.start_wait;
         }
         if let Some(app) = &mut launched {
@@ -268,7 +289,9 @@ pub fn run(
                     warn(&format!("yunagi: the app exited with {status}"));
                     return Err(launch_failed());
                 }
-                Ok(Some(_)) if handover_only => {
+                // 待ち受けが開く前に成功で終わった：動いているアプリ（起動時の画面など）に引き渡した。
+                // アプリが窓を前面に出しているので、待ち受けが開くのを待たない
+                Ok(Some(_)) if app.direct => {
                     return Ok(json!({"requested": true, "launched": true}));
                 }
                 _ => {}
@@ -301,7 +324,7 @@ fn unexpected() -> ErrorObject {
     )
 }
 
-fn start(options: &Options, warn: &dyn Fn(&str)) -> Result<Launched, ErrorObject> {
+fn start(options: &Options, note: bool, warn: &dyn Fn(&str)) -> Result<Launched, ErrorObject> {
     let target = match &options.launch {
         Launch::Program(path) => Target::Program(path.clone()),
         Launch::Os => {
@@ -320,8 +343,11 @@ fn start(options: &Options, warn: &dyn Fn(&str)) -> Result<Launched, ErrorObject
             .ok_or_else(app_not_found)?
         }
     };
-    match spawn(&target) {
-        Ok(child) => Ok(Launched { child }),
+    match spawn(&target, note) {
+        Ok(child) => Ok(Launched {
+            child,
+            direct: matches!(target, Target::Program(_)),
+        }),
         Err(e) => {
             warn(&format!(
                 "yunagi: could not start {target:?}: {}",

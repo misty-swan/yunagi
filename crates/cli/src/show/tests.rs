@@ -85,6 +85,10 @@ fn the_environment_variable_wins_and_must_exist() {
         locate(&exe, Some(OsStr::new("")), "linux"),
         Some(Target::Program(root.path().join("opt/Yunagi.AppImage")))
     );
+    // フォルダ（macOS の .app 以外）を指していても、見つからないものとする
+    let folder = root.path().join("folder");
+    fs::create_dir_all(&folder).unwrap();
+    assert_eq!(locate(&exe, Some(folder.as_os_str()), "linux"), None);
     // macOS の .app を指したら open で起動する
     let app = root.path().join("Apps/Yunagi.app");
     fs::create_dir_all(&app).unwrap();

@@ -305,25 +305,55 @@ test("押し続けたときの繰り返しでは動かさない", async () => {
 });
 
 test("窓を前面に出したとき（show-requested）、ノートモードの指定があるときだけノートモードにして、ノートにフォーカスを移す", async () => {
-  await start();
+  const core = mockShowNote();
+  app = mount(App, { target: document.body });
+  await until(() => $("main.content")?.dataset.date === TODAY && $(".meter") !== null);
   const mode = () => $("main.content")?.dataset.mode;
   // 指定が無ければ、モードは変えない
-  await emit(EVENTS.showRequested, { note: false });
+  await core.request(false);
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(mode()).toBe("board");
   // ノートモードの指定で、ノートモードにして、ノートにフォーカスを移す
-  await emit(EVENTS.showRequested, { note: true });
+  await core.request(true);
   await until(() => mode() === "note");
   await until(() => document.activeElement?.closest(".cm-editor") != null);
   // すでにノートモードなら、そのまま（フォーカスだけをノートに移す）
   (document.activeElement as HTMLElement).blur();
-  await emit(EVENTS.showRequested, { note: true });
+  await core.request(true);
   await until(() => document.activeElement?.closest(".cm-editor") != null);
   expect(mode()).toBe("note");
   // 指定が無ければ、ノートモードのまま
-  await emit(EVENTS.showRequested, { note: false });
+  await core.request(false);
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(mode()).toBe("note");
+});
+
+/**
+ * 模擬のコア（`take_show_note` は、コアが覚えている「ノートモードで出す頼み」を一度だけ渡す）。
+ * `request` はコアに頼みが届いたこと（覚えて、`show-requested` を知らせる）。
+ */
+function mockShowNote(pendingAtStart = false) {
+  const state = { pending: pendingAtStart };
+  mockCore((cmd) => {
+    if (cmd !== "take_show_note") return undefined;
+    const p = state.pending;
+    state.pending = false;
+    return p;
+  });
+  return {
+    async request(note: boolean) {
+      if (note) state.pending = true;
+      await emit(EVENTS.showRequested, { note });
+    },
+  };
+}
+
+test("起動した直後に届いた（画面の準備より先の）ノートモードの頼みは、準備ができたときに受け取って、ノートモードにする", async () => {
+  // 画面が聞き始める前から、コアが覚えている（知らせは取りこぼした）
+  mockShowNote(true);
+  app = mount(App, { target: document.body });
+  await until(() => $("main.content")?.dataset.mode === "note");
+  await until(() => document.activeElement?.closest(".cm-editor") != null);
 });
 
 test("データベースを開く前の起動時の画面の間は、ノートモードの指定があっても前面に出すだけで、画面は変わらない", async () => {

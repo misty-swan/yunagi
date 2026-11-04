@@ -130,6 +130,11 @@ pub struct AppCore {
     api_options: Mutex<ApiOptions>,
     /// 閉じ始めた（[`AppCore::close`]）。以後、ローカル API の待ち受けを始めない。
     closing: AtomicBool,
+    /// ノートモードで前面に出す頼み（`yunagi show --note`）のうち、画面がまだ受け取っていないもの
+    /// （[`AppCore::request_show`]・[`AppCore::take_show_note`]）。起動した直後は、待ち受けが開いても
+    /// 画面がまだ準備できておらず、知らせ（`show-requested`）を取りこぼすため、画面が準備できたときに
+    /// 取り出せるよう覚えておく。
+    show_note: AtomicBool,
     notify: Notify,
 }
 
@@ -280,6 +285,7 @@ impl AppCore {
             api: Mutex::new(ApiSlot::Stopped),
             api_options: Mutex::new(ApiOptions::default()),
             closing: AtomicBool::new(false),
+            show_note: AtomicBool::new(false),
             notify,
         })
     }
@@ -729,7 +735,16 @@ impl AppCore {
     /// にも錠にも触れないので、保存先の変更・復元の最中でも待たずに効く。窓を操作する部分は、知らせの
     /// 受け手（`crate::run`）が持つ（窓の無い試験では知らせを受け取るだけ）。
     pub fn request_show(&self, note: bool) {
+        if note {
+            self.show_note.store(true, Ordering::Release);
+        }
         self.notify(Notice::ShowRequested(ShowRequested { note }));
+    }
+
+    /// ノートモードで前面に出す頼みが、画面にまだ渡っていなければ、受け取って忘れる（画面が準備できた
+    /// ときと、`show-requested` を受けたときに呼ぶ）。
+    pub fn take_show_note(&self) -> bool {
+        self.show_note.swap(false, Ordering::AcqRel)
     }
 
     /// [`AppCore::agent_write`] の、ローカル API 用の版。データベースを使うのを待つのは最大

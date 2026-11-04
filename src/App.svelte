@@ -21,7 +21,7 @@
   } from "./lib/palette.svelte";
   import PalettePanel from "./palette/Palette.svelte";
   import { flushSync, onDestroy, untrack } from "svelte";
-  import { coreEvents } from "./lib/core";
+  import { core, coreEvents } from "./lib/core";
   import { t } from "./lib/i18n";
   import { SaveStatus } from "./lib/autosave.svelte";
   import { isMacPlatform } from "./lib/keys";
@@ -121,9 +121,24 @@
   // 呼ばれたときだけ、ノートモードにする（操作仕様書 1章「OS 全体の操作」）
   const unlistenShow = coreEvents
     .onShowRequested((p) => {
-      if (!stopped && p.note) showNote();
+      if (!stopped && p.note) void applyShowNote();
     })
     .catch(() => undefined);
+  // 起動した直後は、頼みが画面の準備（データベースを開く・設定を読む）より先に届く。コアが覚えている頼みを、
+  // 準備ができたときに受け取る（準備の前は受け取らず、覚えたままにする）
+  async function applyShowNote() {
+    if (!shown) return;
+    let note = false;
+    try {
+      note = await core.takeShowNote();
+    } catch {
+      return;
+    }
+    if (!stopped && note) showNote();
+  }
+  $effect(() => {
+    if (shown) untrack(() => void applyShowNote());
+  });
   onDestroy(() => {
     stopped = true;
     void unlistenBackup.then((u) => u?.());

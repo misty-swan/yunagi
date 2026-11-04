@@ -1097,6 +1097,18 @@ fn show_app_asks_the_screen_without_touching_the_data(dir: &DefaultDir) {
     h.call(None, "show_app", json!({"note": null})).unwrap();
     assert!(!next_show(&h));
     h.assert_no_changed();
+    // ノートモードの頼みは、画面がまだ受け取っていなければコアが覚える（起動した直後は、頼みが画面の
+    // 準備より先に届く）。受け取ると忘れる。ノートモードの指定が無い頼みは覚えない
+    // ここまでの `note: true` の頼みは、受け取られないまま覚えられている
+    assert!(h.core.take_show_note());
+    assert!(!h.core.take_show_note());
+    h.call(None, "show_app", json!({"note": true})).unwrap();
+    assert!(next_show(&h));
+    assert!(h.core.take_show_note());
+    assert!(!h.core.take_show_note());
+    h.call(None, "show_app", json!({})).unwrap();
+    assert!(!next_show(&h));
+    assert!(!h.core.take_show_note());
     let agents = h.ok("cli", "list_agents", json!({}));
     assert!(
         agents["agents"]

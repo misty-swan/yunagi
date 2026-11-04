@@ -33,8 +33,8 @@ import {
   type SearchHit,
   type SendResult,
   type Settings,
-  type ShowRequested,
   type SettingsPatch,
+  type ShowRequested,
   type Snapshot,
   type SplitResult,
   type Startup,
@@ -181,6 +181,11 @@ export const core = {
    * 登録できなかった理由は、失敗にせず、返す状態で知らせる。
    */
   setGlobalShortcut: (binding: string | null) => call<GlobalShortcutStatus>("set_global_shortcut", { binding }),
+  /**
+   * ノートモードで前面に出す頼み（`yunagi show --note`）が、まだ渡っていなければ受け取る（`true`。受け取ると忘れる）。
+   * 画面が準備できたとき（起動した直後は、頼みが画面の準備より先に届く）と、`show-requested` を受けたときに呼ぶ。
+   */
+  takeShowNote: () => call<boolean>("take_show_note"),
 };
 
 /** イベントを聞き始められなかったとき、やり直すまでの時間。 */

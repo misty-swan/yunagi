@@ -2029,10 +2029,11 @@ fn show_starts_the_app(w: &World) {
     // 動いていなければ起動する（1 回だけ）。起動の後、待ち受けが開くまで試し直す。偽のアプリは、
     // 起動されたのを見てから待ち受けを始める
     let marker = w.path("launched");
+    // 偽のアプリは、起動の引数を記録して、動き続ける（すぐ成功で終わると、引き渡しとみなされる）
     let script = app_script(
         w,
         "fake-app",
-        &format!("echo started >> {}", marker.display()),
+        &format!("echo started $* >> {}\nexec sleep 5", marker.display()),
     );
     let starter = {
         let (marker, own) = (marker.clone(), own.clone());
@@ -2065,7 +2066,8 @@ fn show_starts_the_app(w: &World) {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["method"], "show_app");
     assert_eq!(requests[0]["params"], json!({"note": true}));
-    assert_eq!(fs::read_to_string(&marker).unwrap(), "started\n");
+    // `--note` は、起動の引数でも渡す（引き渡しを受けるアプリが、ノートモードで出せるように）
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "started --note\n");
 }
 
 fn show_no_app(w: &World) {
@@ -2109,7 +2111,7 @@ fn show_no_app(w: &World) {
         started.elapsed()
     );
     // 起動したが、待ち受けが開かない：期限で、起動はしたことが分かる
-    let silent = app_script(w, "silent", "exit 0");
+    let silent = app_script(w, "silent", "exec sleep 3");
     let started = Instant::now();
     let out = exec_show(
         w,
@@ -2120,6 +2122,23 @@ fn show_no_app(w: &World) {
     assert_eq!(out.code, 8, "{}", out.stderr);
     assert!(out.stderr.contains("start_timeout"), "{}", out.stderr);
     assert!(started.elapsed() >= Duration::from_millis(500));
+    // 起動したプロセスが、待ち受けが開く前に成功で終わった：動いているアプリ（起動時の画面など）に
+    // 引き渡した。期限を待たずに成功にする
+    let handover = app_script(w, "handover", "exit 0");
+    let started = Instant::now();
+    let out = exec_show(
+        w,
+        &["--json", "show"],
+        Launch::Program(handover),
+        Duration::from_secs(5),
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.json(), json!({"requested": true, "launched": true}));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 fn show_app_answers_with_an_error(w: &World) {
