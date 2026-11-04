@@ -97,7 +97,8 @@ Vimモードと IME の両立（操作仕様書 4.4。方式はアーキテク�
   - 取り消しの判定：記録の操作が変えた欄だけを戻し、ほかの欄に人が加えた変更が残ること。人が同じ欄を変えていれば `conflict`（`changed`、`changed_fields`、終了コード 5）で、`--force` で上書きできること。確認の後に変わった（`expect` が合わない）ときは、`--force` でも書かず止まること。追加の取り消しが項目の削除で、並べ替えだけでは `changed` にならず、人が本文を変えていれば `changed` になること。ノート・振り返りは本文全体で判定し、`--force` が本文全体を戻して、差分が「いまの本文 → 戻す本文」で出ること。
   - 持ち越し済みの項目の欄の取り消しは `carried_over`（`carried_to_id` つき）、取りやめた TODO の欄の取り消しは `invalid_argument`（`close_reason` つき）で、`--force` でも通らないこと。追加の取り消しは、どちらの項目でも削除として通ること。削除済みの項目の欄の取り消しは `not_found`、追加の取り消しはすでに戻っている扱いで成功すること。
   - すでに取り消し済みの記録、いまの値がすでに戻したい値の記録が、何も書かずに成功し（後者は記録を取り消し済みにし）、取り消しの記録が増えないこと。取り消しの記録（`agent.revert`）や存在しない記録は取り消せないこと（2・4）。取り消しの記録が `actor = human`・クライアントなし・`revert_of_id` つきで、`before`/`after` が欄ごとのオブジェクトであり、取り消しの後に画面が同じ状態を保存しても行き違いと判定されないこと。
-  - アプリ経由（`src-tauri/tests/api.rs`）：管理の操作が `read` を外したクライアントでも使え、一覧・計画では `changed` が出ず、権限の変更と取り消しで `changed`（`by: agent`）が出ること。取り消しが、画面の入力中（`user_editing`）・保存の失敗中（`storage_unavailable`）で書かないこと。MCP の `tools/call` で管理の操作を呼ぶと `-32602` になること。
+  - アプリ経由（`src-tauri/tests/api.rs`）：管理の操作が `read` を外したクライアントでも使え、一覧・計画では `changed` が出ず、権限の変更と取り消しで `changed`（`by: agent`）が出ること。取り消しが、画面の入力中（`user_editing`）・保存の失敗中（`storage_unavailable`）で書かないこと。
+  - MCP に出さないこと（CLI の結合テスト `crates/cli/tests/cli/unix.rs`）：`tools/list` に管理の操作が無く、`tools/call` で `list_agents`・`list_changes`・`set_agent_scopes`・`preview_revert`・`revert_change` を呼ぶと `-32602` になり、権限が変わらないこと。
   - **実機で確かめる（YUN-87 が拾う。いまは未確認）**：Windows のコンソール（cmd・PowerShell・Windows Terminal・Git Bash）で、標準入力と標準出力が端末かの判定（確認を得られるか）が期待どおりか。macOS・Windows のローカル時刻の表示。変更履歴の画面（YUN-81）ができてからの、アプリでの取り消し（`changed` の後の再読み込み、入力中のノートへの取り込み）。
 - アプリ起動中と停止中の両方で、CLI・MCP の操作が成功すること。MCP サーバーの起動中にアプリを起動・終了しても、操作が失敗せずロックが残らないこと。
 - 接続の手順（アーキテクチャ設計書 4.4。CLI と MCP の両方で、読み取りと書き込みの両方）：

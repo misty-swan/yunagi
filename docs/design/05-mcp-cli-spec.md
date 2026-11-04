@@ -480,7 +480,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 
 コアは `domain::history::list_changes`、API の操作は `list_changes`（4.4）。
 
-- 新しい順（記録の ID の降順）に、エージェントの記録と、人の取り消しの記録（`operation` が `agent.revert`）の両方を返す。`--client NAME` はそのクライアントの記録だけ（人の取り消しの記録はクライアントが無いので入らない。登録のない `NAME` は `not_found`）。`--unseen` は、エージェントによる未確認の変更（`actor = agent` で `seen_at` が空。データモデル設計書 change_log）だけ。`--limit N` は 1 以上（既定 50、200 を超える指定は 200。0 は `invalid_argument`）。`--before ID` はその記録より古いものだけ（続きを読む目印。返り値の `next_before` は、`limit` 件ちょうど返したときの最後の記録の ID で、それ未満なら `null`）。
+- 新しい順（記録の ID の降順）に、エージェントの記録と、人の取り消しの記録（`operation` が `agent.revert`）の両方を返す。ID（ULID。データモデル設計書）は同じプロセスの中では作った順に増えるが、別のプロセス（アプリと CLI の直接モード）が同じミリ秒に作った記録の順は決まらない（`list_by_target` と同じ「おおよそ記録した順」。時刻は `created_at`）。`--client NAME` はそのクライアントの記録だけ（人の取り消しの記録はクライアントが無いので入らない。登録のない `NAME` は `not_found`）。`--unseen` は、エージェントによる未確認の変更（`actor = agent` で `seen_at` が空。データモデル設計書 change_log）だけ。`--limit N` は 1 以上（既定 50、200 を超える指定は 200。0 は `invalid_argument`）。`--before ID` はその記録より古いものだけ（続きを読む目印。返り値の `next_before` は、`limit` 件ちょうど返したときの最後の記録の ID で、それ未満なら `null`）。
 - 1 件の形：`{id, created_at, actor, client, operation, target, summary, seen_at, reverted_at, revert_of}`。`target` は、項目なら `{type: "item", id, date, kind, text, deleted}`（`text` はいまの本文。項目が見つからなければ `id` だけ）、ノート・振り返りなら `{type: "note" | "reflection", date}`。`summary` は、項目の追加が `{type: "added", kind, text}`、項目の欄の変更が `{type: "fields", fields: [{name, before, after}]}`（変えた欄だけ）、ノート・振り返りが `{type: "text", before_chars, after_chars}`（本文は大きいので文字数だけ。差分は取り消しの計画で見る）、読めない記録が `{type: "unknown"}`。
 - 一覧は確認済みの印（`seen_at`）を付けない。`seen_at` は変更履歴の画面で確認した時刻（データモデル設計書 change_log）なので、CLI で一覧を出しても未確認のまま残る。印を付ける口は、変更履歴 S-06（YUN-81）がコアに足す（YUN-81 の完了の条件に書いた）。
 

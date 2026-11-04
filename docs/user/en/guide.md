@@ -101,7 +101,7 @@ yunagi agent history                                  # agent changes, newest fi
 yunagi agent revert <change ID> [--force]             # undo one change
 ```
 
-Undoing restores only the part that the change modified. If you have changed that same part yourself since, it stops without undoing (check the difference, then add `--force` to overwrite that part). Changes to items that were carried over, or to TODOs you dropped, cannot be undone.
+Undoing restores only the part that the change modified. If you have changed that same part yourself since, it stops without undoing (check the difference, then add `--force` to overwrite that part). For items that were carried over and TODOs you dropped, a change to their state or text cannot be undone (they keep the state they ended the day with); undoing the addition of such an item, which deletes it, is still possible.
 
 Content that an agent reads from Yunagi is sent to that AI service through the agent, under your own agreement with that service. AI usage is billed by that service; Yunagi's agent integration is free.
 
