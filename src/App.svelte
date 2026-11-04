@@ -177,6 +177,7 @@
       closeArchive(false);
     }
     // ノートモードから移るときは、閉じた後に、隠れたノートではなく整理モードで前にフォーカスのあった所へ戻す
+    // （ふりかえりを開く前がノートモードだったときも、ここで上書きする）
     if (shell.mode !== "board") carry.returnFocus = boardFocus;
     shell.setMode("board");
     const today = session.today;

@@ -413,6 +413,33 @@ test("開けなかったときは文を出し、読めるまで読み直す", as
   expect(archiveCalls(calls).length).toBeGreaterThan(1);
 });
 
+test("読み込めた後に読み直しが失敗したら、前の内容を出したまま文を出す。選んでいる日を押しても読み直さない", async () => {
+  const calls = await start();
+  await openArchive();
+  const n = archiveCalls(calls).length;
+  $$(".archive .card")[1].click();
+  flushSync();
+  expect(archiveCalls(calls).length).toBe(n);
+  state.failArchive = true;
+  await emit(EVENTS.changed, { by: "agent" });
+  await until(() => $(".archive .none[role='status']") !== null);
+  expect($$(".archive .card").length).toBe(5);
+  state.failArchive = false;
+  await until(() => $(".archive .none[role='status']") === null);
+});
+
+test("設定を重ねている間は、ふりかえりのキー（Mod+Shift+L・Mod+[）を受けない", async () => {
+  const calls = await start();
+  await openArchive();
+  press({ key: ",", code: "Comma", ctrlKey: true });
+  await until(() => $("[data-settings]") !== null);
+  const n = archiveCalls(calls).length;
+  press(MOD_LEFT);
+  press(MOD_SHIFT_L);
+  expect($(".archive")).not.toBeNull();
+  expect(archiveCalls(calls).length).toBe(n);
+});
+
 test("持ち越しの画面を出すときは、ふりかえりを閉じる", async () => {
   await start();
   await openArchive();

@@ -95,6 +95,8 @@ export class ArchiveScreen {
     if (!this.open) return;
     const today = this.#today();
     if (today !== null && date > today) return;
+    // すでに選んでいて読み終えている日は、読み直さない
+    if (date === this.sel && this.data?.date === date) return;
     this.sel = date;
     void this.#load();
   }

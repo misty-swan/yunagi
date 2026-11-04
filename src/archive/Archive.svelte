@@ -41,7 +41,10 @@
   /** 今日のカードの太陽の時刻のため、いまの時刻を 30 秒ごとに読み直す。 */
   const CLOCK_MS = 30_000;
   let now = $state(new Date());
+  // 週に今日のカードがあるときだけ動かす（ほかの日の景色は時刻によらない）
+  const hasToday = $derived(data !== null && data.week.some((d) => d.date === data.today));
   $effect(() => {
+    if (!hasToday) return;
     const timer = setInterval(() => (now = new Date()), CLOCK_MS);
     return () => clearInterval(timer);
   });
@@ -105,6 +108,10 @@
   aria-label={a.label}
   onkeydown={onKeydown}
 >
+  {#if data && archive.error}
+    <!-- 読み直しに失敗した間は、前の内容を出したまま、読めていないことを伝える -->
+    <p class="none" role="status">{a.loadFailed}</p>
+  {/if}
   {#if data && today && selected && preview}
     <div class="head">
       <span class="label">{l.thisWeek}</span>

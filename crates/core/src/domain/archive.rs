@@ -76,47 +76,38 @@ pub fn records_upto(
     limit: usize,
 ) -> Result<Vec<LogicalDate>, StorageError> {
     in_read_transaction(conn, || {
-        // 下の読み取りは「その日より前」なので、翌日を境にする。暦の最後の日なら、境にできる日が
-        // 無いので、その日だけを別に確かめる（実際には使わない日付）
+        // 下の読み取りは「その日より前」なので、翌日を境にする。暦の最後の日なら境にできる日が無いので、
+        // その日より前を読み、その日だけを別に確かめる（実際には使わない日付）
         let Some(before) = upto.add_days(1) else {
-            return records_before_last_day(conn, upto, limit);
+            let mut days = records_before(conn, upto, limit)?;
+            let mut on_last = board::counts(conn, upto)? != Counts::default();
+            for doc in [TextDoc::Note, TextDoc::Reflection] {
+                on_last |= !body_of(conn, doc, upto)?.trim().is_empty();
+            }
+            if on_last && limit > 0 {
+                days.insert(0, upto);
+                days.truncate(limit);
+            }
+            return Ok(days);
         };
-        let mut days = day::days_with_items_or_note(conn, before, limit)?;
-        days.extend(text_doc::nonblank_dates(
-            conn,
-            TextDoc::Reflection,
-            before,
-            None,
-            limit,
-        )?);
-        days.sort_unstable_by(|a, b| b.cmp(a));
-        days.dedup();
-        days.truncate(limit);
-        Ok(days)
+        records_before(conn, before, limit)
     })
 }
 
-/// 暦の最後の日 `last` までの記録のある日（`last` の翌日が無いときの [`records_upto`]）。
-fn records_before_last_day(
+/// `before` より前の、記録のある日（[`records_upto`] の記録）を新しい順に `limit` 日まで。
+fn records_before(
     conn: &Connection,
-    last: LogicalDate,
+    before: LogicalDate,
     limit: usize,
 ) -> Result<Vec<LogicalDate>, StorageError> {
-    let mut days = day::days_with_items_or_note(conn, last, limit)?;
+    let mut days = day::days_with_items_or_note(conn, before, limit)?;
     days.extend(text_doc::nonblank_dates(
         conn,
         TextDoc::Reflection,
-        last,
+        before,
         None,
         limit,
     )?);
-    let mut on_last = board::counts(conn, last)? != Counts::default();
-    for doc in [TextDoc::Note, TextDoc::Reflection] {
-        on_last |= !body_of(conn, doc, last)?.trim().is_empty();
-    }
-    if on_last {
-        days.push(last);
-    }
     days.sort_unstable_by(|a, b| b.cmp(a));
     days.dedup();
     days.truncate(limit);
@@ -153,12 +144,17 @@ pub fn get_archive(
             None => default_day(conn, today)?,
         };
         let week = board::week_counts(conn, date)?;
-        let daily = records_upto(conn, today, DAILY_DAYS)?
+        let days = records_upto(conn, today, DAILY_DAYS)?;
+        // 件数は、Daily notes の日と選んだ日をまとめて数える
+        let oldest = days.last().copied().map_or(date, |d| d.min(date));
+        let by_day = board::counts_between(conn, oldest, today.max(date))?;
+        let counts_of = |d: LogicalDate| by_day.get(&d).copied().unwrap_or_default();
+        let daily = days
             .into_iter()
             .map(|d| {
                 Ok(DailyEntry {
                     date: d,
-                    counts: board::counts(conn, d)?,
+                    counts: counts_of(d),
                     reflection: body_of(conn, TextDoc::Reflection, d)?,
                 })
             })
@@ -183,7 +179,7 @@ pub fn get_archive(
             })
             .collect();
         let preview = DayPreview {
-            counts: board::counts(conn, date)?,
+            counts: counts_of(date),
             reflection: body_of(conn, TextDoc::Reflection, date)?,
             note,
         };

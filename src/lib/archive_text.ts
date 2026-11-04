@@ -11,13 +11,11 @@ const HEADING_PREFIX = "## ";
 
 /** テンプレートの `n` 番目の見出しの文字（日英とも。小文字にそろえる）。 */
 function templateHeadings(n: number): Set<string> {
-  const names = Object.values(MESSAGES).map((m) =>
-    m.reflectionTemplate
-      .filter((line) => line.startsWith(HEADING_PREFIX))
-      [n].slice(HEADING_PREFIX.length)
-      .trim()
-      .toLowerCase(),
-  );
+  const names = Object.values(MESSAGES).flatMap((m) => {
+    const line = m.reflectionTemplate.filter((l) => l.startsWith(HEADING_PREFIX))[n];
+    // 見出しが足りないテンプレートがあっても、読み込みで落とさない（その言語の見出しは読まない）
+    return line === undefined ? [] : [line.slice(HEADING_PREFIX.length).trim().toLowerCase()];
+  });
   return new Set(names);
 }
 
