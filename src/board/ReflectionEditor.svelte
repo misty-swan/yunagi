@@ -184,7 +184,8 @@
 
 <div class="ref-root">
   <div class="ref-ed" bind:this={host}></div>
-  <VimBadge mode={vimMode} />
+  <!-- 文が長くて振り返りの領域がスクロールしても、見える範囲の右下に残す（高さ 0 の枠を下端に貼り付ける） -->
+  <div class="ref-badge"><VimBadge mode={vimMode} /></div>
 </div>
 
 <style>
@@ -194,6 +195,13 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+  }
+
+  .ref-badge {
+    position: sticky;
+    bottom: 0;
+    flex: none;
+    height: 0;
   }
 
   .ref-ed {

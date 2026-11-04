@@ -4,8 +4,9 @@
 // - Mod を使う標準のショートカットを Vim が横取りしない：Vim は押したキーを使うと、それ以上キーを
 //   渡さない（アプリ全体のキー処理に届かない）。Windows・Linux の Mod は Ctrl なので、Vim の Ctrl のキー
 //   （`<C-v>` の矩形選択、`<C-a>` `<C-x>` の数の増減、`<C-d>` `<C-u>` のスクロール、挿入モードの `<C-w>` など）
-//   を、読み込み時に一度だけ外す。残すのは `<C-r>`（やり直し。4.2）と `<C-[>`（Esc）だけ。macOS の Mod は
-//   ⌘ で Vim は使わないので、外さない。
+//   は、エディタが押下を Vim に渡す関数（`Vim.vimKeyFromEvent`）を包んで、Vim に渡さない（検索欄などの
+//   Vim の内部の処理は、この関数を通らないので変わらない）。受けるのは `<C-r>`（やり直し。4.2）と
+//   `<C-[>`（Esc）だけ。macOS の Mod は ⌘ で Vim は使わないので、そのまま。
 // - Yunagi 固有のキー `<Space>t` `<Space>b` `<Space>h`（ノートだけ。4.2）：Vim の対応表は全体で1つなので、
 //   読み込み時に一度だけ登録し、動かすエディタはその時のエディタ（`setVimHost`）で決める。振り返り欄は
 //   何も登録しない（キーは受けて、何も起こさない。登録が無いと `<Space>` が右への移動、`t` が文字の検索に
@@ -16,7 +17,7 @@ import { Facet, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import type { ItemKind } from "./bindings";
-import { isMacPlatform } from "./keys";
+import { composing, isMacPlatform } from "./keys";
 
 /** Vim のモード（操作仕様書 4.1 の表示）。 */
 export type VimMode = "normal" | "insert" | "visual";
@@ -49,15 +50,6 @@ export function leavesToApp(e: Pick<KeyboardEvent, "ctrlKey" | "altKey" | "key">
   return !mac && e.ctrlKey && !e.altKey && !VIM_CTRL_KEYS.includes(e.key.toLowerCase());
 }
 
-/**
- * 日本語入力の変換中の押下か（WebKit 系では keyCode 229 で届くことがある。keys.ts の `composing` と同じ）。
- * 挿入モードの変換中の Esc は変換の取り消しなので、Vim の Esc（挿入モードを抜ける）として扱わない
- * （操作仕様書 3章）。Vim が自分で作る、押下の情報を持たない擬似の押下は、どちらの項目も無いので除かれない。
- */
-function composingKey(e: Pick<KeyboardEvent, "isComposing" | "keyCode">): boolean {
-  return e.isComposing === true || e.keyCode === 229;
-}
-
 let ready = false;
 
 /**
@@ -71,9 +63,19 @@ function setup() {
   ready = true;
   const mac = isMacPlatform();
   const keyOf = Vim.vimKeyFromEvent;
-  // 変換中の押下を除くのは挿入モードだけ（ノーマルモード中の日本語入力の扱いは 4.4 の 2。YUN-85 が作る）
-  Vim.vimKeyFromEvent = (e, state) =>
-    leavesToApp(e, mac) || (state?.insertMode === true && composingKey(e)) ? undefined : keyOf(e, state);
+  Vim.vimKeyFromEvent = (e, state) => {
+    if (leavesToApp(e, mac)) return undefined;
+    // 挿入モードの変換中の Esc は変換の取り消しなので、Vim の Esc として扱わない（操作仕様書 3章）。除くのは
+    // 挿入モードだけ（ノーマルモード中の日本語入力の扱いは 4.4 の 2。YUN-85 が作る）。Vim が自分で作る、
+    // 押下の情報を持たない擬似の押下は、どちらの項目も無いので除かれない
+    if (state?.insertMode === true && composing(e)) return undefined;
+    // Caps Lock が入っていると Ctrl+R の `key` は "R" で届き、Vim の `<C-R>`（割当なし）になってしまう
+    if (e.ctrlKey && !e.shiftKey && e.key.length === 1 && e.key !== e.key.toLowerCase()) {
+      const { ctrlKey, altKey, metaKey, shiftKey, code } = e;
+      return keyOf({ ctrlKey, altKey, metaKey, shiftKey, code, key: e.key.toLowerCase() } as KeyboardEvent, state);
+    }
+    return keyOf(e, state);
+  };
   // `<Space>`（右へ移動。4.2 の表には無い）は、押した時点で `l` に当たってしまい、`<Space>t` などの続きを
   // 待たない。この標準の割当だけを外す（1つだけなら、Vim の内部の記録とずれない）
   Vim.unmap("<Space>", undefined as never);
@@ -85,7 +87,8 @@ function setup() {
     if (host === undefined) return;
     const visual = getVimState(cm)?.visualMode === true;
     void host.send(v, kind).finally(() => {
-      if (visual && getVimState(cm)?.visualMode === true) Vim.exitVisualMode(cm as never);
+      // 送っている間に日を移った・Vim モードを切り替えたなら、Vim が作り直されている（古いほうは触らない）
+      if (visual && getCM(v) === cm && getVimState(cm)?.visualMode === true) Vim.exitVisualMode(cm as never);
     });
   };
   act("yunagiToTodo", send("todo"));
@@ -139,7 +142,9 @@ const modeListener = ViewPlugin.fromClass(
         this.#off = null;
         return;
       }
-      const on = (e: { mode: string }) => tell(e.mode === "insert" ? "insert" : e.mode === "visual" ? "visual" : "normal");
+      // 上書き（R）の replace は、文字を入れるモードなので INSERT として出す（`vimModeOf` と同じ）
+      const on = (e: { mode: string }) =>
+        tell(e.mode === "insert" || e.mode === "replace" ? "insert" : e.mode === "visual" ? "visual" : "normal");
       cm.on("vim-mode-change", on);
       this.#off = () => cm.off("vim-mode-change", on);
       tell(vimModeOf(v) ?? "normal");
@@ -156,7 +161,7 @@ const modeListener = ViewPlugin.fromClass(
  * 空白が本文に入ってしまう。Vim が使わなかった Space だけをここで止める（挿入モードの Space は文字なので通す）。
  */
 const keepSpaceOut = EditorView.domEventHandlers({
-  keydown: (e, v) => e.key === " " && !e.isComposing && !e.ctrlKey && !e.metaKey && !e.altKey && vimModeOf(v) !== "insert",
+  keydown: (e, v) => e.key === " " && !composing(e) && !e.ctrlKey && !e.metaKey && !e.altKey && vimModeOf(v) !== "insert",
 });
 
 /** Vim のキーを足す拡張（エディタの標準のキーより先に試す位置に置く）。 */

@@ -604,30 +604,30 @@
 <svelte:window onkeydown={onKeydown} onpointerdown={onPointerDown} onblur={() => closeMenu(false)} />
 
 <div class="note-root">
-<div class="note" data-font={applied} data-ready={ready ? "" : undefined} data-narrow={narrow ? "" : undefined}>
-  <div class="wrap">
-    <div class="note-ed" bind:this={host}></div>
-    <aside class="note-side">
-      <nav class="outline" aria-label={m.labels.outline}>
-        <div class="label">{m.labels.outline}</div>
-        {#each heads as h (h.line)}
-          <button type="button" class:cur={h.line === cur} aria-current={h.line === cur ? "location" : undefined} onclick={() => toHeading(h)}>
-            <span class="ot">{h.time}</span>
-            {#if h.title !== ""}<span class="tt">{h.title}</span>{/if}
-          </button>
-        {/each}
-      </nav>
-      <section class="sent" aria-label={m.labels.sent}>
-        <div class="label">{m.labels.sent}</div>
-        <div class="counts">
-          <span data-kind="todo">{m.labels.hint.toTodo} <b>{sent.todo}</b></span>
-          <span data-kind="blocker">{m.labels.hint.toBlockers} <b>{sent.blocker}</b></span>
-        </div>
-      </section>
-    </aside>
+  <div class="note" data-font={applied} data-ready={ready ? "" : undefined} data-narrow={narrow ? "" : undefined}>
+    <div class="wrap">
+      <div class="note-ed" bind:this={host}></div>
+      <aside class="note-side">
+        <nav class="outline" aria-label={m.labels.outline}>
+          <div class="label">{m.labels.outline}</div>
+          {#each heads as h (h.line)}
+            <button type="button" class:cur={h.line === cur} aria-current={h.line === cur ? "location" : undefined} onclick={() => toHeading(h)}>
+              <span class="ot">{h.time}</span>
+              {#if h.title !== ""}<span class="tt">{h.title}</span>{/if}
+            </button>
+          {/each}
+        </nav>
+        <section class="sent" aria-label={m.labels.sent}>
+          <div class="label">{m.labels.sent}</div>
+          <div class="counts">
+            <span data-kind="todo">{m.labels.hint.toTodo} <b>{sent.todo}</b></span>
+            <span data-kind="blocker">{m.labels.hint.toBlockers} <b>{sent.blocker}</b></span>
+          </div>
+        </section>
+      </aside>
+    </div>
   </div>
-</div>
-<VimBadge mode={vimMode} />
+  <VimBadge mode={vimMode} />
 </div>
 
 {#if menu !== null}

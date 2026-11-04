@@ -200,6 +200,18 @@ test("挿入モードの日本語入力の変換中の Esc は、変換の取り
   expect(vimModeOf(v)).toBe("normal");
 });
 
+test("R（上書き）は INSERT として知らせる。Caps Lock が入っていても Ctrl+R はやり直し", () => {
+  const modes: VimMode[] = [];
+  const v = make("abc", modes);
+  keys(v, "R");
+  expect(modes.at(-1)).toBe("insert");
+  expect(vimModeOf(v)).toBe("insert");
+  keys(v, "<Esc>", "x", "u");
+  expect(v.state.doc.toString()).toBe("abc");
+  expect(press(v, { key: "R", code: "KeyR", ctrlKey: true }).consumed).toBe(true);
+  expect(v.state.doc.toString()).toBe("bc");
+});
+
 test("Ctrl+R はやり直し、Ctrl+[ は Esc", () => {
   const v = make("abc");
   keys(v, "x", "u");
