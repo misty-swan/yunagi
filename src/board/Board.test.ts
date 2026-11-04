@@ -272,6 +272,121 @@ test("持ち越し済みの項目を完了にしようとすると、上部の�
   expect($(".r-todo .item")?.classList.contains("done")).toBe(false);
 });
 
+test("持ち越し済みの項目と取りやめた TODO は、本文を変える操作（文字・Shift 付きの文字・削除キー・貼り付け・切り取り）を知らせて拒み、行の途中の Enter は分けずに直下に足す", async () => {
+  const { calls, notice } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [
+          bi(item(C, "持ち越した"), { carriedTo: { id: D, date: "2026-11-04" } }),
+          bi(item(B, "やめた", { status: "dropped", closeReason: "dropped" })),
+        ],
+      },
+    },
+  });
+  const tryKey = (row: HTMLElement, init: KeyboardEventInit) => {
+    const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    row.dispatchEvent(e);
+    flushSync();
+    return e.defaultPrevented;
+  };
+  const rows = $$(".r-todo .item");
+  const keys: KeyboardEventInit[] = [
+    { key: "a" },
+    { key: "A", shiftKey: true },
+    { key: " " },
+    { key: "Backspace" },
+    { key: "Delete" },
+  ];
+  const expected = ["11.04 Wed へ持ち越し済みです", "持ち越しの見直しで閉じた TODO は変更できません"];
+  for (const [i, row] of rows.entries()) {
+    for (const init of keys) {
+      notice.text = "";
+      expect(tryKey(row, init)).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    // jsdom には DragEvent が無いので、運ぶものの種類（dataTransfer.types）を足した Event で確かめる
+    const drag = (type: string, types: string[]) => {
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, "dataTransfer", { value: { types } });
+      row.dispatchEvent(e);
+      flushSync();
+      return e;
+    };
+    for (const type of ["paste", "cut"]) {
+      notice.text = "";
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      row.dispatchEvent(e);
+      flushSync();
+      expect(e.defaultPrevented).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    for (const types of [["text/plain"], ["Files"]]) {
+      notice.text = "";
+      expect(drag("dragover", types).defaultPrevented).toBe(true);
+      expect(drag("drop", types).defaultPrevented).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    // 運ぶものが無い drag（行の並べ替えなど）は、受けず知らせない
+    notice.text = "";
+    expect(drag("dragover", []).defaultPrevented).toBe(false);
+    expect(drag("drop", []).defaultPrevented).toBe(false);
+    expect(notice.text).toBe("");
+    // 貼り付け・切り取りのキー、日本語入力の変換、AltGr（Ctrl+Alt）で打つ文字も知らせる
+    for (const init of [
+      { key: "v", code: "KeyV", ctrlKey: true },
+      { key: "x", code: "KeyX", ctrlKey: true },
+      { key: "Process", keyCode: 229 },
+      { key: "@", ctrlKey: true, altKey: true },
+    ]) {
+      notice.text = "";
+      tryKey(row, init);
+      expect(notice.text).toBe(expected[i]);
+    }
+    // Option+Backspace も拒む。Mod との組み合わせ（コピーなど）と、Windows・Linux の Alt+文字は知らせず、止めない
+    notice.text = "";
+    expect(tryKey(row, { key: "Backspace", altKey: true })).toBe(true);
+    expect(notice.text).toBe(expected[i]);
+    for (const init of [{ key: "c", code: "KeyC", ctrlKey: true }, { key: "f", altKey: true }]) {
+      notice.text = "";
+      expect(tryKey(row, init)).toBe(false);
+      expect(notice.text).toBe("");
+    }
+    // 行の中のボタンのキーは、行が奪わない
+    const btn = row.querySelector<HTMLElement>(".chk")!;
+    const inner = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    btn.dispatchEvent(inner);
+    expect(inner.defaultPrevented).toBe(false);
+  }
+  expect(calls.some((c) => c.cmd === "save_item" || c.cmd === "add_item")).toBe(false);
+  expect(rows.map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "やめた"]);
+  // 行の途中の Enter は、本文を変えないので知らせず、分けずに直下へ空の項目を足す
+  notice.text = "";
+  expect(tryKey(rows[0], { key: "Enter" })).toBe(true);
+  expect(notice.text).toBe("");
+  await until(() => $$(".r-todo .item").length === 3);
+  expect($$(".r-todo .item").map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "", "やめた"]);
+});
+
+test("持ち越し済みの障害の解消メモを押しても、入力欄を開かず知らせる", async () => {
+  const { notice } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        blockers: [
+          bi(item(A, "詰まり", { kind: "blocker", status: "resolved", resolutionNote: "聞いた" }), {
+            carriedTo: { id: D, date: "2026-11-04" },
+          }),
+        ],
+      },
+    },
+  });
+  $(".r-blk .item .memo")!.click();
+  flushSync();
+  expect($(".r-blk .memo-edit")).toBeNull();
+  expect(notice.text).toBe("11.04 Wed へ持ち越し済みです");
+});
+
 test("空の TODO で Enter を押して入力すると項目を作り、チェック欄で完了にする", async () => {
   const { calls } = await start();
   $(".r-todo .empty")!.click();
