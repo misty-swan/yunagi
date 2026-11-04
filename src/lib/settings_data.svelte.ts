@@ -129,6 +129,13 @@ export class DataSettings {
     this.flow = { kind: "restore", backup };
   }
 
+  /** 設定を閉じるとき：確かめる画面と結果を捨てる（開き直したときに、前の確認が残らないように）。 */
+  reset() {
+    if (this.busy !== null) return;
+    this.flow = null;
+    this.result = null;
+  }
+
   /** 確かめる画面を閉じる（何もしない）。 */
   cancel() {
     if (this.busy === null) this.flow = null;

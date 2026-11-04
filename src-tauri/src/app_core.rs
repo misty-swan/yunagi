@@ -486,10 +486,12 @@ impl AppCore {
                     chain(&e)
                 );
                 data_dir_rejected(&e)
-            })
+            })?;
+            // 開くデータベースは別のものなので、その日の定期バックアップを作り直す（最中の印を持っている
+            // 間に戻す。手放した後だと、始まった定期バックアップと重なって2回作る）
+            lock(&self.backup).done_for = None;
+            Ok(())
         })?;
-        // 開いたデータベースは別のものなので、その日の定期バックアップを作り直す
-        lock(&self.backup).done_for = None;
         self.notify_changed(ChangeSource::Screen);
         Ok(())
     }

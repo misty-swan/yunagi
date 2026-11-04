@@ -383,8 +383,10 @@ struct SettingsSaved {
 }
 
 impl Changes for SettingsSaved {
+    /// 設定は項目・ノートなどのデータではないので、`changed` は出さない（画面は設定を自分で当てる。
+    /// 出すと、ボードと件数を読み直し、入力中の画面を乱す）。
     fn changed(&self) -> bool {
-        self.changed
+        false
     }
 }
 

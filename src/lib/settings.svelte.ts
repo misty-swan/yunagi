@@ -47,10 +47,17 @@ function snapshot(patch: SettingsPatch): SettingsPatch {
 export class SettingsStore {
   /** 起動のときの読み込みを終えたか（読めなかったときも終えたことになる）。 */
   loaded = $state(false);
+
+  /** 読み込み直す前の状態に戻す（データベースを開き直す前に、外枠を出さずに待たせるため）。 */
+  unload() {
+    this.loaded = false;
+  }
   /** 最後の保存の失敗（次の保存を始めると消す）。 */
   error = $state<CallError | null>(null);
   #queue: Promise<void> = Promise.resolve();
   #seq = 0;
+  /** 最後に保存できた（または読み込んだ）値。失敗したときの戻す先。 */
+  #committed: SettingsPatch = {};
   #latest: Record<string, number> = {};
 
   /**
@@ -64,6 +71,18 @@ export class SettingsStore {
     } catch {
       // 既定の値で続ける
     }
+    this.#committed = snapshot({
+      dayBoundary: 0,
+      meterStart: 0,
+      meterEnd: 0,
+      updateCheck: 0,
+      theme: 0,
+      fontSize: 0,
+      noteFont: 0,
+      layout: 0,
+      carryoverReviewThreshold: 0,
+      sidebarOpen: 0,
+    } as unknown as SettingsPatch);
     beforeShown?.();
     this.loaded = true;
   }
@@ -83,10 +102,14 @@ export class SettingsStore {
       if (!opts.silent) this.error = null;
       try {
         await core.saveSettings(patch);
+        Object.assign(this.#committed, patch);
         return true;
       } catch (e) {
+        // 戻す先は、最後に保存できた値（先の保存が失敗していたら、保存されなかった値には戻さない）
         const revert: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(before)) if (this.#latest[key] === mine) revert[key] = value;
+        for (const [key, value] of Object.entries(before)) {
+          if (this.#latest[key] === mine) revert[key] = key in this.#committed ? (this.#committed as Record<string, unknown>)[key] : value;
+        }
         applyPatch(revert as SettingsPatch);
         if (!opts.silent) this.error = errorOf(e);
         return false;

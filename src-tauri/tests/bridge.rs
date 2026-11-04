@@ -1530,9 +1530,10 @@ fn settings_commands(default_dir: &Path) {
     expected["locale"] = json!("ja");
     expected["noteFont"] = json!("mono");
     assert_eq!(saved, expected);
-    assert_eq!(h.next_event(), changed_by("screen"));
+    // 設定はボードのデータではないので、`changed` は出さない（画面は自分で当てる）
+    h.assert_no_event();
     assert_eq!(h.ok("get_settings", json!({})), expected);
-    // 同じ値を保存しても、変わっていないので知らせない
+    // 同じ値を保存しても、知らせない
     h.ok("save_settings", json!({ "patch": { "theme": "dark" } }));
     h.assert_no_event();
 
@@ -1564,7 +1565,6 @@ fn settings_commands(default_dir: &Path) {
         "save_settings",
         json!({ "patch": { "dayBoundary": "23:59" } }),
     );
-    assert_eq!(h.next_event(), changed_by("screen"));
     let after = h.today();
     if after != before {
         assert_eq!(h.next_event(), ("today-changed", json!({ "today": after })));

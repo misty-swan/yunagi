@@ -25,6 +25,18 @@ test("続けて同じ欄を変え、先の保存だけ失敗しても、あと�
   expect(prefs.fontSize).toBe(18);
 });
 
+test("先の保存も失敗していたら、保存されなかった値には戻さず、最後に保存できた値に戻す", async () => {
+  mockIPC(() => {
+    throw { kind: "storage", detail: "x" };
+  });
+  const store = new SettingsStore();
+  await store.load(); // 読めなくても、いまの値（15）を最後に保存できた値とする
+  const a = store.save({ fontSize: 16 });
+  const b = store.save({ fontSize: 17 });
+  await Promise.all([a, b]);
+  expect(prefs.fontSize).toBe(15);
+});
+
 test("ほかの欄の新しい保存があっても、失敗した欄は戻し、silent なら失敗を持たない", async () => {
   mockIPC(() => {
     throw { kind: "storage", detail: "x" };

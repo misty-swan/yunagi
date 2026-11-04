@@ -14,6 +14,7 @@
   import {
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
+    minutesOf,
     prefs,
     type Layout,
     type NoteFont,
@@ -56,6 +57,7 @@
     if (!wasOpen) return;
     wasOpen = false;
     data.stop();
+    data.reset();
     const back = panel.returnFocus;
     panel.returnFocus = null;
     const a = document.activeElement;
@@ -137,8 +139,20 @@
   /** 空や読めない値は変えない（時刻の欄を消したとき）。 */
   function saveTime(e: Event, field: "dayBoundary" | "meterStart" | "meterEnd") {
     const v = pickTime(e);
-    if (/^\d\d:\d\d$/.test(v)) void store.save({ [field]: v });
-    else (e.currentTarget as HTMLInputElement).value = prefs[field];
+    const el = e.currentTarget as HTMLInputElement;
+    const minutes = minutesOf(v);
+    // 始業が終業より前でない組は、コアに送らず、描きもしない（凪メーターが一瞬おかしくならないように）
+    const start = field === "meterStart" ? minutes : minutesOf(prefs.meterStart);
+    const end = field === "meterEnd" ? minutes : minutesOf(prefs.meterEnd);
+    const meterBad = field !== "dayBoundary" && start !== null && end !== null && start >= end;
+    if (minutes === null) {
+      el.value = prefs[field];
+    } else if (meterBad) {
+      el.value = prefs[field];
+      store.error = { kind: "invalid_argument", reason: "meter_hours" };
+    } else {
+      void store.save({ [field]: v });
+    }
   }
 
   function saveThreshold(e: Event) {

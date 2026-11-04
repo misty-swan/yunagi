@@ -72,14 +72,23 @@
   // から描く）。読めなければ既定の値で続ける
   let settingsStarted = false;
   $effect(() => {
-    if (!ready || settingsStarted) return;
+    if (!ready) {
+      // 開き直すことになった（別のデータベースを開くかもしれない）ので、開けたらもう一度読む
+      if (settingsStarted) untrack(() => settingsStore.unload());
+      settingsStarted = false;
+      return;
+    }
+    if (settingsStarted) return;
     settingsStarted = true;
     untrack(() => {
       void settingsStore.load(() => {
         // 保存してあった、広いウィンドウでのサイドバーの開閉（最初に外枠を描くときから当てる）。
-        // 利用者が開け閉めしたら保存する
+        // 利用者が開け閉めしたら保存する。保存できなかったら、画面の開閉も戻す
         shell.setWideOpen(prefs.sidebarOpen);
-        shell.onWideOpenChange = (open) => void settingsStore.save({ sidebarOpen: open }, { silent: true });
+        shell.onWideOpenChange = (open) =>
+          void settingsStore.save({ sidebarOpen: open }, { silent: true }).then((ok) => {
+            if (!ok) shell.setWideOpen(prefs.sidebarOpen);
+          });
       });
     });
   });
