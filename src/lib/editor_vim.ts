@@ -16,6 +16,7 @@ import { Facet, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import type { ItemKind } from "./bindings";
+import { isMacPlatform } from "./keys";
 
 /** Vim のモード（操作仕様書 4.1 の表示）。 */
 export type VimMode = "normal" | "insert" | "visual";
@@ -48,6 +49,15 @@ export function leavesToApp(e: Pick<KeyboardEvent, "ctrlKey" | "altKey" | "key">
   return !mac && e.ctrlKey && !e.altKey && !VIM_CTRL_KEYS.includes(e.key.toLowerCase());
 }
 
+/**
+ * 日本語入力の変換中の押下か（WebKit 系では keyCode 229 で届くことがある。keys.ts の `composing` と同じ）。
+ * 挿入モードの変換中の Esc は変換の取り消しなので、Vim の Esc（挿入モードを抜ける）として扱わない
+ * （操作仕様書 3章）。Vim が自分で作る、押下の情報を持たない擬似の押下は、どちらの項目も無いので除かれない。
+ */
+function composingKey(e: Pick<KeyboardEvent, "isComposing" | "keyCode">): boolean {
+  return e.isComposing === true || e.keyCode === 229;
+}
+
 let ready = false;
 
 /**
@@ -59,9 +69,11 @@ let ready = false;
 function setup() {
   if (ready) return;
   ready = true;
-  const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+  const mac = isMacPlatform();
   const keyOf = Vim.vimKeyFromEvent;
-  Vim.vimKeyFromEvent = (e, state) => (leavesToApp(e, mac) ? undefined : keyOf(e, state));
+  // 変換中の押下を除くのは挿入モードだけ（ノーマルモード中の日本語入力の扱いは 4.4 の 2。YUN-85 が作る）
+  Vim.vimKeyFromEvent = (e, state) =>
+    leavesToApp(e, mac) || (state?.insertMode === true && composingKey(e)) ? undefined : keyOf(e, state);
   // `<Space>`（右へ移動。4.2 の表には無い）は、押した時点で `l` に当たってしまい、`<Space>t` などの続きを
   // 待たない。この標準の割当だけを外す（1つだけなら、Vim の内部の記録とずれない）
   Vim.unmap("<Space>", undefined as never);

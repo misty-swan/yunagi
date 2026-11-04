@@ -117,35 +117,44 @@ kbd {
   - ブロックのカーソル：夕陽色を薄く塗る。フォーカスが外れたら、線で囲むだけ
   - `/` `?` の検索欄は、エディタの下端に出る（Vim の下端の帯は使わない。モードは VimBadge）
 */
-.cm-editor .cm-scroller .cm-fat-cursor {
+.cm-editor.cm-editor .cm-scroller .cm-fat-cursor {
   background: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
-.cm-editor:not(.cm-focused) .cm-scroller .cm-fat-cursor {
+.cm-editor.cm-editor:not(.cm-focused) .cm-scroller .cm-fat-cursor {
   background: none;
   outline: 1px solid var(--accent-strong);
 }
 
-.cm-editor .cm-panels {
+/*
+  CodeMirror の既定の色（ライト用の `&light .cm-panels` など）は、クラス3つ分の強さで付く。アプリはダーク用の
+  設定（darkTheme）を使わないので、負けると、ダークでも明るい灰色の検索欄になる。そのため `.cm-editor` を
+  重ねて同じ強さにする（CodeMirror の style は head の先頭に入るので、同じ強さなら、これが勝つ）。
+*/
+.cm-editor.cm-editor .cm-panels {
   background: var(--surface);
   color: var(--text);
   border-color: var(--rule);
 }
 
-.cm-editor .cm-vim-panel {
+.cm-editor.cm-editor .cm-panels-bottom {
+  border-top: 1px solid var(--rule);
+}
+
+.cm-editor.cm-editor .cm-vim-panel {
   font-family: var(--font-mono);
   font-size: var(--fs-small);
 }
 
-.cm-editor .cm-vim-panel input {
+.cm-editor.cm-editor .cm-vim-panel input {
   font: inherit;
   color: var(--text);
 }
 
-.cm-editor .cm-searchMatch {
+.cm-editor.cm-editor .cm-searchMatch {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-.cm-editor .cm-searchMatch.cm-searchMatch-selected {
+.cm-editor.cm-editor .cm-searchMatch.cm-searchMatch-selected {
   background: color-mix(in srgb, var(--accent) 55%, transparent);
 }

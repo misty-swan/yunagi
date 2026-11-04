@@ -791,6 +791,53 @@ test("Vim モードでも、Mod を使うショートカットは Vim が横取�
   expect(view().state.doc.toString()).toBe("- 調べる\n- 待つ");
 });
 
+test("Vim モードでも、割当を変えたキー（Alt を使うもの）はノーマル・ビジュアルモードで動き、本文とモードを変えない", async () => {
+  prefs.vimMode = true;
+  prefs.shortcuts = { toTodo: "Alt+T", timeHeading: "Mod+Enter" };
+  try {
+    const { core, view } = await start("- 一\n- 二");
+    await until(() => badge() === "NORMAL");
+    const content = q(".note-ed .cm-content")!;
+    content.focus();
+    view().dispatch({ selection: { anchor: 0 } });
+    press({ key: "t", code: "KeyT", altKey: true }, content);
+    await until(() => core.sends.length === 1);
+    expect(core.sends[0]).toMatchObject({ text: "- 一", kind: "todo" });
+    expect(badge()).toBe("NORMAL");
+    // ビジュアルモードでも同じ（選んだ行を送る）
+    vimKeys(view(), "j", "V");
+    view().dispatch({ selection: { anchor: view().state.doc.line(2).from, head: view().state.doc.line(2).to } });
+    press({ key: "t", code: "KeyT", altKey: true }, content);
+    await until(() => core.sends.length === 2);
+    expect(badge()).toBe("VISUAL");
+    // 見出しも、変えたキーで入る（ノーマルモードのまま）
+    vimKeys(view(), "<Esc>");
+    press({ key: "Enter", code: "Enter", keyCode: 13, ctrlKey: true }, content);
+    expect(view().state.doc.toString()).toContain("## 14:05 ");
+    expect(badge()).toBe("NORMAL");
+  } finally {
+    prefs.shortcuts = {};
+  }
+});
+
+test("<Space>t <Space>b は Vim が作る選択のとおりに送る：行ビジュアルは選んだ行だけ、gg V G は全行", async () => {
+  prefs.vimMode = true;
+  const { core, view } = await start("- 一\n- 二\n- 三");
+  await until(() => badge() === "NORMAL");
+  // 2 行目で V：その行だけ（選択範囲が次の行の先頭に届いても、次の行は送らない）
+  view().dispatch({ selection: { anchor: view().state.doc.line(2).from } });
+  vimKeys(view(), "V");
+  vimKeys(view(), "<Space>t");
+  await until(() => core.sends.length === 1);
+  expect(core.sends[0]).toMatchObject({ text: "- 二", kind: "todo" });
+  await until(() => badge() === "NORMAL");
+  // gg V G：全行（空の行は送らない）
+  vimKeys(view(), "g", "g", "V", "G");
+  vimKeys(view(), "<Space>b");
+  await until(() => core.sends.length === 3);
+  expect(core.sends.slice(1).map((s) => [s.text, s.kind])).toEqual([["- 一", "blocker"], ["- 三", "blocker"]]);
+});
+
 test("<Space>t <Space>b は現在行（ビジュアルモードでは選んだ行）を TODO・障害へ送り、<Space>h は見出しを入れて挿入モードにする", async () => {
   prefs.vimMode = true;
   const { core, view } = await start("- 一\n- 二\n- 三");

@@ -63,6 +63,73 @@ test("基本の移動と編集が動く", () => {
   expect(vimModeOf(v)).toBe("normal");
 });
 
+// 操作仕様書 4.2 の表。位置は `|` で示す（`|` の直後の文字がカーソル）。画面の配置が要る j / k は含めない
+// （jsdom には配置が無く、正しく動かない）。挿入モードの入力は、ブラウザが入れるので、`ins` で直接入れる。
+const TABLE: { name: string; from: string; keys: string[]; ins?: string; to: string; mode?: VimMode }[] = [
+  { name: "w b e", from: "|one two three", keys: ["w", "w", "b", "e"], to: "one tw|o three" },
+  { name: "0 ^ $", from: "  one |two", keys: ["$"], to: "  one tw|o" },
+  { name: "0", from: "  one |two", keys: ["0"], to: "|  one two" },
+  { name: "^", from: "  one |two", keys: ["^"], to: "  |one two" },
+  { name: "gg G", from: "a\n|b\nc", keys: ["G", "g", "g"], to: "|a\nb\nc" },
+  { name: "{ }", from: "|a\nb\n\nc\nd", keys: ["}"], to: "a\nb\n|\nc\nd" },
+  { name: "{", from: "a\nb\n\nc\n|d", keys: ["{"], to: "a\nb\n|\nc\nd" },
+  { name: "f t", from: "|abc,def", keys: ["f", ",", "t", "f"], to: "abc,d|ef" },
+  { name: "回数 3w", from: "|a b c d e", keys: ["3", "w"], to: "a b c |d e" },
+  { name: "x", from: "|abc", keys: ["x"], to: "|bc" },
+  { name: "dd", from: "a\n|b\nc", keys: ["d", "d"], to: "a\n|c" },
+  { name: "2dd", from: "|a\nb\nc", keys: ["2", "d", "d"], to: "|c" },
+  { name: "dw", from: "|one two", keys: ["d", "w"], to: "|two" },
+  { name: "cw", from: "|one two", keys: ["c", "w"], ins: "1", to: "1| two", mode: "insert" },
+  { name: "cc", from: "a\n|b\nc", keys: ["c", "c"], ins: "X", to: "a\nX|\nc", mode: "insert" },
+  { name: "yy p", from: "|a\nb", keys: ["y", "y", "p"], to: "a\n|a\nb" },
+  { name: "yy P", from: "a\n|b", keys: ["y", "y", "P"], to: "a\n|b\nb" },
+  { name: "u", from: "|abc", keys: ["x", "x", "u"], to: "|bc" },
+  { name: ".", from: "|a b c", keys: ["d", "w", "."], to: "|c" },
+  { name: ">", from: "|a", keys: [">", ">"], to: "  |a" },
+  { name: "<", from: "  |a", keys: ["<", "<"], to: "|a" },
+  { name: "i", from: "a|bc", keys: ["i"], ins: "X", to: "aX|bc", mode: "insert" },
+  { name: "a", from: "a|bc", keys: ["a"], ins: "X", to: "abX|c", mode: "insert" },
+  { name: "I", from: "  a|bc", keys: ["I"], ins: "X", to: "  X|abc", mode: "insert" },
+  { name: "A", from: "a|bc", keys: ["A"], ins: "X", to: "abcX|", mode: "insert" },
+  { name: "o", from: "a|bc\nd", keys: ["o"], ins: "X", to: "abc\nX|\nd", mode: "insert" },
+  { name: "O", from: "a|bc\nd", keys: ["O"], ins: "X", to: "X|\nabc\nd", mode: "insert" },
+  { name: "v d", from: "|abcd", keys: ["v", "l", "d"], to: "|cd" },
+  { name: "V d", from: "a\n|b\nc", keys: ["V", "d"], to: "a\n|c" },
+];
+
+/** `|` の位置をカーソルにして、`|` を除いた本文を返す。 */
+function at(spec: string): { doc: string; pos: number } {
+  return { doc: spec.replace("|", ""), pos: spec.indexOf("|") };
+}
+
+test.each(TABLE)("操作仕様書 4.2 の表：$name", ({ from, keys: ks, ins, to, mode }) => {
+  const start = at(from);
+  const v = make(start.doc);
+  v.dispatch({ selection: { anchor: start.pos } });
+  keys(v, ...ks);
+  if (ins !== undefined) v.dispatch({ changes: { from: v.state.selection.main.head, insert: ins }, selection: { anchor: v.state.selection.main.head + ins.length } });
+  const end = at(to);
+  expect(v.state.doc.toString()).toBe(end.doc);
+  expect(v.state.selection.main.head).toBe(end.pos);
+  expect(vimModeOf(v)).toBe(mode ?? "normal");
+});
+
+test("操作仕様書 4.2 の表：Ctrl+R のやり直し、検索の n / N、? の逆向き検索", () => {
+  const v = make("foo bar\nbaz foo\nfoo");
+  keys(v, "x", "u");
+  expect(v.state.doc.toString()).toBe("foo bar\nbaz foo\nfoo");
+  keys(v, "<C-r>");
+  expect(v.state.doc.toString()).toBe("oo bar\nbaz foo\nfoo");
+  // ? は後ろ向きに探す
+  keys(v, "G", "0");
+  keys(v, "?");
+  const input = document.querySelector<HTMLInputElement>(".cm-vim-panel input")!;
+  input.value = "foo";
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true, cancelable: true }));
+  // 3 行目の先頭（15）から、後ろ向きに探して 2 行目の foo（11）へ
+  expect(v.state.selection.main.head).toBe(11);
+});
+
 test("モードの変化を知らせる", () => {
   const modes: VimMode[] = [];
   const v = make("abc", modes);
@@ -93,6 +160,44 @@ test("Ctrl を押していても、macOS と AltGr は Vim に渡す", () => {
   expect(leavesToApp({ ctrlKey: true, altKey: true, key: "@" }, false)).toBe(false);
   expect(leavesToApp({ ctrlKey: true, altKey: false, key: "R" }, false)).toBe(false);
   expect(leavesToApp({ ctrlKey: false, altKey: false, key: "v" }, false)).toBe(false);
+});
+
+test("Alt と ⌘ を使うキー（前日・翌日の Alt+[ ]、割当を変えたキー）は、ノーマル・ビジュアルでも Vim が使わず、外へ届く", () => {
+  const v = make("abc def", [], false);
+  const sample: KeyboardEventInit[] = [
+    { key: "[", code: "BracketLeft", altKey: true },
+    { key: "]", code: "BracketRight", altKey: true },
+    { key: "t", code: "KeyT", altKey: true },
+    { key: "T", code: "KeyT", altKey: true, shiftKey: true },
+    { key: "ArrowUp", code: "ArrowUp", altKey: true },
+    { key: "j", code: "KeyJ", metaKey: true },
+    { key: "T", code: "KeyT", metaKey: true, shiftKey: true },
+    { key: "Enter", code: "Enter", metaKey: true },
+    { key: "Backspace", code: "Backspace", metaKey: true },
+  ];
+  for (const mode of ["normal", "visual", "insert"]) {
+    if (mode === "visual") keys(v, "v");
+    if (mode === "insert") keys(v, "<Esc>", "i");
+    const before = v.state.doc.toString();
+    for (const init of sample) {
+      const r = press(v, init);
+      expect(r.consumed, `${JSON.stringify(init)} (${mode})`).toBe(false);
+    }
+    expect(v.state.doc.toString()).toBe(before);
+    expect(vimModeOf(v)).toBe(mode);
+  }
+});
+
+test("挿入モードの日本語入力の変換中の Esc は、変換の取り消しなので挿入モードを抜けない（操作仕様書 3章）", () => {
+  const v = make("abc");
+  keys(v, "i");
+  // WebKit では keyCode 229（isComposing は偽のことがある）、Chromium・Firefox では isComposing が真
+  expect(press(v, { key: "Escape", code: "Escape", isComposing: true }).consumed).toBe(false);
+  expect(press(v, { key: "Escape", code: "Escape", keyCode: 229 }).consumed).toBe(false);
+  expect(vimModeOf(v)).toBe("insert");
+  // 変換していなければ抜ける
+  press(v, { key: "Escape", code: "Escape" });
+  expect(vimModeOf(v)).toBe("normal");
 });
 
 test("Ctrl+R はやり直し、Ctrl+[ は Esc", () => {
