@@ -131,7 +131,7 @@ fn line_keys(lines: &[&str]) -> Vec<LineKey> {
 /// [`assign_in`] の、引くための表をその場で作るもの（テストで使う）。
 #[cfg(test)]
 fn assign(sends: &[&NoteSend], keys: &[LineKey]) -> Vec<Option<usize>> {
-    assign_in(sends, keys, &line_index(keys))
+    assign_in(sends, keys, &line_index(keys), &HashSet::new())
 }
 
 /// 本文のハッシュごとの、その行（0始まり）。[`assign_in`] の候補を引くのに使う。
@@ -154,7 +154,16 @@ fn line_index(keys: &[LineKey]) -> LineIndex<'_> {
 /// 本文の行を2つ送ったとき、2つの印が1つの行に重なって、もう1つの行が印の無いまま送り直せる
 /// ことが無いようにするため）。候補の行より記録が多くて相手の無い記録は、前後の行の一致する数の
 /// 多い行（同じなら上の行）に、ほかの記録と重ねて付ける。
-fn assign_in(sends: &[&NoteSend], keys: &[LineKey], by_text: &LineIndex<'_>) -> Vec<Option<usize>> {
+///
+/// `taken` は、先に別の記録が取った行（0始まり。[`DaySends::gone_marks_in`] が、送り先の項目が
+/// 削除された記録を、生きている記録の後に照合するため）。はじめの組にするときは、この行を取られた行
+/// として扱う（`sends` の記録が重ねて付けるのは変わらない）。`taken` の行は変えない。
+fn assign_in(
+    sends: &[&NoteSend],
+    keys: &[LineKey],
+    by_text: &LineIndex<'_>,
+    taken: &HashSet<usize>,
+) -> Vec<Option<usize>> {
     // 記録ごとの候補の行と、前後の行の一致する数
     let candidates: Vec<Vec<(u8, usize)>> = sends
         .iter()
@@ -179,7 +188,7 @@ fn assign_in(sends: &[&NoteSend], keys: &[LineKey], by_text: &LineIndex<'_>) -> 
         .collect();
     pairs.sort_by_key(|&(score, s, line)| (std::cmp::Reverse(score), s, line));
     let mut result: Vec<Option<usize>> = vec![None; sends.len()];
-    let mut claimed: HashSet<usize> = HashSet::new();
+    let mut claimed: HashSet<usize> = taken.clone();
     for (_, s, line) in pairs {
         if result[s].is_none() && !claimed.contains(&line) {
             result[s] = Some(line);
@@ -515,7 +524,8 @@ pub fn send(
                 ScreenSave::Stale(latest) => return Err(SendError::Stale { latest }),
             };
         let keys = line_keys(&texts);
-        let already: HashMap<usize, Ulid> = marks_for(conn, date, &keys, None)?
+        let already: HashMap<usize, Ulid> = DaySends::load(conn, date)?
+            .marks(&keys, &line_index(&keys))
             .into_iter()
             .map(|m| (m.line, m.item_id))
             .collect();
@@ -581,77 +591,77 @@ pub struct Mark {
 /// 決まりは、このモジュールの説明の「指紋と照合」。
 pub fn marks(conn: &Connection, date: LogicalDate, body: &str) -> Result<Vec<Mark>, StorageError> {
     let lines: Vec<&str> = note_body::lines(body).collect();
-    marks_for(conn, date, &line_keys(&lines), None)
+    let keys = line_keys(&lines);
+    Ok(DaySends::load(conn, date)?.marks(&keys, &line_index(&keys)))
 }
 
-/// [`marks`] の中身。本文は、各行の [`LineKey`] で受け取る。
+/// その日の記録を、送り先の項目が削除されていないもの（`live`）と、削除されたもの（`gone`）に分けた
+/// もの。それぞれの項目も持つ（印の種類を求めるもと）。
 ///
-/// `extra` は、送り先の項目が削除されていても照合に加える記録と、その項目（[`source_with_marks`] が
-/// さかのぼった先の記録に使う）。ほかの記録の後に照合するので、ほかの記録の印の行は変えない。
-fn marks_for(
-    conn: &Connection,
-    date: LogicalDate,
-    keys: &[LineKey],
-    extra: Option<(&NoteSend, &Item)>,
-) -> Result<Vec<Mark>, StorageError> {
-    Ok(DaySends::load(conn, date)?.marks(keys, extra))
-}
-
-/// その日の、送り先の項目が削除されていない記録と、その項目（印を求めるもと）。
+/// 送信済みの印は `live` だけに付ける（データモデル設計書 3章 note_send）。`gone` は、送り元の行を
+/// たどるため（持ち越した後に元の日の項目を消して整理しても、持ち越し先の依頼文の文脈を失わない
+/// ため）に、`live` の照合を終えた後で別に照合する（[`DaySends::gone_marks`]）。
 struct DaySends {
-    live: HashMap<Ulid, Item>,
-    sends: Vec<NoteSend>,
+    live: Vec<(NoteSend, ItemKind)>,
+    gone: Vec<(NoteSend, ItemKind)>,
 }
 
 impl DaySends {
     fn load(conn: &Connection, date: LogicalDate) -> Result<Self, StorageError> {
-        let live: HashMap<Ulid, Item> = item_table::list_by_date(conn, date)?
-            .into_iter()
-            .map(|i| (i.id, i))
-            .collect();
-        let sends = note_send_table::list_by_date(conn, date)?
-            .into_iter()
-            .filter(|s| live.contains_key(&s.item_id))
-            .collect();
-        Ok(Self { live, sends })
-    }
-
-    /// 本文の各行の `keys` で求めた印（行の順）。`extra` は [`marks_for`] と同じ。
-    fn marks(&self, keys: &[LineKey], extra: Option<(&NoteSend, &Item)>) -> Vec<Mark> {
-        self.marks_in(keys, &line_index(keys), extra)
-    }
-
-    /// [`DaySends::marks`] の、引くための表を受け取るもの（[`assign_in`]）。
-    fn marks_in(
-        &self,
-        keys: &[LineKey],
-        by_text: &LineIndex<'_>,
-        extra: Option<(&NoteSend, &Item)>,
-    ) -> Vec<Mark> {
-        let mut sends: Vec<&NoteSend> = self.sends.iter().collect();
-        let extra = extra.filter(|(send, _)| !self.sends.iter().any(|s| s.id == send.id));
-        if let Some((send, _)) = extra {
-            sends.push(send);
+        let sends = note_send_table::list_by_date(conn, date)?;
+        let ids: Vec<Ulid> = sends.iter().map(|s| s.item_id).collect();
+        let items = item_table::get_many(conn, &ids)?;
+        let (mut live, mut gone) = (Vec::new(), Vec::new());
+        for send in sends {
+            // 送り先の項目は外部キーで必ずある。無ければ（壊れたデータ）どちらにも入れない
+            match items.get(&send.item_id) {
+                Some(i) if i.deleted_at.is_none() => live.push((send, i.kind)),
+                Some(i) => gone.push((send, i.kind)),
+                None => {}
+            }
         }
-        let kind_of = |send: &NoteSend| match extra {
-            Some((s, item)) if s.id == send.id => item.kind,
-            _ => self.live[&send.item_id].kind,
-        };
-        let mut marks: Vec<Mark> = assign_in(&sends, keys, by_text)
-            .into_iter()
-            .zip(&sends)
-            .filter_map(|(line, send)| {
-                Some(Mark {
-                    line: line?,
-                    kind: kind_of(send),
-                    item_id: send.item_id,
-                    send_id: send.id,
-                })
-            })
-            .collect();
-        marks.sort_by_key(|m| (m.line, m.send_id));
-        marks
+        Ok(Self { live, gone })
     }
+
+    /// 本文の各行の `keys` で求めた、送り先の項目が削除されていない記録の印（行の順）。`by_text` は
+    /// `keys` から [`line_index`] で作った表（[`assign_in`]）。
+    fn marks(&self, keys: &[LineKey], by_text: &LineIndex<'_>) -> Vec<Mark> {
+        marks_of(&self.live, keys, by_text, &HashSet::new())
+    }
+
+    /// 送り先の項目が削除された記録の、行の割り当て。生きている記録の割り当て（`live`。[`DaySends::marks`]
+    /// の結果）の後に、その記録が取った行を除いて照合する（削除された項目の記録が、前後の行の一致が多い
+    /// ことで、生きている記録の行を取ってしまわないように。ほかの印の行は変えない）。印は付けない
+    /// （送り元の行をたどるためだけ）。
+    fn gone_marks(&self, keys: &[LineKey], by_text: &LineIndex<'_>, live: &[Mark]) -> Vec<Mark> {
+        let taken = live.iter().map(|m| m.line - 1).collect();
+        marks_of(&self.gone, keys, by_text, &taken)
+    }
+}
+
+/// 記録 `sends`（と、その項目の種類）の割り当てを、印にする（行の順）。`taken` は先に別の記録が取った
+/// 行（0始まり。[`assign_in`]）。
+fn marks_of(
+    sends: &[(NoteSend, ItemKind)],
+    keys: &[LineKey],
+    by_text: &LineIndex<'_>,
+    taken: &HashSet<usize>,
+) -> Vec<Mark> {
+    let refs: Vec<&NoteSend> = sends.iter().map(|(s, _)| s).collect();
+    let mut marks: Vec<Mark> = assign_in(&refs, keys, by_text, taken)
+        .into_iter()
+        .zip(sends)
+        .filter_map(|(line, (send, kind))| {
+            Some(Mark {
+                line: line?,
+                kind: *kind,
+                item_id: send.item_id,
+                send_id: send.id,
+            })
+        })
+        .collect();
+    marks.sort_by_key(|m| (m.line, m.send_id));
+    marks
 }
 
 // ---- 項目から送り元の行へ ----
@@ -681,17 +691,24 @@ pub fn source_line(conn: &Connection, item_id: Ulid) -> Result<Option<SourceLine
 }
 
 /// [`source_line`] と、送り元のノートのいまの本文の印（[`request_context`] で使い回す）。印には、
-/// 削除された項目への見つかった記録も含む（[`marks_for`] の `extra`）。
+/// 送り先の項目が削除された記録の行も、生きている記録の後に加える（[`DaySends::gone_marks`]。
+/// 「送信済みの印」ではなく、送り元の行をたどる材料）。
 fn source_with_marks(
     conn: &Connection,
     item_id: Ulid,
 ) -> Result<Option<(SourceLine, Vec<Mark>)>, StorageError> {
-    let Some((send, item)) = first_send(conn, item_id)? else {
+    let Some((send, _)) = first_send(conn, item_id)? else {
         return Ok(None);
     };
     let body = text_doc::get(conn, TextDoc::Note, send.date)?.body;
     let lines: Vec<&str> = note_body::lines(&body).collect();
-    let marked = marks_for(conn, send.date, &line_keys(&lines), Some((&send, &item)))?;
+    let keys = line_keys(&lines);
+    let index = line_index(&keys);
+    let day = DaySends::load(conn, send.date)?;
+    let mut marked = day.marks(&keys, &index);
+    let gone = day.gone_marks(&keys, &index, &marked);
+    marked.extend(gone);
+    marked.sort_by_key(|m| (m.line, m.send_id));
     let Some(line) = marked.iter().find(|m| m.send_id == send.id).map(|m| m.line) else {
         return Ok(None);
     };
@@ -765,7 +782,7 @@ pub fn source_refs<'a>(
         {
             continue;
         }
-        let Some((send, sent_to)) = first_send_from(conn, item.clone())? else {
+        let Some((send, _)) = first_send_from(conn, item.clone())? else {
             continue;
         };
         if let std::collections::hash_map::Entry::Vacant(e) = notes.entry(send.date) {
@@ -773,48 +790,23 @@ pub fn source_refs<'a>(
             let lines: Vec<&str> = note_body::lines(&body).collect();
             e.insert((line_keys(&lines), DaySends::load(conn, send.date)?));
         }
-        found.push((item.id, send, sent_to));
+        found.push((item.id, send));
     }
-    // 日ごとに、引くための表と、送り先の項目が削除されていない記録の印を1回だけ作る
-    struct Indexed<'a> {
-        keys: &'a [LineKey],
-        day: &'a DaySends,
-        index: LineIndex<'a>,
-        marks: Vec<Mark>,
-    }
-    let indexed: HashMap<LogicalDate, Indexed<'_>> = notes
+    // 日ごとに、送り先の項目が削除されていない記録の印と、削除された記録の行（生きている記録の後に
+    // 照合する。source_with_marks と同じ）を1回だけ作る
+    let lines_of: HashMap<LogicalDate, HashMap<Ulid, usize>> = notes
         .iter()
         .map(|(&date, (keys, day))| {
             let index = line_index(keys);
-            let marks = day.marks_in(keys, &index, None);
-            let entry = Indexed {
-                keys,
-                day,
-                index,
-                marks,
-            };
-            (date, entry)
+            let marks = day.marks(keys, &index);
+            let gone = day.gone_marks(keys, &index, &marks);
+            let lines = marks.iter().chain(&gone).map(|m| (m.send_id, m.line)).collect();
+            (date, lines)
         })
         .collect();
     let mut out = HashMap::new();
-    for (id, send, sent_to) in found {
-        let Indexed {
-            keys,
-            day,
-            index,
-            marks,
-        } = &indexed[&send.date];
-        let line = match marks.iter().find(|m| m.send_id == send.id) {
-            Some(m) => Some(m.line),
-            // 送り先の項目が削除された記録は、ほかの記録の後に照合する（source_with_marks と同じ）
-            None if sent_to.deleted_at.is_some() => day
-                .marks_in(keys, index, Some((&send, &sent_to)))
-                .iter()
-                .find(|m| m.send_id == send.id)
-                .map(|m| m.line),
-            None => None,
-        };
-        if let Some(line) = line {
+    for (id, send) in found {
+        if let Some(&line) = lines_of[&send.date].get(&send.id) {
             out.insert(
                 id,
                 SourceRef {
@@ -838,9 +830,13 @@ pub struct RequestContext {
     pub section: Section,
     /// 区間の中身の行（上から順。空白だけの行も含む。書き出すときにどう扱うかは書き出す側が決める）。
     pub lines: Vec<String>,
+    /// 区間の中で、項目へ送った行（送り先の項目の種類・削除の有無を問わない）のノート全体の行番号
+    /// （1始まり。上から順で、同じ行は1回）。送り元の行も含む。書き出す側は、この行を文脈から除く
+    /// （項目になった行は、依頼文の Task や Related blockers にすでに出るため）。
+    pub sent_lines: Vec<usize>,
     /// 区間の行から送った障害のうち未解消のもの（行の順。同じ障害は1件）。持ち越した障害は、
     /// 最後の持ち越し先の項目で数える（持ち越し元の状態は持ち越した後に変わらないため。
-    /// データモデル設計書 3章 item）。
+    /// データモデル設計書 3章 item）。元の日の項目を削除しても、持ち越し先が未解消なら載せる。
     pub blockers: Vec<Item>,
 }
 
@@ -867,10 +863,18 @@ fn read_request_context(
     let section =
         note_body::section_of_line(body, source.line).expect("the marked line is in the body");
     let lines = section.lines_in(body).map(str::to_owned).collect();
-    // 区間の行から送った障害（行の順）。削除されたものは除く
-    let sent: Vec<Ulid> = marked
+    let in_section: Vec<&Mark> = marked
         .iter()
-        .filter(|m| m.kind == ItemKind::Blocker && section.lines.contains(&m.line))
+        .filter(|m| section.lines.contains(&m.line))
+        .collect();
+    let mut sent_lines: Vec<usize> = in_section.iter().map(|m| m.line).collect();
+    sent_lines.dedup();
+    // 区間の行から送った障害（行の順）。同じ項目は1件にして、持ち越し先を重ねて調べない。送り先が削除
+    // されていても、持ち越し先が生きていれば載せる（下）
+    let mut seen = HashSet::new();
+    let sent: Vec<Ulid> = in_section
+        .iter()
+        .filter(|m| m.kind == ItemKind::Blocker && seen.insert(m.item_id))
         .map(|m| m.item_id)
         .collect();
     let last = item_table::last_carried_many(conn, &sent)?;
@@ -884,14 +888,13 @@ fn read_request_context(
     let mut blockers = Vec::new();
     let mut seen = HashSet::new();
     for id in sent {
-        if !items.get(&id).is_some_and(|i| i.deleted_at.is_none()) {
-            continue;
-        }
+        // 最後の持ち越し先（削除されたものはたどり越している）。持ち越していなければ、送り先の項目
+        // そのもの（削除されていれば載せない）
         let latest = last.get(&id).map_or(id, |to| to.id);
         let Some(item) = items.get(&latest) else {
             continue;
         };
-        if item.status == ItemStatus::Open && seen.insert(item.id) {
+        if item.deleted_at.is_none() && item.status == ItemStatus::Open && seen.insert(item.id) {
             blockers.push(item.clone());
         }
     }
@@ -899,6 +902,7 @@ fn read_request_context(
         date,
         section,
         lines,
+        sent_lines,
         blockers,
     }))
 }
@@ -1698,6 +1702,147 @@ mod tests {
         let ids: Vec<Ulid> = context.blockers.iter().map(|b| b.id).collect();
         assert_eq!(ids, [waiting.id]);
         assert_eq!(context.blockers[0].date, date("2026-11-03"));
+    }
+
+    /// その日の保存済みのノートの本文を `body` にする。
+    fn save_note(conn: &Connection, d: &str, body: &str) {
+        let rev = text_doc::get(conn, TextDoc::Note, date(d)).unwrap().rev;
+        text_doc::save(conn, TextDoc::Note, date(d), body, rev, &tokyo(), at(T2)).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_record_is_matched_after_the_live_ones() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = "2026-11-03";
+        // 削除する項目の記録：前 A・後 B
+        let gone = send_ok(conn, d, "A\n共通\nB", 2..=2, ItemKind::Todo).sent[0]
+            .item
+            .clone();
+        delete(conn, gone.id, at(T2)).unwrap();
+        // 生きている項目の記録：前 P・後 Q（下の本文のどの行とも前後は一致しない）
+        let live = send_ok(conn, d, "P\n共通\nQ", 2..=2, ItemKind::Todo).sent[0]
+            .item
+            .clone();
+        let body = "A\n共通\nB\n共通\nZ";
+        save_note(conn, d, body);
+        // 削除した項目の記録のほうが2行目の前後の一致が多いが、生きている記録の行を取らない
+        let marked: Vec<(usize, Ulid)> = marks(conn, date(d), body)
+            .unwrap()
+            .into_iter()
+            .map(|m| (m.line, m.item_id))
+            .collect();
+        assert_eq!(marked, [(2, live.id)]);
+        // 削除した項目の記録は、残った4行目に付く（送り元の行をたどれる）
+        assert_eq!(source_line(conn, gone.id).unwrap().unwrap().line, 4);
+        assert_eq!(source_line(conn, live.id).unwrap().unwrap().line, 2);
+        // ボードの送り元の行（source_refs）も同じ
+        let rows: Vec<Item> = [gone.id, live.id]
+            .iter()
+            .map(|&id| item_table::get(conn, id).unwrap().unwrap())
+            .collect();
+        let refs = source_refs(conn, &rows).unwrap();
+        assert_eq!(refs[&gone.id].line, 4);
+        assert_eq!(refs[&live.id].line, 2);
+    }
+
+    #[test]
+    fn a_carried_blocker_is_listed_even_if_its_original_was_deleted() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let body = "## 10:00 定例\n- 調べる\n- 権限待ち\n- 予算待ち\n- 環境待ち";
+        let todo = send_ok(conn, "2026-11-02", body, 2..=2, ItemKind::Todo).sent[0]
+            .item
+            .clone();
+        let blockers = send_ok(conn, "2026-11-02", body, 3..=5, ItemKind::Blocker);
+        let done = carryover::confirm(
+            conn,
+            date("2026-11-03"),
+            &Decision {
+                from: date("2026-11-02"),
+                selection: Selection::All,
+                reviews: HashMap::new(),
+            },
+            &tokyo(),
+            at(T2),
+        )
+        .unwrap();
+        let carried_of = |id: Ulid| {
+            done.created
+                .iter()
+                .find(|i| i.carried_from_id == Some(id))
+                .unwrap()
+                .clone()
+        };
+        let [waiting, budget, env] = [0, 1, 2].map(|i| blockers.sent[i].item.id);
+        // 元の日の障害をすべて消して整理する。予算待ちは持ち越し先も消す
+        for id in [waiting, budget, env] {
+            delete(conn, id, at(T2)).unwrap();
+        }
+        delete(conn, carried_of(budget).id, at(T2)).unwrap();
+        // 環境待ちは持ち越し先で解消した
+        set_closed(conn, carried_of(env).id, Some(at(T2)), at(T2)).unwrap();
+
+        let context = request_context(conn, carried_of(todo.id).id)
+            .unwrap()
+            .unwrap();
+        // 持ち越し先が未解消の障害だけ載る。送り元の行は、削除された障害の行も含めて除く行に数える
+        let ids: Vec<Ulid> = context.blockers.iter().map(|b| b.id).collect();
+        assert_eq!(ids, [carried_of(waiting).id]);
+        assert_eq!(context.sent_lines, [2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_deleted_blocker_that_was_never_carried_is_not_listed() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let body = "## 10:00 定例\n- 調べる\n- 権限待ち";
+        let todo = send_ok(conn, "2026-11-03", body, 2..=2, ItemKind::Todo).sent[0]
+            .item
+            .clone();
+        let blocker = send_ok(conn, "2026-11-03", body, 3..=3, ItemKind::Blocker).sent[0]
+            .item
+            .clone();
+        delete(conn, blocker.id, at(T2)).unwrap();
+        let context = request_context(conn, todo.id).unwrap().unwrap();
+        assert!(context.blockers.is_empty());
+        assert_eq!(context.sent_lines, [2, 3]);
+    }
+
+    #[test]
+    fn an_item_with_several_records_has_the_oldest_as_its_source_and_is_listed_once() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let d = "2026-11-03";
+        let body = "## 10:00 定例\n- 調べる\n- 権限待ち\n- 予算の話";
+        let todo = send_ok(conn, d, body, 2..=2, ItemKind::Todo).sent[0]
+            .item
+            .clone();
+        let blocker = send_ok(conn, d, body, 3..=3, ItemKind::Blocker).sent[0]
+            .item
+            .clone();
+        // 壊れたデータ：同じ項目に、4行目を指す記録がもう1件ある
+        for (item_id, line) in [(blocker.id, 4), (todo.id, 4)] {
+            note_send_table::insert(
+                conn,
+                &NoteSend {
+                    id: Ulid::generate(),
+                    date: date(d),
+                    line_text: "- 予算の話".into(),
+                    line_fingerprint: fingerprint(body, line).unwrap(),
+                    item_id,
+                    created_at: at(T1),
+                },
+            )
+            .unwrap();
+        }
+        // 送り元は、id の最も小さい記録の行
+        assert_eq!(source_line(conn, todo.id).unwrap().unwrap().line, 2);
+        assert_eq!(source_line(conn, blocker.id).unwrap().unwrap().line, 3);
+        // 障害は1件にする
+        let context = request_context(conn, todo.id).unwrap().unwrap();
+        let ids: Vec<Ulid> = context.blockers.iter().map(|b| b.id).collect();
+        assert_eq!(ids, [blocker.id]);
     }
 
     // ---- コードの囲み ----
