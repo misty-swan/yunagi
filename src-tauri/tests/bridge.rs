@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 21] = [
+    let tests: [(&str, Test); 22] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -55,6 +55,7 @@ fn main() {
         ("carryover_commands", carryover_commands),
         ("search_command", search_command),
         ("overview_counts", overview_counts),
+        ("archive_command", archive_command),
         (
             "export_markdown_writes_one_file_per_day",
             export_markdown_writes_one_file_per_day,
@@ -859,6 +860,50 @@ fn overview_counts(_: &Path) {
             .iter()
             .all(|d| d["date"] != date)
     );
+}
+
+/// ふりかえり（`get_archive`）：選んだ日の週・記録のある直近の日・プレビュー。何も変えないので
+/// `changed` は出ない。
+fn archive_command(_: &Path) {
+    let h = Harness::opened();
+    let today = h.ok("today", json!({}));
+    let today_date: LogicalDate = today.as_str().unwrap().parse().unwrap();
+    // 今日の前の日（記録を足す日。同じ保存先を使うほかの試験が足した記録も残っているので、
+    // 前の日にして、本文は版を読んでから上書きする）と、先の日
+    let past = today_date.add_days(-1).unwrap().to_string();
+    let later = today_date.add_days(30).unwrap().to_string();
+    h.add_todo(&past, "ふりかえる");
+    for (doc, body) in [
+        ("reflection", "## 良かったこと\n- 進んだ"),
+        ("note", "## 10:00 定例\n議事"),
+    ] {
+        let rev = h.ok("get_text_doc", json!({ "doc": doc, "date": past }))["rev"].clone();
+        h.ok(
+            "save_text_doc",
+            json!({ "doc": doc, "date": past, "body": body, "baseRev": rev }),
+        );
+    }
+    h.drain();
+
+    // 日を決めないと、今日より前で記録のある最も新しい日を選ぶ
+    let a = h.ok("get_archive", json!({ "date": null }));
+    assert_eq!(a["date"], json!(past));
+    assert_eq!(a["today"], today);
+    assert_eq!(a["week"].as_array().unwrap().len(), 5);
+    // 記録のある直近の日は、今日（ほかの試験が記録を足していれば）を含めて新しい順
+    let daily = a["daily"].as_array().unwrap();
+    assert!(daily.len() <= 8);
+    let entry = daily.iter().find(|d| d["date"] == json!(past)).unwrap();
+    assert_eq!(entry["reflection"], "## 良かったこと\n- 進んだ");
+    assert!(a["preview"]["counts"]["todos"].as_u64().unwrap() >= 1);
+    assert_eq!(
+        a["preview"]["note"],
+        json!([{ "hour": 10, "minute": 0, "title": "定例", "lines": ["議事"] }])
+    );
+    // 先の日を選ぼうとしても、今日で止まる
+    let a = h.ok("get_archive", json!({ "date": later }));
+    assert_eq!(a["date"], today);
+    h.assert_no_event();
 }
 
 /// Markdown 書き出し：日ごとのファイルを選んだフォルダに書き、パスを返す。データは変えないので

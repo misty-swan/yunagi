@@ -290,6 +290,51 @@ recent: Array<RecentDay>,
 unseenChanges: number, };
 
 /**
+ * 週のカードの1日：日付とその日の件数。
+ */
+export type DayCounts = { date: LogicalDate, counts: Counts, };
+
+/**
+ * Daily notes の1日：日付、件数、振り返りの本文（GOOD / STUCK の1行は画面が取り出す）。
+ */
+export type DailyEntry = { date: LogicalDate, counts: Counts, reflection: string, };
+
+/**
+ * プレビューのノートの1区間：時刻付き見出しと、その下の最初の行。
+ */
+export type NotePreview = { hour: number, minute: number, title: string, lines: Array<string>, };
+
+/**
+ * 選んだ日のプレビュー。
+ */
+export type DayPreview = { counts: Counts, reflection: string, note: Array<NotePreview>, };
+
+/**
+ * ふりかえり画面の内容（画面設計書 9章。コアの `domain::archive`）。
+ */
+export type Archive = { 
+/**
+ * 選んだ日。
+ */
+date: LogicalDate, 
+/**
+ * 今日の論理日付。
+ */
+today: LogicalDate, 
+/**
+ * 選んだ日を含む週（月〜金）の日ごとの件数。
+ */
+week: Array<DayCounts>, 
+/**
+ * 週の合計。
+ */
+weekTotal: Counts, 
+/**
+ * 記録のある直近の日（新しい順）。
+ */
+daily: Array<DailyEntry>, preview: DayPreview, };
+
+/**
  * ある時点の本文と版の番号（まだ書いていない日は空の本文と版 0）。
  */
 export type Snapshot = { body: string, rev: number, };

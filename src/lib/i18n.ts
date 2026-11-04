@@ -7,6 +7,7 @@
 
 import type { CloseReason, RejectReason, StartupFailure } from "./bindings";
 import type { CarryMessage } from "./carryover.svelte";
+import { ARCHIVE_MESSAGES, type ArchiveMessages } from "./i18n_archive";
 import { SETTINGS_MESSAGES, type SettingsMessages } from "./i18n_settings";
 import { prefs, type Lang } from "./prefs.svelte";
 
@@ -39,6 +40,9 @@ const labels = {
     toTodo: "To TODO",
     toBlockers: "To Blockers",
     heading: "Time heading",
+    week: "Week",
+    open: "Open",
+    back: "Back",
   },
   /** ノートの右の、時刻付き見出しの一覧（画面設計書 4章）。 */
   outline: "Outline",
@@ -64,6 +68,19 @@ const labels = {
     commands: "COMMANDS",
     results: "RESULTS",
     kind: { todo: "TODO", blocker: "BLOCKER", note: "NOTE", reflection: "REFLECTION" },
+  },
+  /** ふりかえり（S-08）の見出しの英字ラベル（画面設計書 9章）。 */
+  archive: {
+    thisWeek: "This week",
+    dailyNotes: "Daily notes",
+    good: "GOOD",
+    stuck: "STUCK",
+    open: "Open",
+    done: "Done",
+    carried: "Carried",
+    resolved: "Resolved",
+    reflection: "Reflection",
+    note: "Note",
   },
   /** 整理モードの領域の見出し（画面設計書 3章「各領域の表示」）。 */
   region: { todo: "TODO", blockers: "BLOCKERS", reflection: "REFLECTION" },
@@ -237,6 +254,7 @@ export interface Messages {
   carryover: CarryoverMessages;
   palette: PaletteMessages;
   settings: SettingsMessages;
+  archive: ArchiveMessages;
   /** 保存できていない原因の表示の「保存先を変える」（設定のデータ区分を開く。画面設計書 3章）。 */
   changeDataDir: string;
 }
@@ -577,6 +595,7 @@ const ja: Messages = {
     },
   },
   settings: SETTINGS_MESSAGES.ja,
+  archive: ARCHIVE_MESSAGES.ja,
   changeDataDir: "保存先を変える",
   palette: {
     label: "検索・日付・コマンド",
@@ -677,6 +696,7 @@ const en: Messages = {
     },
   },
   settings: SETTINGS_MESSAGES.en,
+  archive: ARCHIVE_MESSAGES.en,
   changeDataDir: "Change the data folder",
   palette: {
     label: "Search, dates, and commands",

@@ -27,7 +27,10 @@
     onMode,
     onCommand,
     saveDetailRequest = 0,
+    archive = false,
   }: {
+    /** ふりかえり（S-08）を開いている。日付と Board / Note の切り替えの代わりに「Archive」の見出しを出す。 */
+    archive?: boolean;
     date: LogicalDate | null;
     today: LogicalDate | null;
     mode: Mode;
@@ -118,7 +121,10 @@
 <header class="top" bind:this={header} tabindex="-1">
   {#if showLogo}<span class="top-logo"><Logo /></span>{/if}
 
-  {#if date !== null}
+  {#if archive}
+    <!-- ふりかえり（S-08）は、日付と Board / Note の切り替えの代わりに見出しを出す（画面設計書 9章） -->
+    <h1 class="archive-title">{m.labels.nav.archive}</h1>
+  {:else if date !== null}
     <div class="datenav">
       <button
         type="button"
@@ -152,14 +158,16 @@
     </div>
   {/if}
 
-  <div class="seg" role="group" aria-label={m.modeSwitch}>
-    <button type="button" aria-pressed={mode === "board"} onclick={() => onMode("board")}>
-      {m.labels.board}
-    </button>
-    <button type="button" aria-pressed={mode === "note"} onclick={() => onMode("note")}>
-      {m.labels.note}
-    </button>
-  </div>
+  {#if !archive}
+    <div class="seg" role="group" aria-label={m.modeSwitch}>
+      <button type="button" aria-pressed={mode === "board"} onclick={() => onMode("board")}>
+        {m.labels.board}
+      </button>
+      <button type="button" aria-pressed={mode === "note"} onclick={() => onMode("note")}>
+        {m.labels.note}
+      </button>
+    </div>
+  {/if}
 
   <div class="fill"></div>
 
@@ -248,6 +256,13 @@
     align-items: center;
     gap: 2px;
     flex: none;
+  }
+
+  .archive-title {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 500;
+    white-space: nowrap;
   }
 
   .icon-btn {

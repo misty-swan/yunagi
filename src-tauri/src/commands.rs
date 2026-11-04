@@ -12,16 +12,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::{board, carryover, export, item, note_send, settings, text_doc};
+use yunagi_core::domain::{archive, board, carryover, export, item, note_send, settings, text_doc};
 use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
 use crate::types::{
-    BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList, CarryoverStatus,
-    CloudService, CommandError, DataDirChanged, Date, Deleted, Id, Item, ItemFields, ItemKind,
-    ItemOutcome, NoteMark, Overview, Position, SearchHit, SendResult, Settings, SettingsPatch,
-    Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    Archive, BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList,
+    CarryoverStatus, CloudService, CommandError, DataDirChanged, Date, Deleted, Id, Item,
+    ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, SearchHit, SendResult,
+    Settings, SettingsPatch, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -109,6 +109,17 @@ pub async fn get_overview(core: Core<'_>, date: Date) -> Result<Overview, Comman
     blocking(&core, move |core| {
         let today = core.today()?;
         core.read(|conn| board::overview(conn, date.0, today).map(Overview::new))
+    })
+    .await
+}
+
+/// ふりかえり（S-08）の内容：選んだ日 `date`（無ければ、今日より前で記録のある最も新しい日。今日より
+/// 後は今日にする）を含む週の件数、記録のある直近の日、選んだ日のプレビュー。
+#[tauri::command]
+pub async fn get_archive(core: Core<'_>, date: Option<Date>) -> Result<Archive, CommandError> {
+    blocking(&core, move |core| {
+        let today = core.today()?;
+        core.read(|conn| archive::get_archive(conn, date.map(|d| d.0), today).map(Archive::from))
     })
     .await
 }

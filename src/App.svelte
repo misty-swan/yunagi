@@ -9,6 +9,7 @@
   // （src/startup/）を窓全体に出す。開く処理の状態は、起動時の画面の data-startup に出す（テストに使う）。定期バックアップの失敗（backup-failed）は上部のバーの知らせに出す。
   // 持ち越し（S-03。src/carryover/）は、開いたときと前面に出したときに確かめ、外枠の上に重ねて出す。
   // 検索パレット（S-04。src/palette/）も外枠の上に重ね、選んだもの（日付・コマンド・検索結果）はここで行う。
+  // ふりかえり（S-08。src/archive/）は、開いている間、整理モードとノートの代わりに本文へ出す（二つは消さずに隠す）。
   import type { EditorView } from "@codemirror/view";
   import type { LogicalDate, NoteSource } from "./lib/bindings";
   import {
@@ -19,7 +20,7 @@
     type PaletteCommandId,
   } from "./lib/palette.svelte";
   import PalettePanel from "./palette/Palette.svelte";
-  import { onDestroy, untrack } from "svelte";
+  import { flushSync, onDestroy, untrack } from "svelte";
   import { coreEvents } from "./lib/core";
   import { t } from "./lib/i18n";
   import { SaveStatus } from "./lib/autosave.svelte";
@@ -34,7 +35,9 @@
   import { StartupActions } from "./lib/startup.svelte";
   import StartupScreen from "./startup/StartupScreen.svelte";
   import AppShell from "./shell/AppShell.svelte";
-  import type { ShellCommand } from "./shell/commands";
+  import type { ArchiveControl, ShellCommand } from "./shell/commands";
+  import { ArchiveScreen } from "./lib/archive.svelte";
+  import ArchiveView from "./archive/Archive.svelte";
   import { Carryover } from "./lib/carryover.svelte";
   import CarryoverPanel from "./carryover/CarryoverPanel.svelte";
   import { reloadPage } from "./lib/page";
@@ -108,13 +111,73 @@
 
   $effect(() => applyPrefs(prefs.theme, prefs.lang, prefs.fontSize));
 
+  // ---- ふりかえり（S-08。画面設計書 9章） ----
+
+  // 開いている間は、整理モードとノートを隠す（消さない）。選んだ日はふりかえりの中だけで持ち、
+  // Enter でその日を開くまで、表示している日は動かさない
+  const archive = new ArchiveScreen({ today: () => session.today, flush: () => save.flushAll() });
+  archive.start();
+  onDestroy(() => archive.stop());
+
+  /** 開く。最初に選ぶ日は、いま見ている日（今日なら、コアが決める前の日）。 */
+  function openArchive() {
+    if (archive.open) {
+      archive.focusSeq++;
+      return;
+    }
+    const showing = session.showing;
+    archive.show(showing !== null && showing !== session.today ? showing : null);
+  }
+
+  /** 閉じて、開く前にフォーカスのあった所へ戻す（`focus` が偽なら戻さない。ほかの画面へ移るとき）。 */
+  function closeArchive(focus = true) {
+    if (!archive.open) return;
+    const back = archive.returnFocus;
+    archive.returnFocus = null;
+    archive.close();
+    // 隠していた本文を出し終えてから戻す
+    flushSync();
+    if (!focus) return;
+    if (back instanceof HTMLElement && back.isConnected && back.closest("[hidden]") === null) back.focus();
+    else if (shell.mode === "note") noteView?.focus();
+    else if (boardFocus instanceof HTMLElement && boardFocus.isConnected) boardFocus.focus();
+  }
+
+  /** 選んだ日のボードを開く（Enter・ダブルクリック・「Open ↵」）。 */
+  function openArchiveDay(date: LogicalDate) {
+    closeArchive(false);
+    shell.setMode("board");
+    showDate(date);
+    flushSync();
+    if (boardFocus instanceof HTMLElement && boardFocus.isConnected) boardFocus.focus();
+  }
+
+  const archiveControl = $derived<ArchiveControl | null>(
+    archive.open
+      ? {
+          date: archive.sel,
+          onSelect: (d) => archive.select(d),
+          onWeek: (w) => archive.moveWeek(w),
+          onClose: () => closeArchive(),
+          onOpenDay: openArchiveDay,
+        }
+      : null,
+  );
+
   // ---- 持ち越し（S-03。画面設計書 5章） ----
 
   // 出すときは、今日の整理モードの上に重ねる。一覧は、まだ保存していない入力を送り終えてから読む
-  // （前の日の項目の本文・完了を送る前の内容で持ち越さないため）
+  // （前の日の項目の本文・完了を送る前の内容で持ち越さないため）。ふりかえりを開いていれば閉じる
   const carry = new Carryover(async () => {
     const flushed = save.flushAll();
+    // ふりかえりを開いていたら、その前にフォーカスのあった所へ、閉じた後に戻す
+    if (archive.open) {
+      carry.returnFocus = archive.returnFocus;
+      archive.returnFocus = null;
+      closeArchive(false);
+    }
     // ノートモードから移るときは、閉じた後に、隠れたノートではなく整理モードで前にフォーカスのあった所へ戻す
+    // （ふりかえりを開く前がノートモードだったときも、ここで上書きする）
     if (shell.mode !== "board") carry.returnFocus = boardFocus;
     shell.setMode("board");
     const today = session.today;
@@ -232,6 +295,8 @@
 
   function runPalette(choice: PaletteChoice) {
     if (choice.kind === "date") {
+      // ふりかえりの間も、その日のボードを開く（日の移動は元のモードのまま。ふりかえりは閉じる）
+      closeArchive();
       // モードは変えない（‹ › と同じ。画面設計書 3章「上部のバー」）
       showDate(choice.date);
       return;
@@ -240,6 +305,7 @@
       runCommand(choice.id);
       return;
     }
+    closeArchive(false);
     const { hit } = choice.view;
     if (hit.kind === "note") {
       noteJump = { date: hit.date, find: choice.query };
@@ -264,9 +330,14 @@
         saveDetailRequest++;
         return;
       case "today":
-        if (session.today !== null) showDate(session.today);
+        // ふりかえりの間は、今日を選ぶ（Mod+T と同じ）
+        if (session.today === null) return;
+        if (archive.open) archive.select(session.today);
+        else showDate(session.today);
         return;
       case "mode":
+        // ふりかえりを開いていれば閉じてから切り替える（切り替えた先のモードが前に出る）
+        closeArchive(false);
         shell.toggleMode();
         return;
       case "sidebar":
@@ -285,13 +356,14 @@
     }
   }
 
-  // 設定（S-05）を開く。変更履歴（S-06）・ふりかえり（S-08）は、それぞれの画面の課題で開くようにする
+  // 設定（S-05）とふりかえり（S-08）を開く。変更履歴（S-06）は、その画面の課題で開くようにする
   // （それまでは何もしない）。サイドバー・上部のバー・キー・パレットのどこから開くときも、ここを通る
-  // （画面設計書 6章）。持ち越しを出している間は設定を開かない（背後の操作を受け付けないため）
+  // （画面設計書 6章）。持ち越しを出している間は開かない（背後の操作を受け付けないため）
   function openScreen(c: Exclude<ShellCommand, "palette">) {
     if (carry.open) return;
     if (c === "settings") settingsPanel.show();
     else if (c === "dataSettings") settingsPanel.show("data");
+    else if (c === "archive") openArchive();
   }
 
   function onCommand(c: ShellCommand) {
@@ -311,13 +383,27 @@
 {:else if shown}
   <!-- 持ち越し・パレット・設定を出している間は、背後の外枠と本文を操作できなくする -->
   <div inert={carry.open || palette.open || settingsPanel.open}>
-    <AppShell {session} {save} {shell} {mac} notice={notice.text} {onCommand} {saveDetailRequest}>
+    <AppShell
+      {session}
+      {save}
+      {shell}
+      {mac}
+      notice={notice.text}
+      {onCommand}
+      {saveDetailRequest}
+      archive={archiveControl}
+    >
       <main
         class="content"
         data-mode={shell.mode}
         data-date={session.date ?? ""}
       >
-        <div class="mode" hidden={shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
+        {#if archive.open}
+          <div class="mode">
+            <ArchiveView {archive} narrow={shell.narrow} onOpenDay={openArchiveDay} onClose={() => closeArchive()} />
+          </div>
+        {/if}
+        <div class="mode" hidden={archive.open || shell.mode !== "board"} onfocusin={(e) => (boardFocus = e.target as Element)}>
           <Board
             {session}
             {save}
@@ -330,14 +416,14 @@
             onTargetDone={() => (boardTarget = null)}
           />
         </div>
-        <div class="mode" hidden={shell.mode !== "note"}>
+        <div class="mode" hidden={archive.open || shell.mode !== "note"}>
           <NoteView
             date={session.board?.date ?? null}
             {save}
             presence={tracker.note}
             rev={session.board?.noteRev ?? 0}
             onActivity={tracker.activity}
-            visible={shell.mode === "note"}
+            visible={shell.mode === "note" && !archive.open}
             narrow={shell.narrow}
             {mac}
             {notice}

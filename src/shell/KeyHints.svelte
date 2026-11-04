@@ -1,16 +1,24 @@
 <script lang="ts">
   // キーの案内（画面設計書 3章「キーの案内」）：画面下端に1行で、その画面の主なキーを `⌘K Search` のように。
-  // 整理・ノートで内容を変える（ふりかえりの分は、その画面の課題で足す）。
+  // 整理・ノート・ふりかえりで内容を変える。
   import { t } from "../lib/i18n";
   import { keyLabel, modEnterLabel, modShiftLabel } from "../lib/keys";
   import type { Mode } from "../lib/shell.svelte";
 
-  let { mode, mac }: { mode: Mode; mac: boolean } = $props();
+  let { mode, archive = false, mac }: { mode: Mode; archive?: boolean; mac: boolean } = $props();
 
   const m = $derived(t());
   const hints = $derived.by((): [string, string][] => {
     const h = m.labels.hint;
     const day = `${keyLabel("prevDay", mac)} ${keyLabel("nextDay", mac)}`;
+    if (archive) {
+      return [
+        ["← →", h.day],
+        [day, h.week],
+        ["↵", h.open],
+        ["Esc", h.back],
+      ];
+    }
     return mode === "note"
       ? [
           [modShiftLabel("T", mac), h.toTodo],

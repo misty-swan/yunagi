@@ -6,6 +6,7 @@ import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENTS,
+  type Archive,
   type BackupEntry,
   type BackupFailed,
   type Board,
@@ -100,6 +101,11 @@ export const core = {
   getBoard: (date: LogicalDate) => call<Board>("get_board", { date }),
   /** 画面の骨組み（サイドバー・上部のバー・凪メーター）に出す件数。`date` は表示している日。 */
   getOverview: (date: LogicalDate) => call<Overview>("get_overview", { date }),
+  /**
+   * ふりかえり（S-08）の内容：選んだ日 `date`（`null` なら、今日より前で記録のある最も新しい日。無ければ
+   * 今日。今日より後は今日になる）を含む週の件数、記録のある直近の日、選んだ日のプレビュー。
+   */
+  getArchive: (date: LogicalDate | null) => call<Archive>("get_archive", { date }),
   addItem: (date: LogicalDate, kind: ItemKind, text: string, position: Position) =>
     call<Item>("add_item", { date, kind, text, position }),
   /**
