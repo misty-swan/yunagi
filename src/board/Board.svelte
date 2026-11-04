@@ -64,6 +64,12 @@
         return msg.restoreSourceCarried(shortDate(n.date));
       case "rejected":
         return msg.saveRejected;
+      case "handoff_copied":
+        return msg.handoffCopied;
+      case "handoff_not_todo":
+        return msg.handoffNotTodo;
+      case "handoff_failed":
+        return msg.handoffFailed;
     }
   }
 

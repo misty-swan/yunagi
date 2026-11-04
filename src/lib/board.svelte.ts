@@ -68,7 +68,10 @@ export type BoardNotice =
   | { kind: "dropped" }
   | { kind: "restore_source_changed" }
   | { kind: "restore_source_carried"; date: LogicalDate }
-  | { kind: "rejected" };
+  | { kind: "rejected" }
+  | { kind: "handoff_copied" }
+  | { kind: "handoff_not_todo" }
+  | { kind: "handoff_failed" };
 
 /** 行の欄のうち、フォーカスを置くもの。 */
 export type RowField = "text" | "memo";
@@ -458,6 +461,32 @@ export class BoardModel {
         return this.#restore(deleted);
       },
     };
+  }
+
+  /**
+   * 依頼文の書き出し（Mod+Shift+A。操作仕様書 2章）：行 `key` の TODO の依頼文を作り、クリップボードに
+   * 写して知らせる。障害の行は知らせるだけ。まだ保存していない入力は先に送り終えてから書き出す
+   * （Task が画面の本文と食い違わないため）。保存に失敗している間と、作れていない行は、書き出さずに
+   * 失敗を知らせる。持ち越し済み・取りやめた TODO・完了した TODO も、読み取りだけなので書き出せる。
+   */
+  async handoff(key: string): Promise<void> {
+    const row = this.row(key);
+    if (row === undefined) return;
+    if (row.kind !== "todo") {
+      this.#deps.notify({ kind: "handoff_not_todo" });
+      return;
+    }
+    try {
+      // 削除・並べ替えなどの送りの途中なら、それが終わってから書き出す（画面の本文と食い違わないため）
+      const run = this.#ops.then(() => this.items.run(key, (id) => core.copyHandoff(id)));
+      this.#ops = run.catch(() => {});
+      await run;
+      this.#deps.notify({ kind: "handoff_copied" });
+    } catch (e) {
+      // 利用者には理由を分けて見せない（04 2章）。原因はログに残す
+      console.warn("handoff failed", errorOf(e));
+      this.#deps.notify({ kind: "handoff_failed" });
+    }
   }
 
   /** 本文を入力した。 */

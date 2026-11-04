@@ -1585,6 +1585,9 @@ pub enum CommandError {
     /// `replaced` は、それまでに置き換え終えたファイルの数（0 なら何も変えていない）。`detail` は
     /// ログ用の文。データベースの読み取りの失敗は `storage`（画面設計書 7章・アーキテクチャ設計書 6.4）。
     ExportFailed { replaced: usize, detail: String },
+    /// 依頼文を作ったが、クリップボードに書けなかった（`copy_handoff`。OS が断った・クリップボードを
+    /// 使えない）。何も変えていない。`detail` はログ用の文。
+    ClipboardFailed { detail: String },
     /// バックアップから戻すのに失敗し、退避した前のデータベースを元の場所に戻すこともできなかった
     /// （`restore_at_startup`）。前のデータベースは `set_aside`（とその横のファイル）に残っている。
     /// `detail` はログ用の文。
@@ -1832,6 +1835,24 @@ impl From<yunagi_core::domain::export::ExportError> for CommandError {
         Self::ExportFailed {
             replaced,
             detail: crate::app_core::chain(&e),
+        }
+    }
+}
+
+impl From<yunagi_core::domain::handoff::HandoffError> for CommandError {
+    fn from(e: yunagi_core::domain::handoff::HandoffError) -> Self {
+        use yunagi_core::domain::handoff::HandoffError as E;
+        match e {
+            E::NotFound => Self::NotFound,
+            // 書き出せるのは TODO だけ（障害の行では、画面が先に何もしない）
+            E::NotTodo => Self::InvalidArgument {
+                reason: InvalidReason::WrongKind,
+            },
+            // 画面の操作では起きない（エージェントの操作だけ）。画面は権限を確かめない入り口を使う
+            E::PermissionDenied(_) => Self::Internal {
+                detail: crate::app_core::chain(&e),
+            },
+            E::Storage(_) => Self::storage(&e),
         }
     }
 }

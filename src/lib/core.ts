@@ -165,6 +165,11 @@ export const core = {
   /** 全日付を `text` で探す（パレット S-04）。日付の新しい順に `limit` 件まで。 */
   search: (text: string, limit: number) => call<SearchHit[]>("search", { text, limit }),
   /**
+   * TODO `id` の依頼文を作り、クリップボードに書く（Mod+Shift+A）。クリップボードへの書き込みは Rust 側
+   * で行う（画面にクリップボードの権限は渡さない。src-tauri/src/clipboard.rs）。何も変えない。
+   */
+  copyHandoff: (id: Id) => call<null>("copy_handoff", { id }),
+  /**
    * 入力中の状態を知らせる（変わるたびに全体を知らせ直す）。届く順が入れ替わっても古いものが
    * 残らないよう、この画面の読み込みの印と、送るたびに増える番号を付ける。
    */

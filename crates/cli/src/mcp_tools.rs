@@ -6,8 +6,7 @@
 //! 名前が `Call::parse` と食い違わないことは、このファイルの試験で確かめる。
 //!
 //! 公開するのは 05 3章の表のうち、A-07（導入）と A-08（権限・履歴）を除いたもの（エージェントが自分の
-//! 権限を変えられないようにするため。05 1章）。`export_handoff`（A-06）は、コアの入口を作るとき（YUN-70）に
-//! 足す。
+//! 権限を変えられないようにするため。05 1章）。A-06 の `export_handoff` も出す（読み取りの操作）。
 
 use std::sync::OnceLock;
 
@@ -232,6 +231,14 @@ fn tools() -> Vec<Tool> {
             required: &["line", "expected_text"],
             read_only: false,
         },
+        Tool {
+            name: "export_handoff",
+            title: "Export a TODO as a request",
+            description: "Write a Markdown request (Task, Context from the note section the TODO was sent from, Related blockers) for one TODO, in the form `{id, markdown}`. Needs the read scope. Changes nothing, so it is safe to send again. A blocker's ID is rejected (invalid_argument). A TODO that was not sent from a note has only the Task.",
+            properties: vec![("id", id("TODO"))],
+            required: &["id"],
+            read_only: true,
+        },
     ]
 }
 
@@ -281,7 +288,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_tools_are_the_expected_fourteen() {
+    fn the_tools_are_the_expected_fifteen() {
         let names: Vec<String> = list()
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_owned())
@@ -303,15 +310,11 @@ mod tests {
                 "append_reflection",
                 "append_note",
                 "edit_note",
+                "export_handoff",
             ]
         );
         // 利用者の管理操作は出さない（05 1章）
-        for hidden in [
-            "agent_setup",
-            "agent_history",
-            "agent_revert",
-            "export_handoff",
-        ] {
+        for hidden in ["agent_setup", "agent_history", "agent_revert"] {
             assert!(!exists(hidden), "{hidden}");
         }
     }
@@ -352,7 +355,14 @@ mod tests {
     fn read_tools_are_marked_read_only() {
         for tool in list() {
             let name = tool["name"].as_str().unwrap();
-            let read = ["get_board", "open_board", "get_note", "search"].contains(&name);
+            let read = [
+                "get_board",
+                "open_board",
+                "get_note",
+                "search",
+                "export_handoff",
+            ]
+            .contains(&name);
             assert_eq!(tool["annotations"]["readOnlyHint"], read, "{name}");
         }
     }

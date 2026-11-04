@@ -24,9 +24,10 @@ use yunagi_cli::connect::{AltHome, Connector, Timing};
 use yunagi_cli::show::{self, Launch};
 use yunagi_cli::{Env, Io};
 use yunagi_core::domain::agent::Agent;
-use yunagi_core::domain::{item, text_doc};
+use yunagi_core::domain::{item, note_send, text_doc};
 use yunagi_core::storage::data_dir::{self, DefaultDir};
 use yunagi_core::storage::table::agent_client::{self, CLI_ID, Scope};
+use yunagi_core::storage::table::item::ItemKind;
 use yunagi_core::storage::{Database, DbLock};
 
 /// 試験用の短い待ち（本番は 5 秒・50 ミリ秒・1 秒）。
@@ -299,7 +300,11 @@ fn change_id(w: &World, operation: &str) -> String {
 type Test = fn(&World);
 
 pub fn main() {
-    let tests: [(&str, Test); 33] = [
+    let tests: [(&str, Test); 34] = [
+        (
+            "handoff_export_writes_a_request_from_the_note_section",
+            handoff_export,
+        ),
         ("show_asks_the_running_app", show_asks_the_running_app),
         (
             "show_starts_the_app_and_waits_for_its_listener",
@@ -744,6 +749,110 @@ fn direct_mode_reads(w: &World) {
 
     // ロックは残らない
     drop(DbLock::acquire(&dir, Duration::ZERO).unwrap());
+}
+
+/// 依頼文の書き出し（A-06。05 5章）：ノートの行から送った TODO は区間と未解消の障害を添え、直接
+/// 追加した TODO は Task だけ。CLI と MCP が同じ依頼文を返し、権限・障害の ID・無い ID を断る。
+fn handoff_export(w: &World) {
+    let dir = seed(w);
+    let d = "2026-11-02";
+    // 利用者が、ノートの行を TODO と障害へ送る（行送りは人の操作）
+    with_db(&dir, |db| {
+        let conn = db.connection();
+        let body = "## 10:00 sync\n- send me to todo\nthe rate limit is 600\n- waiting for access";
+        for (line, kind) in [(2, ItemKind::Todo), (4, ItemKind::Blocker)] {
+            let rev = text_doc::get(conn, text_doc::TextDoc::Note, d.parse().unwrap())
+                .unwrap()
+                .rev;
+            note_send::send(
+                conn,
+                &note_send::SendLines {
+                    date: d.parse().unwrap(),
+                    body,
+                    base_rev: rev,
+                    lines: line..=line,
+                    kind,
+                },
+                &TimeZone::UTC,
+                "2026-11-02T02:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+        }
+    });
+    let board = exec(w, &["--json", "board", "--date", d]).json();
+    let id_of = |list: &str, text: &str| {
+        board[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["text"] == text)
+            .unwrap_or_else(|| panic!("no {text} in {board}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let sent = id_of("todos", "send me to todo");
+    let direct = id_of("todos", "rate limit survey");
+    let blocker = id_of("blockers", "waiting for access");
+    let logged = change_log(&dir).len();
+
+    let out = exec(w, &["handoff", "export", &sent]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stderr, "");
+    let expected = "## Task\nsend me to todo\n\n\
+        ## Context (from notes on 2026-11-02)\n- 10:00 sync: the rate limit is 600\n\n\
+        ## Related blockers\n- waiting for access\n\n(Exported from Yunagi on ";
+    assert!(out.stdout.starts_with(expected), "{}", out.stdout);
+    assert!(out.stdout.ends_with(")\n"), "{}", out.stdout);
+    // 別名と --json
+    assert_eq!(exec(w, &["handoff", &sent]).stdout, out.stdout);
+    let json = exec(w, &["--json", "handoff", "export", &sent]).json();
+    assert_eq!(json["id"], sent.as_str());
+    assert_eq!(json["markdown"], out.stdout.as_str());
+    // ノートから送っていない TODO は Task だけ
+    let plain = exec(w, &["handoff", &direct]);
+    assert!(
+        plain
+            .stdout
+            .starts_with("## Task\nrate limit survey\n\n(Exported from Yunagi on "),
+        "{}",
+        plain.stdout
+    );
+    // 障害の ID は断る（invalid_argument。種類の違いの形）。無い ID は not_found
+    let bad = exec(w, &["--json", "handoff", &blocker]);
+    assert_eq!(bad.code, 2, "{}", bad.stdout);
+    let err = bad.json();
+    assert_eq!(err["error"]["code"], "invalid_argument");
+    assert_eq!(err["error"]["item_kind"], "blocker");
+    assert_eq!(err["error"]["use_operation"], Value::Null);
+    assert_eq!(exec(w, &["handoff", MISSING_ID]).code, 4);
+    assert_eq!(exec(w, &["handoff", "nope"]).code, 2);
+    // MCP でも同じ依頼文。read だけで使える
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[
+            tool_call(1, "export_handoff", json!({"id": sent})),
+            tool_call(2, "export_handoff", json!({"id": blocker})),
+            tool_call(3, "export_handoff", json!({})),
+        ],
+    );
+    let (is_error, via_mcp) = tool_outcome(&run.responses[0]);
+    assert!(!is_error, "{via_mcp}");
+    assert_eq!(via_mcp["markdown"], out.stdout.as_str());
+    let (is_error, bad) = tool_outcome(&run.responses[1]);
+    assert!(is_error);
+    assert_eq!(bad["error"]["code"], "invalid_argument");
+    assert!(tool_outcome(&run.responses[2]).0);
+    // 履歴には残らない（読み取りだけ）
+    assert_eq!(change_log(&dir).len(), logged);
+    // read が無ければ、項目を見る前に permission_denied
+    set_cli_scopes(&dir, &[Scope::Append]);
+    for id in [sent.as_str(), MISSING_ID] {
+        let denied = exec(w, &["handoff", id]);
+        assert_eq!(denied.code, 3, "{}", denied.stderr);
+        assert!(denied.stderr.contains("permission_denied") && denied.stderr.contains("read"));
+    }
 }
 
 fn read_scope(w: &World) {
@@ -1688,7 +1797,7 @@ fn mcp_handshake(w: &World) {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names.len(), 14);
+    assert_eq!(names.len(), 15);
     for name in [
         "get_board",
         "open_board",
@@ -1704,6 +1813,7 @@ fn mcp_handshake(w: &World) {
         "append_reflection",
         "append_note",
         "edit_note",
+        "export_handoff",
     ] {
         assert!(names.contains(&name), "{name}");
     }

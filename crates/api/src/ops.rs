@@ -20,6 +20,7 @@ use yunagi_core::domain::agent::{self, Agent, ClientLookup, PermissionDenied, Re
 use yunagi_core::domain::agent_admin::{self, ScopeArgument, ScopeError};
 use yunagi_core::domain::board::{self, BoardItem};
 use yunagi_core::domain::day;
+use yunagi_core::domain::handoff::{self, HandoffError};
 use yunagi_core::domain::history::{
     self, ChangeFilter, HistoryError, Missing, PlanState, RevertArgument, RevertConflict,
     RevertError, RevertRequest,
@@ -173,6 +174,8 @@ pub enum ReadCall {
     OpenBoard(Date),
     GetNote(Date, Option<String>),
     Search(SearchArgs),
+    /// 選んだ TODO の依頼文の書き出し（A-06。05 5章）。
+    ExportHandoff(Ulid),
 }
 
 /// `search` の引数。
@@ -234,6 +237,10 @@ impl Call {
             "search" => {
                 p.only(&["query", "from", "to", "kinds", "limit"])?;
                 Self::Read(ReadCall::Search(p.search()?))
+            }
+            "export_handoff" => {
+                p.only(&["id"])?;
+                Self::Read(ReadCall::ExportHandoff(p.id()?))
             }
             "add_todo" => {
                 p.only(&["text", "date"])?;
@@ -390,6 +397,11 @@ impl ReadCall {
                     "query": args.query.trim(),
                     "hits": found.iter().map(found_json).collect::<Vec<_>>(),
                 }))
+            }
+            Self::ExportHandoff(id) => {
+                let h = handoff::export(conn, client_id, *id, &system_tz(), at)
+                    .map_err(handoff_failure)?;
+                Ok(json!({"id": h.id.to_string(), "markdown": h.markdown}))
             }
         }
     }
@@ -1034,6 +1046,25 @@ fn read_failure(e: ReadError) -> Failure {
     match e {
         ReadError::PermissionDenied(p) => Failure::App(permission_denied(p)),
         ReadError::Storage(e) => storage_failure(e),
+    }
+}
+
+/// `export_handoff` の失敗（05 5章）。書き出せるのは TODO だけで、障害の ID は、時間をおいても成功しない
+/// `invalid_argument`（`item_kind`・`use_operation: null`。05 3.2 の種類の違いと同じ形）。
+fn handoff_failure(e: HandoffError) -> Failure {
+    match e {
+        HandoffError::PermissionDenied(p) => Failure::App(permission_denied(p)),
+        HandoffError::NotFound => Failure::App(error(
+            "not_found",
+            "No item with this ID exists. It may have been deleted. Read the board again.",
+        )),
+        HandoffError::NotTodo => Failure::App(json!({
+            "code": "invalid_argument",
+            "item_kind": ItemKind::Blocker.as_str(),
+            "use_operation": Value::Null,
+            "message": "This ID is a blocker, not a TODO. Only a TODO can be exported as a request.",
+        })),
+        HandoffError::Storage(e) => storage_failure(e),
     }
 }
 

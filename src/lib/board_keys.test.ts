@@ -18,6 +18,10 @@ test("一覧のキーを、macOS は ⌘、Windows・Linux は Ctrl で受ける
   expect(boardActionOf(key({ code: "KeyY", key: "y", metaKey: true }), true)).toBeNull();
   expect(boardActionOf(key({ code: "KeyR", key: "R", ctrlKey: true, shiftKey: true }), false)).toBe("template");
   expect(boardActionOf(key({ code: "Digit2", key: "2", metaKey: true }), true)).toBe("regionBlocker");
+  expect(boardActionOf(key({ code: "KeyA", key: "A", ctrlKey: true, shiftKey: true }), false)).toBe("handoff");
+  expect(boardActionOf(key({ code: "KeyA", key: "A", metaKey: true, shiftKey: true }), true)).toBe("handoff");
+  // Shift の無い Mod+A は全選択（割り当てない）
+  expect(boardActionOf(key({ code: "KeyA", key: "a", ctrlKey: true }), false)).toBeNull();
 });
 
 test("IME の変換中と、Windows・Linux の AltGr（Ctrl+Alt）はショートカットにしない", () => {

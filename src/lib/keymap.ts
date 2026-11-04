@@ -31,7 +31,8 @@ export type BoardAssigned =
   | "regionTodo"
   | "regionBlocker"
   | "regionReflection"
-  | "template";
+  | "template"
+  | "handoff";
 
 /**
  * OS 全体の操作：Yunagi を前面に呼び出す。OS に登録して受ける（画面のキー処理では受けない。
@@ -75,6 +76,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: "moveDown", scope: "board", initial: "Alt+ArrowDown" },
   { id: "delete", scope: "board", initial: "Mod+Backspace" },
   { id: "template", scope: "board", initial: "Mod+Shift+R" },
+  { id: "handoff", scope: "board", initial: "Mod+Shift+A" },
   { id: "toTodo", scope: "note", initial: "Mod+Shift+T" },
   { id: "toBlocker", scope: "note", initial: "Mod+Shift+B" },
   { id: "timeHeading", scope: "note", initial: "Mod+Shift+H" },
@@ -215,10 +217,8 @@ export type BindingProblem =
  * 設定とは別に決まっている、割り当てられないキー（そろえた形）。
  * - Mod+Z・Shift・Y：取り消し・やり直し（エディタの履歴と整理モードのリストの履歴。割当を変えられない）
  * - Mod+C・V・X・A：コピー・貼り付け・切り取り・全選択
- * - Mod+Shift+A（依頼文の書き出し）：まだ作っていない操作。作るときに割当を変えられる操作（`ACTIONS`）へ
- *   移し、ここから外す
  */
-const RESERVED = ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Shift+A"];
+const RESERVED = ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A"];
 
 /** Windows・Linux で、Vim モードの Esc と重なるキー（Ctrl+[）。 */
 const VIM_ESC = "Mod+[";

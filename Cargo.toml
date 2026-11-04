@@ -56,6 +56,12 @@ tauri-plugin-global-shortcut = "=2.4.1"
 # ミューテックスで見つける。3.x は alpha なので 2.x の最新（2026-10-28 公開。2.5.5 は引き渡しが
 # 受け入れられてから終了する修正を含む）に固定する
 tauri-plugin-single-instance = "=2.5.5"
+# 依頼文の書き出し（Mod+Shift+A。docs/design/04-interaction-spec.md 2章、05-mcp-cli-spec.md 5章）を
+# クリップボードに写す。Rust 側（src-tauri/src/commands.rs の `copy_handoff`）だけで使い、画面側の
+# パッケージは入れず、画面（WebView）には書き込みの権限を与えない（capabilities/default.json）。
+# 画面から `navigator.clipboard` で書くと、依頼文を作る間にキー操作の後という扱いが切れ、WebKit 系で
+# 断られうるため。3.x は alpha なので 2.x の最新（2026-10-14 公開）に固定する
+tauri-plugin-clipboard-manager = "=2.5.0"
 # SQLite（docs/design/01-architecture.md 3章）。bundled で SQLite 本体（FTS5 を含む）を
 # 同梱してビルドし、OS ごとの SQLite の版の違いに左右されないようにする。
 # backup はマイグレーション前のバックアップと失敗時の復元に使う（SQLite のオンラインバックアップ）

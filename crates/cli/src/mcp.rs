@@ -482,7 +482,7 @@ mod tests {
         assert!(r[0]["result"]["capabilities"]["tools"].is_object());
         assert_eq!(r[0]["result"]["cacheScope"], "public");
         assert_eq!(r[1]["result"]["resultType"], "complete");
-        assert_eq!(r[1]["result"]["tools"].as_array().unwrap().len(), 14);
+        assert_eq!(r[1]["result"]["tools"].as_array().unwrap().len(), 15);
         assert!(r[1]["result"]["ttlMs"].is_number());
         // 対応しない版
         assert_eq!(r[2]["error"]["code"], UNSUPPORTED_VERSION);
@@ -491,7 +491,7 @@ mod tests {
         // 旧い仕様の依頼には resultType もキャッシュの案内も付けない
         assert!(r[3]["result"].get("resultType").is_none());
         assert!(r[3]["result"].get("ttlMs").is_none());
-        assert_eq!(r[3]["result"]["tools"].as_array().unwrap().len(), 14);
+        assert_eq!(r[3]["result"]["tools"].as_array().unwrap().len(), 15);
     }
 
     #[test]
