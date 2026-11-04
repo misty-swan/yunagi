@@ -98,8 +98,13 @@ impl Out {
 }
 
 fn exec(w: &World, args: &[&str]) -> Out {
+    exec_with_stdin(w, args, b"")
+}
+
+/// 標準入力 `input` を渡して動かす（`TEXT` の `-`。05 4.1）。
+fn exec_with_stdin(w: &World, args: &[&str], input: &[u8]) -> Out {
     let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
-    let (mut stdin, mut stdout, mut stderr) = (&b""[..], Vec::new(), Vec::new());
+    let (mut stdin, mut stdout, mut stderr) = (input, Vec::new(), Vec::new());
     let code = yunagi_cli::run(
         &args,
         &w.env(),
@@ -164,6 +169,25 @@ fn set_cli_scopes(dir: &DefaultDir, scopes: &[Scope]) {
     db.close().unwrap();
 }
 
+/// change_log の行（古い順）を `(operation, actor, agent_client_id)` で返す。
+fn change_log(dir: &DefaultDir) -> Vec<(String, String, Option<String>)> {
+    let lock = DbLock::acquire(dir, Duration::ZERO).unwrap();
+    let db = Database::open(lock).unwrap();
+    let rows = {
+        let mut statement = db
+            .connection()
+            .prepare("SELECT operation, actor, agent_client_id FROM change_log ORDER BY rowid")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    db.close().unwrap();
+    rows
+}
+
 fn cli_last_seen(dir: &DefaultDir) -> Option<jiff::Timestamp> {
     let lock = DbLock::acquire(dir, Duration::ZERO).unwrap();
     let db = Database::open(lock).unwrap();
@@ -192,7 +216,7 @@ fn hold_lock(dir: &Path) -> File {
 type Test = fn(&World);
 
 pub fn main() {
-    let tests: [(&str, Test); 14] = [
+    let tests: [(&str, Test); 18] = [
         ("direct_mode_reads_as_the_cli_client", direct_mode_reads),
         ("reads_need_the_read_scope_first", read_scope),
         ("exit_codes_for_not_found_and_bad_arguments", exit_codes),
@@ -210,6 +234,16 @@ pub fn main() {
         ("authentication_failures_do_not_fall_back", auth_failures),
         ("a_listener_that_does_not_answer_gives_busy", not_answering),
         ("writes_in_direct_mode_follow_the_same_rules", direct_writes),
+        (
+            "write_commands_check_the_scope_before_the_item",
+            write_scopes,
+        ),
+        ("write_commands_write_and_record_as_the_cli", write_commands),
+        ("write_commands_read_the_text_from_stdin", write_stdin),
+        (
+            "a_write_does_not_run_in_a_mismatched_default_dir",
+            write_mismatch,
+        ),
     ];
     let filters: Vec<String> = std::env::args()
         .skip(1)
@@ -649,6 +683,12 @@ fn lost_write(w: &World) {
     assert_eq!(e["code"], "api_error");
     assert_eq!(e["reason"], "result_unknown");
     assert_eq!(app.finish(), ["add_todo"]);
+    // コマンドからでも同じ：終了コード 8 で、テキストにも reason が出る。依頼は 1 回だけ送られる
+    let app = FakeApp::start(&own, vec![Conn::DropAfterRequest]);
+    let out = exec(w, &["todo", "add", "once"]);
+    assert_eq!(out.code, 8, "{}", out.stderr);
+    assert!(out.stderr.contains("api_error (result_unknown)"));
+    assert_eq!(app.finish(), ["add_todo"]);
 }
 
 fn lost_read(w: &World) {
@@ -739,4 +779,303 @@ fn direct_writes(w: &World) {
         "internal"
     );
     drop(DbLock::acquire(&dir, Duration::ZERO).unwrap());
+}
+
+// ---- 書き込みのコマンド（YUN-91） ----
+
+/// 存在しないが、形は正しい ID。
+const MISSING_ID: &str = "01JZ0000000000000000000000";
+
+fn write_scopes(w: &World) {
+    let dir = seed(w);
+    let before = change_log(&dir);
+    // どの書き込みも、既定（read のみ）では permission_denied（終了コード 3）で、必要なスコープが出る。
+    // スコープは項目を見る前に確かめるので、存在しない ID でも not_found にならない
+    let cases: [(&[&str], &str); 11] = [
+        (&["todo", "add", "x"], "todo"),
+        (&["todo", "edit", MISSING_ID, "x"], "todo"),
+        (&["todo", "done", MISSING_ID], "todo"),
+        (&["todo", "reopen", MISSING_ID], "todo"),
+        (&["blocker", "add", "x"], "blocker"),
+        (&["blocker", "edit", MISSING_ID, "x"], "blocker"),
+        (&["blocker", "resolve", MISSING_ID], "blocker"),
+        (&["reflection", "append", "x"], "append"),
+        (&["note", "append", "x", "--heading"], "append"),
+        (
+            &["note", "edit", "--line", "1", "--expect", "x", "--delete"],
+            "note_edit",
+        ),
+        // 本文が空でも、権限の誤りが先
+        (&["todo", "add", ""], "todo"),
+    ];
+    for (args, scope) in cases {
+        let out = exec(w, args);
+        assert_eq!(out.code, 3, "{args:?}: {}", out.stderr);
+        assert!(
+            out.stderr.contains(&format!("[required scope: {scope}]")),
+            "{args:?}: {}",
+            out.stderr
+        );
+        let json = exec(w, &[args, &["--json"]].concat()).json();
+        assert_eq!(json["error"]["code"], "permission_denied");
+        assert_eq!(json["error"]["required_scope"], scope);
+    }
+    // 権限の誤りでは何も記録しない
+    assert_eq!(change_log(&dir), before);
+    // ID の形の誤りと日付の形の誤りは、権限より先（直してやり直すしかないため。05 3.2）
+    assert_eq!(exec(w, &["todo", "done", "nope"]).code, 2);
+    assert_eq!(
+        exec(w, &["todo", "add", "x", "--date", "2026-13-40"]).code,
+        2
+    );
+}
+
+/// 結果の JSON の欄 `key`（文字列）。
+fn field(out: &Out, key: &str) -> String {
+    out.json()[key].as_str().unwrap().to_owned()
+}
+
+fn write_commands(w: &World) {
+    let dir = seed(w);
+    set_cli_scopes(
+        &dir,
+        &[
+            Scope::Read,
+            Scope::Todo,
+            Scope::Blocker,
+            Scope::Append,
+            Scope::NoteEdit,
+        ],
+    );
+    let baseline = change_log(&dir).len();
+    let day = ["--date", "2026-11-02"];
+    let run = |args: &[&str]| exec(w, &[args, &day].concat());
+
+    // TODO
+    let added = run(&["todo", "add", "  write the spec  "]);
+    assert_eq!(added.code, 0, "{}", added.stderr);
+    let id = {
+        let out = run(&["todo", "add", "second", "--json"]);
+        assert_eq!(out.json()["date"], "2026-11-02");
+        field(&out, "id")
+    };
+    assert!(added.stdout.starts_with("Added TODO "));
+    assert!(added.stdout.ends_with(" (2026-11-02).\n"));
+    let out = exec(w, &["todo", "edit", &id, "second"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str()),
+        (0, "Same text. Nothing changed.\n")
+    );
+    let out = exec(w, &["todo", "edit", &id, "second (edited)"]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, "Edited.\n"));
+    let out = exec(w, &["todo", "done", &id]);
+    assert_eq!((out.code, out.stdout.as_str()), (0, "Completed.\n"));
+    let out = exec(w, &["todo", "complete", &id]);
+    assert_eq!(out.stdout, "Already done. Nothing changed.\n");
+    let json = exec(w, &["todo", "complete", &id, "--json"]).json();
+    assert_eq!(
+        (json["updated"].as_bool(), json["status"].as_str()),
+        (Some(false), Some("done"))
+    );
+    assert_eq!(exec(w, &["todo", "reopen", &id]).stdout, "Reopened.\n");
+    assert_eq!(
+        exec(w, &["todo", "reopen", &id]).stdout,
+        "Already open. Nothing changed.\n"
+    );
+    // 存在しない ID は not_found（終了コード 4）
+    assert_eq!(exec(w, &["todo", "done", MISSING_ID]).code, 4);
+
+    // 障害：種類の違う ID は invalid_argument と、使う操作
+    let blocker = field(&run(&["blocker", "add", "waiting", "--json"]), "id");
+    let out = exec(w, &["todo", "done", &blocker]);
+    assert_eq!(out.code, 2, "{}", out.stderr);
+    assert!(
+        out.stderr.contains("[use yunagi blocker resolve]"),
+        "{}",
+        out.stderr
+    );
+    let out = exec(w, &["blocker", "resolve", &id]);
+    assert!(
+        out.stderr.contains("[use yunagi todo complete]"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        exec(w, &["blocker", "edit", &blocker, "waiting (edited)"]).stdout,
+        "Edited.\n"
+    );
+    assert_eq!(
+        exec(w, &["blocker", "resolve", &blocker, "--note", "fixed"]).stdout,
+        "Resolved. Note added.\n"
+    );
+    // やり直しは何も変えない成功。別の解消メモは conflict（note_exists。終了コード 5）で、既存の本文が見える
+    assert_eq!(
+        exec(w, &["blocker", "resolve", &blocker, "--note", "fixed"]).stdout,
+        "Already resolved. Nothing changed.\n"
+    );
+    let out = exec(w, &["blocker", "resolve", &blocker, "--note", "other"]);
+    assert_eq!(out.code, 5, "{}", out.stderr);
+    assert!(out.stderr.contains("conflict (note_exists)"));
+    assert!(out.stderr.contains("[existing resolution note: fixed]"));
+
+    // 振り返りとノート
+    assert_eq!(
+        run(&["reflection", "append", "went well"]).stdout,
+        "Appended.\n"
+    );
+    assert_eq!(
+        run(&["reflect", "append", "second line"]).stdout,
+        "Appended.\n"
+    );
+    let board = run(&["board", "--json"]).json();
+    assert_eq!(board["reflection"], "went well\nsecond line");
+    assert_eq!(
+        run(&["note", "append", "memo line", "--heading", "retro"]).stdout,
+        "Appended.\n"
+    );
+    let note = run(&["note", "get", "--json"]).json();
+    let lines: Vec<&str> = note["body"].as_str().unwrap().split('\n').collect();
+    let memo = lines.iter().position(|l| *l == "memo line").unwrap() + 1;
+    assert!(lines[memo - 2].ends_with(" retro"), "{lines:?}");
+    // 行を書き換える。--expect が違えば conflict（changed）
+    let line = memo.to_string();
+    let out = run(&[
+        "note",
+        "edit",
+        "--line",
+        &line,
+        "--expect",
+        "not this",
+        "--replace",
+        "x",
+    ]);
+    assert_eq!(out.code, 5, "{}", out.stderr);
+    assert!(out.stderr.contains("conflict (changed)"));
+    let out = run(&[
+        "note",
+        "edit",
+        "--line",
+        &line,
+        "--expect",
+        "memo line",
+        "--replace",
+        "memo line",
+    ]);
+    assert_eq!(out.stdout, "Nothing changed.\n");
+    let out = run(&[
+        "note",
+        "edit",
+        "--line",
+        &line,
+        "--expect",
+        "memo line",
+        "--replace",
+        "memo (fixed)",
+    ]);
+    assert_eq!(out.stdout, "Edited.\n");
+    let out = run(&[
+        "note",
+        "edit",
+        "--line",
+        &line,
+        "--expect=memo (fixed)",
+        "--delete",
+    ]);
+    assert_eq!(out.stdout, "Edited.\n");
+    assert!(!run(&["note", "get"]).stdout.contains("memo"));
+    // 本文の誤りはコアが invalid_argument にする（行番号 0）
+    let out = run(&["note", "edit", "--line", "0", "--expect", "x", "--delete"]);
+    assert_eq!(out.code, 2, "{}", out.stderr);
+
+    // 記録：変えた操作だけが、CLI クライアントの agent として残る（何も変えなかった成功は残さない）
+    let log = change_log(&dir);
+    let ops: Vec<&str> = log[baseline..].iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(
+        ops,
+        [
+            "todo.add",
+            "todo.add",
+            "todo.edit",
+            "todo.complete",
+            "todo.reopen",
+            "blocker.add",
+            "blocker.edit",
+            "blocker.resolve",
+            "reflection.append",
+            "reflection.append",
+            "note.append",
+            "note.edit",
+            "note.edit",
+        ]
+    );
+    let cli = Some(CLI_ID.to_string());
+    for row in &log[baseline..] {
+        assert_eq!((row.1.as_str(), &row.2), ("agent", &cli), "{row:?}");
+    }
+    drop(DbLock::acquire(&dir, Duration::ZERO).unwrap());
+}
+
+fn write_stdin(w: &World) {
+    let dir = seed(w);
+    set_cli_scopes(
+        &dir,
+        &[Scope::Read, Scope::Todo, Scope::Blocker, Scope::Append],
+    );
+    // `-` は標準入力から読む。末尾の改行は、コアが前後の空白として除く（やり直しが同じ本文になる）
+    let out = exec_with_stdin(
+        w,
+        &["todo", "add", "-", "--date", "2026-11-02", "--json"],
+        "from stdin\n".as_bytes(),
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.json()["text"], "from stdin");
+    let id = field(&out, "id");
+    let out = exec_with_stdin(w, &["todo", "edit", &id, "-"], "from stdin\n".as_bytes());
+    assert_eq!(out.stdout, "Same text. Nothing changed.\n");
+    let out = exec_with_stdin(
+        w,
+        &["reflection", "append", "-", "--date", "2026-11-02"],
+        "git commit subject\n".as_bytes(),
+    );
+    assert_eq!(out.stdout, "Appended.\n");
+    let blocker = field(&exec(w, &["blocker", "add", "b", "--json"]), "id");
+    let out = exec_with_stdin(
+        w,
+        &["blocker", "resolve", &blocker, "--note", "-"],
+        b"fixed\n",
+    );
+    assert_eq!(out.stdout, "Resolved. Note added.\n");
+    // 標準入力が UTF-8 でない・大きすぎる：接続の前に invalid_argument（ロックを別のプロセスが持っていても
+    // busy にならず、すぐ返る）
+    let held = hold_lock(dir.path());
+    let started = Instant::now();
+    let out = exec_with_stdin(w, &["todo", "add", "-"], &[0xff, 0xfe]);
+    assert_eq!(out.code, 2, "{}", out.stderr);
+    let big = vec![b'a'; yunagi_cli::args::MAX_STDIN_TEXT + 1];
+    let out = exec_with_stdin(w, &["todo", "add", "-"], &big);
+    assert_eq!(out.code, 2, "{}", out.stderr);
+    assert!(started.elapsed() < TIMING.wait);
+    drop(held);
+}
+
+fn write_mismatch(w: &World) {
+    let own = w.own();
+    let cand = w.candidate_dir();
+    // アプリが標準の場所で動いている。自分の既定ディレクトリは無い：書き込みは何も書かずに断る
+    let held = hold_lock(&cand);
+    for args in [
+        &["todo", "add", "x"][..],
+        &["blocker", "resolve", MISSING_ID],
+        &["note", "append", "x"],
+    ] {
+        let out = exec(w, args);
+        assert_eq!(out.code, 8, "{args:?}: {}", out.stderr);
+        assert!(
+            out.stderr.contains("default_dir_mismatch"),
+            "{}",
+            out.stderr
+        );
+    }
+    assert!(!own.path().exists());
+    drop(held);
 }

@@ -116,9 +116,13 @@ fn flush_warnings(warnings: &Warnings, io: &mut Io<'_>) {
     }
 }
 
-fn operation(op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
+fn operation(mut op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
+    // `-` の本文は、依頼を組み立て終えてから接続する（接続の前に標準入力を読む。05 4.1）
+    if let Err(e) = op.read_stdin(io.stdin) {
+        return fail(&e, json, io);
+    }
     let warnings = Warnings::default();
-    let Operation { method, params } = op;
+    let Operation { method, params, .. } = op;
     let result = connector(env, &warnings).and_then(|c| c.call(method, params));
     flush_warnings(&warnings, io);
     match result {

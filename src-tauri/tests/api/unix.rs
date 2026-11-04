@@ -1033,6 +1033,45 @@ fn the_cli_goes_through_the_app_and_follows_its_permissions(dir: &DefaultDir) {
         .unwrap();
     assert_eq!(yunagi(&["board"]).0, 0);
 
+    // 書き込み（YUN-91）：アプリ経由（`api_write`）で成功し、画面と同じ `changed`（`by: agent`）を出す。
+    // 何も変えなかった成功では出さない。権限はアプリ（コア）が項目を見る前に確かめる
+    let (code, _, err) = yunagi(&["todo", "add", "no scope"]);
+    assert_eq!(code, 3, "{err}");
+    assert!(err.contains("[required scope: todo]"));
+    h.core
+        .read(|conn| {
+            agent_client::update_scopes(
+                conn,
+                agent_client::CLI_ID,
+                &[Scope::Read, Scope::Todo, Scope::Append],
+            )
+        })
+        .unwrap();
+    h.drain();
+    let started = std::time::Instant::now();
+    let (code, out, err) = yunagi(&["todo", "add", "written via app", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(h.next_changed(), "agent");
+    let written: Value = serde_json::from_str(&out).unwrap();
+    let id = written["id"].as_str().unwrap().to_owned();
+    let (code, out, _) = yunagi(&["todo", "edit", &id, "written via app"]);
+    assert_eq!((code, out.as_str()), (0, "Same text. Nothing changed.\n"));
+    h.assert_no_changed();
+    let (code, out, _) = yunagi(&["todo", "done", &id]);
+    assert_eq!((code, out.as_str()), (0, "Completed.\n"));
+    assert_eq!(h.next_changed(), "agent");
+    let (code, out, _) = yunagi(&["note", "append", "appended via app", "--heading"]);
+    assert_eq!((code, out.as_str()), (0, "Appended.\n"));
+    assert_eq!(h.next_changed(), "agent");
+    let (code, _, err) = yunagi(&["note", "edit", "--line", "1", "--expect", "x", "--delete"]);
+    assert_eq!(code, 3, "{err}");
+    assert!(err.contains("[required scope: note_edit]"));
+    h.assert_no_changed();
+    h.core
+        .read(|conn| agent_client::update_scopes(conn, agent_client::CLI_ID, &[Scope::Read]))
+        .unwrap();
+
     // `search` の引数の誤りは、アプリでも同じ（-32602 または invalid_argument）
     let e = h.err("claude-code", "search", json!({"query": "x", "bogus": 1}));
     assert_eq!(e["rpc_code"], wire::INVALID_PARAMS);

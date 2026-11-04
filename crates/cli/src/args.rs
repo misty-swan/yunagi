@@ -35,11 +35,35 @@ pub enum Command {
 pub struct Operation {
     pub method: &'static str,
     pub params: Map<String, Value>,
+    /// 標準入力から読む本文を入れる引数の名前（`TEXT` か `--note` に `-` が指定されたとき。05 4.1）。
+    /// 標準入力は引数を読む段階では読まず、依頼を組み立てるときに [`Operation::read_stdin`] で読む。
+    pub stdin_key: Option<&'static str>,
 }
 
 impl Operation {
     fn new(method: &'static str, params: Map<String, Value>) -> Self {
-        Self { method, params }
+        Self {
+            method,
+            params,
+            stdin_key: None,
+        }
+    }
+
+    /// 本文の引数 `key`（値は `-` で、あとで標準入力に置き換える）を持つ操作にする。
+    fn with_stdin(mut self, key: &'static str) -> Self {
+        if self.params.get(key).and_then(Value::as_str) == Some("-") {
+            self.stdin_key = Some(key);
+        }
+        self
+    }
+
+    /// `-` が指定された本文を、標準入力 `stdin` から読んで引数に入れる（接続の前に呼ぶ。05 4.1）。
+    pub fn read_stdin(&mut self, stdin: &mut dyn Read) -> Result<(), ErrorObject> {
+        if let Some(key) = self.stdin_key.take() {
+            let text = text_arg("-", stdin)?;
+            self.params.insert(key.into(), Value::String(text));
+        }
+        Ok(())
     }
 }
 
@@ -53,6 +77,18 @@ Commands:
   note get [--date D] [--heading H] Show the note (or the sections with a heading)
   search QUERY [--from D] [--to D] [--kind K]... [--limit N]
                                     Search TODOs, blockers, notes and reflections
+  todo add TEXT [--date D]          Add a TODO
+  todo edit ID TEXT                 Change the text of a TODO
+  todo complete ID                  Mark a TODO done (alias: todo done)
+  todo reopen ID                    Mark a done TODO open again
+  blocker add TEXT [--date D]       Add a blocker
+  blocker edit ID TEXT              Change the text of a blocker
+  blocker resolve ID [--note TEXT]  Mark a blocker resolved (with a resolution note)
+  reflection append TEXT [--date D] Append to the reflection (alias: reflect append)
+  note append TEXT [--date D] [--heading [TITLE]]
+                                    Append to the note (with a time heading)
+  note edit --line N --expect TEXT (--replace TEXT | --delete | --move-to M) [--date D]
+                                    Change a line of the note
   doctor                            Show diagnostic information (no work data)
 
 Options:
@@ -61,6 +97,9 @@ Options:
   -h, --help   Print this help
 
 D is YYYY-MM-DD, today or yesterday. K is todo, blocker, note or reflection.
+TEXT (and --note) is read from standard input when it is -.
+A value that starts with -- is written as --name=VALUE (for example --expect=---).
+--heading=TITLE (or --heading TITLE) sets the title; a bare --heading adds just the time.
 ";
 
 /// 引数の誤り。誤りの出し方（`--json` か）は、誤りがあっても読み終えた結果で決める（`--json` の
@@ -83,7 +122,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
     let mut help = false;
     let mut first_error: Option<ErrorObject> = None;
     let mut positionals: Vec<&str> = Vec::new();
-    let mut options: Vec<(String, String)> = Vec::new();
+    let mut options: Vec<(String, Option<String>)> = Vec::new();
     let mut iter = args.iter().peekable();
     let mut only_positionals = false;
     while let Some(arg) = iter.next() {
@@ -106,12 +145,24 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
                     continue;
                 };
                 match rest.split_once('=') {
-                    Some((name, value)) => options.push((name.to_owned(), value.to_owned())),
+                    Some((name, value)) => {
+                        options.push((name.to_owned(), Some(value.to_owned())));
+                    }
+                    // 値を取らない指定
+                    None if rest == "delete" => options.push((rest.to_owned(), None)),
+                    // 値を省略できる指定。次の引数が `-` で始まらなければ件名として読む
+                    // （`-` や `--` で始まる件名は `--heading=TITLE` と書く）
+                    None if rest == "heading" => {
+                        let title = iter.next_if(|next| !next.starts_with('-')).cloned();
+                        options.push((rest.to_owned(), title));
+                    }
                     None => match iter.next_if(|next| !next.starts_with("--")) {
-                        Some(value) => options.push((rest.to_owned(), value.clone())),
+                        Some(value) => options.push((rest.to_owned(), Some(value.clone()))),
                         None => {
                             first_error.get_or_insert_with(|| {
-                                error::invalid_argument(format!("option --{rest} needs a value"))
+                                error::invalid_argument(format!(
+                                    "option --{rest} needs a value (a value that starts with -- is written as --{rest}=VALUE)"
+                                ))
                             });
                         }
                     },
@@ -140,7 +191,10 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
 }
 
 /// 名詞（と動詞）、位置引数、オプションからコマンドを作る。
-fn command(positionals: &[&str], options: &[(String, String)]) -> Result<Command, ErrorObject> {
+fn command(
+    positionals: &[&str],
+    options: &[(String, Option<String>)],
+) -> Result<Command, ErrorObject> {
     let Some((&noun, rest)) = positionals.split_first() else {
         return Err(error::invalid_argument(format!(
             "no command given\n\n{USAGE}"
@@ -164,12 +218,103 @@ fn command(positionals: &[&str], options: &[(String, String)]) -> Result<Command
         "note" => match rest {
             ["get"] | ["show"] => {
                 let mut params = Map::new();
-                opts.take_into(&mut params, "date", "date");
-                opts.take_into(&mut params, "heading", "heading");
+                opts.take_into(&mut params, "date", "date")?;
+                // 読み取りの `--heading` は、見出しの文字が要る
+                match opts.take_optional("heading") {
+                    None => {}
+                    Some(Some(heading)) => {
+                        params.insert("heading".into(), json!(heading));
+                    }
+                    Some(None) => {
+                        return Err(error::invalid_argument(
+                            "option --heading needs a value (a heading from `yunagi board`, for example --heading \"10:00 sync\")",
+                        ));
+                    }
+                }
                 opts.finish()?;
                 Command::Operation(Operation::new("get_note", params))
             }
-            _ => return Err(unknown(positionals)),
+            ["append", text] => {
+                let mut params = text_date_params(&mut opts, text)?;
+                // `--heading` は値を省略できる（省略は件名なしの `## HH:MM`）
+                if let Some(title) = opts.take_optional("heading") {
+                    params.insert("heading".into(), json!(title.unwrap_or_default()));
+                }
+                opts.finish()?;
+                Command::Operation(Operation::new("append_note", params).with_stdin("text"))
+            }
+            ["edit"] => {
+                let mut params = Map::new();
+                opts.take_into(&mut params, "date", "date")?;
+                let line = opts.take_number("line")?.ok_or_else(|| {
+                    error::invalid_argument("note edit needs --line N (a line number, from 1)")
+                })?;
+                params.insert("line".into(), json!(line));
+                // 行そのものを渡すので、`-` も文字として渡す（標準入力からは読まない）
+                let expected = opts.take_value("expect")?.ok_or_else(|| {
+                    error::invalid_argument(
+                        "note edit needs --expect TEXT (the current text of the line; a value that starts with -- is written as --expect=VALUE)",
+                    )
+                })?;
+                params.insert("expected_text".into(), json!(expected));
+                let replace = opts.take_value("replace")?;
+                let delete = opts.take_flag("delete")?;
+                let move_to = opts.take_number("move-to")?;
+                match (replace, delete, move_to) {
+                    (Some(text), false, None) => {
+                        params.insert("replace".into(), json!(text));
+                    }
+                    (None, true, None) => {
+                        params.insert("delete".into(), json!(true));
+                    }
+                    (None, false, Some(to)) => {
+                        params.insert("move_to".into(), json!(to));
+                    }
+                    _ => {
+                        return Err(error::invalid_argument(
+                            "note edit needs exactly one of --replace TEXT, --delete and --move-to M",
+                        ));
+                    }
+                }
+                opts.finish()?;
+                Command::Operation(Operation::new("edit_note", params))
+            }
+            _ => return Err(unknown_or_usage(positionals, rest)),
+        },
+        "todo" => match rest {
+            ["add", text] => {
+                let params = text_date_params(&mut opts, text)?;
+                opts.finish()?;
+                Command::Operation(Operation::new("add_todo", params).with_stdin("text"))
+            }
+            ["edit", id, text] => item_text(&mut opts, "edit_todo", id, text)?,
+            ["complete", id] | ["done", id] => item_id(&mut opts, "complete_todo", id)?,
+            ["reopen", id] => item_id(&mut opts, "reopen_todo", id)?,
+            _ => return Err(unknown_or_usage(positionals, rest)),
+        },
+        "blocker" => match rest {
+            ["add", text] => {
+                let params = text_date_params(&mut opts, text)?;
+                opts.finish()?;
+                Command::Operation(Operation::new("add_blocker", params).with_stdin("text"))
+            }
+            ["edit", id, text] => item_text(&mut opts, "edit_blocker", id, text)?,
+            ["resolve", id] => {
+                let mut params = Map::new();
+                params.insert("id".into(), json!(id));
+                opts.take_into(&mut params, "note", "note")?;
+                opts.finish()?;
+                Command::Operation(Operation::new("resolve_blocker", params).with_stdin("note"))
+            }
+            _ => return Err(unknown_or_usage(positionals, rest)),
+        },
+        "reflection" | "reflect" => match rest {
+            ["append", text] => {
+                let params = text_date_params(&mut opts, text)?;
+                opts.finish()?;
+                Command::Operation(Operation::new("append_reflection", params).with_stdin("text"))
+            }
+            _ => return Err(unknown_or_usage(positionals, rest)),
         },
         "search" => {
             let [query] = rest else {
@@ -179,13 +324,13 @@ fn command(positionals: &[&str], options: &[(String, String)]) -> Result<Command
             };
             let mut params = Map::new();
             params.insert("query".into(), json!(query));
-            opts.take_into(&mut params, "from", "from");
-            opts.take_into(&mut params, "to", "to");
-            let kinds = opts.take_all("kind");
+            opts.take_into(&mut params, "from", "from")?;
+            opts.take_into(&mut params, "to", "to")?;
+            let kinds = opts.take_all("kind")?;
             if !kinds.is_empty() {
                 params.insert("kinds".into(), json!(kinds));
             }
-            if let Some(limit) = opts.take("limit") {
+            if let Some(limit) = opts.take_value("limit")? {
                 let n: u64 = limit.parse().map_err(|_| {
                     error::invalid_argument("--limit must be a positive whole number")
                 })?;
@@ -213,42 +358,142 @@ fn unknown(positionals: &[&str]) -> ErrorObject {
     ))
 }
 
-/// 読み終えていないオプション。
+/// 名詞は合っているが、動詞が無い・引数の数が合わない。
+fn unknown_or_usage(positionals: &[&str], rest: &[&str]) -> ErrorObject {
+    if rest.is_empty() {
+        return unknown(positionals);
+    }
+    error::invalid_argument(format!(
+        "wrong arguments for: {}\n\n{USAGE}",
+        positionals.join(" ")
+    ))
+}
+
+/// `TEXT` と `--date` を持つ操作（`add_todo` など）の引数。
+fn text_date_params(opts: &mut Options, text: &str) -> Result<Map<String, Value>, ErrorObject> {
+    let mut params = Map::new();
+    params.insert("text".into(), json!(text));
+    opts.take_into(&mut params, "date", "date")?;
+    Ok(params)
+}
+
+/// `ID TEXT` を取る操作（`edit_todo`・`edit_blocker`）。
+fn item_text(
+    opts: &mut Options,
+    method: &'static str,
+    id: &str,
+    text: &str,
+) -> Result<Command, ErrorObject> {
+    std::mem::take(opts).finish()?;
+    let params = Map::from_iter([
+        ("id".to_owned(), json!(id)),
+        ("text".to_owned(), json!(text)),
+    ]);
+    Ok(Command::Operation(
+        Operation::new(method, params).with_stdin("text"),
+    ))
+}
+
+/// `ID` だけを取る操作（`complete_todo`・`reopen_todo`）。ID の項目の日を対象にするので `--date` は無い。
+fn item_id(opts: &mut Options, method: &'static str, id: &str) -> Result<Command, ErrorObject> {
+    std::mem::take(opts).finish()?;
+    let params = Map::from_iter([("id".to_owned(), json!(id))]);
+    Ok(Command::Operation(Operation::new(method, params)))
+}
+
+/// 読み終えていないオプション。値が `None` のものは、値を書かなかった指定（`--delete`、値を省略した
+/// `--heading`）。
 #[derive(Default)]
-struct Options(Vec<(String, String)>);
+struct Options(Vec<(String, Option<String>)>);
 
 impl Options {
-    /// 名前 `name` のオプションの値を 1 つ取り出す（同じ名前を繰り返したら、最後のもの）。
-    fn take(&mut self, name: &str) -> Option<String> {
-        let all = self.take_all(name);
-        all.into_iter().last()
-    }
-
-    /// 名前 `name` のオプションの値をすべて取り出す。
-    fn take_all(&mut self, name: &str) -> Vec<String> {
-        let mut taken = Vec::new();
+    /// 名前 `name` の指定を取り出す（同じ名前を繰り返したら、最後のもの）。無ければ `None`、値を
+    /// 書かなかったなら `Some(None)`。
+    fn take_optional(&mut self, name: &str) -> Option<Option<String>> {
+        let mut found = None;
         self.0.retain(|(n, v)| {
             if n == name {
-                taken.push(v.clone());
+                found = Some(v.clone());
                 false
             } else {
                 true
             }
         });
-        taken
+        found
+    }
+
+    /// 値を取るオプション `name` の値を 1 つ取り出す。
+    fn take_value(&mut self, name: &str) -> Result<Option<String>, ErrorObject> {
+        match self.take_optional(name) {
+            None => Ok(None),
+            Some(Some(value)) => Ok(Some(value)),
+            Some(None) => Err(error::invalid_argument(format!(
+                "option --{name} needs a value"
+            ))),
+        }
+    }
+
+    /// 値を取らないオプション `name`。あれば `true`（`--delete=x` のように値を付けたら誤り）。
+    fn take_flag(&mut self, name: &str) -> Result<bool, ErrorObject> {
+        match self.take_optional(name) {
+            None => Ok(false),
+            Some(None) => Ok(true),
+            Some(Some(_)) => Err(error::invalid_argument(format!(
+                "option --{name} does not take a value"
+            ))),
+        }
+    }
+
+    /// 0 以上の整数を取るオプション `name`。
+    fn take_number(&mut self, name: &str) -> Result<Option<u64>, ErrorObject> {
+        match self.take_value(name)? {
+            None => Ok(None),
+            Some(value) => value.parse().map(Some).map_err(|_| {
+                error::invalid_argument(format!("--{name} must be a whole number, from 0"))
+            }),
+        }
+    }
+
+    /// 名前 `name` のオプションの値をすべて取り出す。
+    fn take_all(&mut self, name: &str) -> Result<Vec<String>, ErrorObject> {
+        let mut taken = Vec::new();
+        let mut missing = false;
+        self.0.retain(|(n, v)| {
+            if n == name {
+                match v {
+                    Some(v) => taken.push(v.clone()),
+                    None => missing = true,
+                }
+                false
+            } else {
+                true
+            }
+        });
+        if missing {
+            return Err(error::invalid_argument(format!(
+                "option --{name} needs a value"
+            )));
+        }
+        Ok(taken)
     }
 
     /// オプション `name` があれば、引数の名前 `key` で `params` に入れる。
-    fn take_into(&mut self, params: &mut Map<String, Value>, name: &str, key: &str) {
-        if let Some(value) = self.take(name) {
+    fn take_into(
+        &mut self,
+        params: &mut Map<String, Value>,
+        name: &str,
+        key: &str,
+    ) -> Result<(), ErrorObject> {
+        if let Some(value) = self.take_value(name)? {
             params.insert(key.into(), json!(value));
         }
+        Ok(())
     }
 
     /// `--date` だけを持つ操作の引数。
     fn date_only(&mut self) -> Result<Map<String, Value>, ErrorObject> {
         let mut params = Map::new();
-        self.take_into(&mut params, "date", "date");
+        self.take_into(&mut params, "date", "date")?;
         std::mem::take(self).finish()?;
         Ok(params)
     }
@@ -424,6 +669,225 @@ mod tests {
             let e = parse_args(args).unwrap_err();
             assert_eq!(error::code(&e), "invalid_argument", "{args:?}");
         }
+    }
+
+    #[test]
+    fn todo_and_blocker_commands_map_to_the_operations() {
+        let add = op(&["todo", "add", "survey", "--date", "yesterday"]);
+        assert_eq!(add.method, "add_todo");
+        assert_eq!(add.params["text"], "survey");
+        assert_eq!(add.params["date"], "yesterday");
+        let edit = op(&["todo", "edit", "ID1", "new text"]);
+        assert_eq!(edit.method, "edit_todo");
+        assert_eq!(
+            (&edit.params["id"], &edit.params["text"]),
+            (&json!("ID1"), &json!("new text"))
+        );
+        for verb in ["complete", "done"] {
+            assert_eq!(op(&["todo", verb, "ID1"]).method, "complete_todo");
+        }
+        assert_eq!(op(&["todo", "reopen", "ID1"]).method, "reopen_todo");
+        assert_eq!(op(&["blocker", "add", "waiting"]).method, "add_blocker");
+        assert_eq!(op(&["blocker", "edit", "ID1", "x"]).method, "edit_blocker");
+        let resolve = op(&["blocker", "resolve", "ID1", "--note", "fixed"]);
+        assert_eq!(resolve.method, "resolve_blocker");
+        assert_eq!(resolve.params["note"], "fixed");
+        assert!(
+            !op(&["blocker", "resolve", "ID1"])
+                .params
+                .contains_key("note")
+        );
+    }
+
+    #[test]
+    fn reflection_and_note_append() {
+        for noun in ["reflection", "reflect"] {
+            let r = op(&[noun, "append", "good day", "--date", "today"]);
+            assert_eq!(r.method, "append_reflection");
+            assert_eq!(r.params["text"], "good day");
+        }
+        // `--heading` を付けなければ見出しを入れない
+        assert!(
+            !op(&["note", "append", "memo"])
+                .params
+                .contains_key("heading")
+        );
+        // 値を省略した `--heading` は件名なし（空の文字列）。文の前でも後でも同じ
+        assert_eq!(
+            op(&["note", "append", "memo", "--heading"]).params["heading"],
+            ""
+        );
+        assert_eq!(
+            op(&["note", "append", "--heading", "--date", "today", "memo"]).params["heading"],
+            ""
+        );
+        assert_eq!(
+            op(&["note", "append", "memo", "--heading="]).params["heading"],
+            ""
+        );
+        // 件名は次の引数か `=` で渡す。`-` で始まる件名は `=` で書く
+        assert_eq!(
+            op(&["note", "append", "--heading", "retro", "memo"]).params["heading"],
+            "retro"
+        );
+        assert_eq!(
+            op(&["note", "append", "memo", "--heading=-x"]).params["heading"],
+            "-x"
+        );
+        let dash = op(&["note", "append", "--heading", "-"]);
+        assert_eq!(dash.params["text"], "-");
+        assert_eq!(dash.params["heading"], "");
+        assert_eq!(dash.stdin_key, Some("text"));
+        // 読み取りの `--heading` は値が要る
+        let bad = parse_args(&["note", "get", "--heading"]).unwrap_err();
+        assert!(error::message(&bad).contains("--heading needs a value"));
+    }
+
+    #[test]
+    fn note_edit_takes_exactly_one_change() {
+        let replace = op(&[
+            "note",
+            "edit",
+            "--line",
+            "3",
+            "--expect",
+            "old",
+            "--replace",
+            "new",
+        ]);
+        assert_eq!(replace.method, "edit_note");
+        assert_eq!(replace.params["line"], 3);
+        assert_eq!(replace.params["expected_text"], "old");
+        assert_eq!(replace.params["replace"], "new");
+        // `--delete` は値を取らないので、後ろの指定を飲み込まない
+        let delete = op(&[
+            "note",
+            "edit",
+            "--line=2",
+            "--expect=x",
+            "--delete",
+            "--date",
+            "today",
+        ]);
+        assert_eq!(delete.params["delete"], true);
+        assert_eq!(delete.params["date"], "today");
+        let delete = op(&["note", "edit", "--line", "2", "--expect", "x", "--delete"]);
+        assert_eq!(delete.params["delete"], true);
+        let moved = op(&[
+            "note",
+            "edit",
+            "--line",
+            "2",
+            "--expect",
+            "x",
+            "--move-to",
+            "9",
+        ]);
+        assert_eq!(moved.params["move_to"], 9);
+        // 空の行も、`-` も、`---` も、行そのものとして渡す（標準入力からは読まない）
+        let blank = op(&["note", "edit", "--line", "2", "--expect=", "--replace", "-"]);
+        assert_eq!(
+            (&blank.params["expected_text"], &blank.params["replace"]),
+            (&json!(""), &json!("-"))
+        );
+        assert_eq!(blank.stdin_key, None);
+        assert_eq!(
+            op(&["note", "edit", "--line", "2", "--expect=---", "--delete"]).params["expected_text"],
+            "---"
+        );
+        let bad: &[&[&str]] = &[
+            // 変え方が無い・2つ以上
+            &["note", "edit", "--line", "2", "--expect", "x"],
+            &[
+                "note",
+                "edit",
+                "--line",
+                "2",
+                "--expect",
+                "x",
+                "--delete",
+                "--move-to",
+                "1",
+            ],
+            &[
+                "note",
+                "edit",
+                "--line",
+                "2",
+                "--expect",
+                "x",
+                "--replace",
+                "y",
+                "--delete",
+            ],
+            // 行と --expect は必ず要る
+            &["note", "edit", "--expect", "x", "--delete"],
+            &["note", "edit", "--line", "2", "--delete"],
+            // 数でない・値の誤り
+            &["note", "edit", "--line", "two", "--expect", "x", "--delete"],
+            &["note", "edit", "--line", "-1", "--expect", "x", "--delete"],
+            &[
+                "note",
+                "edit",
+                "--line",
+                "2",
+                "--expect",
+                "x",
+                "--delete=yes",
+            ],
+            // `---` は `--expect=---` と書く
+            &["note", "edit", "--line", "2", "--expect", "---", "--delete"],
+        ];
+        for args in bad {
+            let e = parse_args(args).unwrap_err();
+            assert_eq!(error::code(&e), "invalid_argument", "{args:?}");
+        }
+    }
+
+    #[test]
+    fn writes_by_id_take_no_date_and_a_text_needs_one_value() {
+        let bad: &[&[&str]] = &[
+            &["todo", "complete", "ID1", "--date", "today"],
+            &["todo", "reopen", "ID1", "--date", "today"],
+            &["todo", "edit", "ID1", "x", "--date", "today"],
+            &["blocker", "resolve", "ID1", "--date", "today"],
+            &["todo", "add"],
+            &["todo", "add", "a", "b"],
+            &["todo", "edit", "ID1"],
+            &["todo"],
+            &["todo", "frobnicate", "x"],
+            &["blocker", "resolve", "ID1", "--note"],
+            &["reflection", "append"],
+            &["note", "append"],
+        ];
+        for args in bad {
+            let e = parse_args(args).unwrap_err();
+            assert_eq!(error::code(&e), "invalid_argument", "{args:?}");
+        }
+    }
+
+    #[test]
+    fn a_dash_marks_the_text_to_read_from_standard_input() {
+        let mut add = op(&["todo", "add", "-"]);
+        assert_eq!(add.stdin_key, Some("text"));
+        let mut stdin: &[u8] = "from stdin\n".as_bytes();
+        add.read_stdin(&mut stdin).unwrap();
+        assert_eq!(add.params["text"], "from stdin\n");
+        assert_eq!(add.stdin_key, None);
+        assert_eq!(op(&["todo", "edit", "ID1", "-"]).stdin_key, Some("text"));
+        assert_eq!(
+            op(&["blocker", "resolve", "ID1", "--note", "-"]).stdin_key,
+            Some("note")
+        );
+        assert_eq!(op(&["reflection", "append", "-"]).stdin_key, Some("text"));
+        assert_eq!(op(&["todo", "add", "x"]).stdin_key, None);
+        // 標準入力が大きすぎる・UTF-8 でないなら、接続の前に invalid_argument
+        let mut bad = op(&["todo", "add", "-"]);
+        let mut bytes: &[u8] = &[0xff];
+        assert_eq!(
+            error::code(&bad.read_stdin(&mut bytes).unwrap_err()),
+            "invalid_argument"
+        );
     }
 
     #[test]

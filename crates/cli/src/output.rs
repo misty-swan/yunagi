@@ -16,6 +16,14 @@ pub fn render(method: &str, value: &Value) -> String {
         "open_board" => board(value, false),
         "get_note" => note(value),
         "search" => search(value),
+        "add_todo" => added("TODO", value),
+        "add_blocker" => added("blocker", value),
+        "edit_todo" | "edit_blocker" => changed(value, "Edited.", "Same text. Nothing changed."),
+        "complete_todo" => changed(value, "Completed.", "Already done. Nothing changed."),
+        "reopen_todo" => changed(value, "Reopened.", "Already open. Nothing changed."),
+        "resolve_blocker" => resolved(value),
+        "append_note" | "append_reflection" => changed(value, "Appended.", "Nothing changed."),
+        "edit_note" => changed(value, "Edited.", "Nothing changed."),
         // 知らない操作は JSON のまま出す
         _ => format!("{value}\n"),
     }
@@ -23,6 +31,45 @@ pub fn render(method: &str, value: &Value) -> String {
 
 fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+/// 書き込みの成功の文。実際に変えたとき（`updated` が真）は `done`、何も変えなかったときは
+/// `unchanged` を、改行をつけて返す（05 3.2・4.1）。
+fn changed(value: &Value, done: &str, unchanged: &'static str) -> String {
+    let updated = value
+        .get("updated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    format!("{}\n", if updated { done } else { unchanged })
+}
+
+/// `add_todo`・`add_blocker`：追加した項目の ID が分かるようにする（あとで編集や完了に使う）。
+fn added(kind: &str, value: &Value) -> String {
+    format!(
+        "Added {kind} {} ({}).\n",
+        str_of(value, "id"),
+        str_of(value, "date")
+    )
+}
+
+/// `resolve_blocker`（05 3章）：解消した・解消メモを書いた・何も変えていない。`--note` を付けずに解消した
+/// 障害に前の解消メモが残っていたら、その本文を添える（利用者に伝えるため）。
+fn resolved(value: &Value) -> String {
+    let flag = |key| value.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let (resolved, note_written) = (flag("resolved"), flag("note_written"));
+    let mut out = match (resolved, note_written) {
+        (true, true) => "Resolved. Note added.\n".to_owned(),
+        (true, false) => "Resolved.\n".to_owned(),
+        (false, true) => "Note added.\n".to_owned(),
+        (false, false) => "Already resolved. Nothing changed.\n".to_owned(),
+    };
+    if resolved
+        && !note_written
+        && let Some(note) = value.get("resolution_note").and_then(Value::as_str)
+    {
+        let _ = writeln!(out, "Existing resolution note: {note}");
+    }
+    out
 }
 
 fn board(value: &Value, full: bool) -> String {
@@ -202,8 +249,40 @@ pub fn render_error(error: &ErrorObject) -> String {
     if let Some(scope) = error.get("required_scope").and_then(Value::as_str) {
         let _ = write!(out, " [required scope: {scope}]");
     }
+    // 次の動きを決める手がかり（`--json` では欄として出ているが、テキストでは `message` に入っていない）
+    if let Some(id) = error.get("carried_to_id").and_then(Value::as_str) {
+        let date = error
+            .get("carried_to_date")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let _ = write!(out, " [carried to: {id} ({date})]");
+    }
+    if let Some(note) = error.get("resolution_note").and_then(Value::as_str) {
+        let _ = write!(out, " [existing resolution note: {note}]");
+    }
+    if error.get("item_kind").is_some()
+        && let Some(command) = error.get("use_operation").map(|op| match op.as_str() {
+            Some(op) => format!("use {}", cli_command(op)),
+            None => "ask the user".to_owned(),
+        })
+    {
+        let _ = write!(out, " [{command}]");
+    }
     out.push('\n');
     out
+}
+
+/// 操作の名前（MCP のツール名）に当たる CLI のコマンド。
+fn cli_command(operation: &str) -> String {
+    match operation {
+        "edit_todo" => "yunagi todo edit",
+        "complete_todo" => "yunagi todo complete",
+        "reopen_todo" => "yunagi todo reopen",
+        "edit_blocker" => "yunagi blocker edit",
+        "resolve_blocker" => "yunagi blocker resolve",
+        other => other,
+    }
+    .to_owned()
 }
 
 #[cfg(test)]
@@ -280,6 +359,79 @@ mod tests {
             render("search", &json!({"query": "q", "hits": []})),
             "No results.\n"
         );
+    }
+
+    #[test]
+    fn write_results_use_the_texts_of_the_spec() {
+        let done = |method, v: Value| render(method, &v);
+        assert_eq!(
+            done(
+                "add_todo",
+                json!({"id": "T1", "date": "2026-11-04", "text": "x"})
+            ),
+            "Added TODO T1 (2026-11-04).\n"
+        );
+        assert_eq!(
+            done(
+                "add_blocker",
+                json!({"id": "B1", "date": "2026-11-04", "text": "x"})
+            ),
+            "Added blocker B1 (2026-11-04).\n"
+        );
+        for (method, updated, text) in [
+            ("edit_todo", true, "Edited.\n"),
+            ("edit_blocker", false, "Same text. Nothing changed.\n"),
+            ("complete_todo", true, "Completed.\n"),
+            ("complete_todo", false, "Already done. Nothing changed.\n"),
+            ("reopen_todo", true, "Reopened.\n"),
+            ("reopen_todo", false, "Already open. Nothing changed.\n"),
+            ("append_note", true, "Appended.\n"),
+            ("append_reflection", false, "Nothing changed.\n"),
+            ("edit_note", true, "Edited.\n"),
+            ("edit_note", false, "Nothing changed.\n"),
+        ] {
+            assert_eq!(done(method, json!({"updated": updated})), text, "{method}");
+        }
+    }
+
+    #[test]
+    fn resolving_a_blocker_tells_what_happened_and_the_note_left_behind() {
+        let r = |resolved, note_written, note: Value| {
+            render(
+                "resolve_blocker",
+                &json!({"updated": resolved || note_written, "resolved": resolved, "note_written": note_written, "resolution_note": note}),
+            )
+        };
+        assert_eq!(r(true, false, Value::Null), "Resolved.\n");
+        assert_eq!(r(true, true, json!("fixed")), "Resolved. Note added.\n");
+        assert_eq!(r(false, true, json!("fixed")), "Note added.\n");
+        assert_eq!(
+            r(false, false, json!("fixed")),
+            "Already resolved. Nothing changed.\n"
+        );
+        // `--note` を付けずに解消したとき、前の解消メモが残っていれば伝える
+        assert_eq!(
+            r(true, false, json!("old memo")),
+            "Resolved.\nExisting resolution note: old memo\n"
+        );
+    }
+
+    #[test]
+    fn errors_show_what_decides_the_next_move() {
+        let e = json!({"code": "conflict", "reason": "carried_over", "carried_to_id": "T9", "carried_to_date": "2026-11-05", "message": "m"});
+        assert_eq!(
+            render_error(&e),
+            "yunagi: conflict (carried_over): m [carried to: T9 (2026-11-05)]\n"
+        );
+        let e = json!({"code": "conflict", "reason": "note_exists", "resolution_note": "old", "message": "m"});
+        assert!(render_error(&e).ends_with("[existing resolution note: old]\n"));
+        let e = json!({"code": "invalid_argument", "item_kind": "blocker", "use_operation": "edit_blocker", "message": "m"});
+        assert_eq!(
+            render_error(&e),
+            "yunagi: invalid_argument: m [use yunagi blocker edit]\n"
+        );
+        let e = json!({"code": "invalid_argument", "item_kind": "blocker", "use_operation": null, "message": "m"});
+        assert!(render_error(&e).ends_with("[ask the user]\n"));
     }
 
     #[test]
