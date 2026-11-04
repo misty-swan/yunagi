@@ -340,8 +340,9 @@ API のレート制限を調査
 - Claude Code：<https://code.claude.com/docs/en/mcp>（`claude mcp add` の書式、`--scope`、保存先、`.mcp.json` の形）、<https://code.claude.com/docs/en/env-vars>（環境変数の引き継ぎ）。
   - `--scope` の既定は `local`（いまのプロジェクトだけ）。Yunagi は特定のプロジェクトに結び付かないので `user`（すべてのプロジェクトで使える）にする。
   - `~/.claude.json` はエージェントのほかの状態も入るので、`agent setup` は直接編集せず、`claude mcp add` を通す。`claude` コマンドが見つからないときは、実行すべきコマンドを表示して案内する。
-  - 同じ名前（`yunagi`）が登録済みのときの扱い（`claude mcp add` がエラーにするか上書きか）は未確認。`agent setup` は登録前に `claude mcp get yunagi` などで有無を調べ、あれば変更内容の表示で知らせる（YUN-93 で実機で確かめる）。
+  - 同じ名前（`yunagi`）が登録済みのときの扱い（`claude mcp add` がエラーにするか上書きか）は未確認。有無を調べる方法（`claude mcp get`・`claude mcp list` など）も、公式ドキュメントで確かめていないので**未確認**。`agent setup` は、調べられた範囲で登録済みなら変更内容の表示で知らせ、調べられなければ、`claude mcp add` の失敗をそのまま利用者に伝える（上書きしない）。実機での確認は YUN-93。
 - Codex：<https://developers.openai.com/codex/mcp>（公式ドキュメントの移転先は <https://learn.chatgpt.com/docs/extend/mcp?surface=cli>。`[mcp_servers.<名前>]` の表、`command`・`args`・`env`・`env_vars`・`cwd`、プロジェクトごとの `.codex/config.toml` は信頼したプロジェクトだけ）、<https://learn.chatgpt.com/docs/config-file/config-reference>（`mcp_servers.<id>.*` の各項目）。
+  - 書き換えは、コメントと並びを保つ TOML の編集（Rust なら `toml_edit` など）で行い、`[mcp_servers.yunagi]` が既にあれば、変更内容の表示に差分を出し、確認のうえで置き換える。他の表は触らない。
   - `agent setup` が書くのは利用者全体の設定（`~/.codex/config.toml`）。`CODEX_HOME` で設定の置き場所を変えている場合の扱いは未確認（YUN-93 で確かめる）。
 - Windows 固有の手順（`cmd /c` での包み方など）は、どちらの公式ドキュメントにも MCP の登録としては見つからなかった。**未確認**（`yunagi` は実行ファイルなので、包まずにそのまま登録する。実機での確認は YUN-93 の完了の条件）。
 
@@ -354,7 +355,9 @@ API のレート制限を調査
 - **Claude Code：引き継ぐ（既定）**。<https://code.claude.com/docs/en/env-vars> の `CLAUDE_CODE_MCP_ALLOWLIST_ENV` の説明が「`1` にすると、stdio の MCP サーバーを、シェルの環境を引き継ぐ代わりに、安全な基準の環境と設定の `env` だけで起動する」と書いており、既定ではシェルの環境を引き継ぐと読める。`XDG_DATA_HOME`・`HOME`・`LOCALAPPDATA` を名前で挙げた記述は無い。利用者が `CLAUDE_CODE_MCP_ALLOWLIST_ENV=1` を選んだときの「安全な基準の環境」の中身（上の3つを含むか）は**未確認**。このときは、4.5 の検出と警告に任せる（登録には含めない。値を書くと絶対パスが古くなるため）。`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` は認証情報を消すだけで、保存先の変数には当たらないと読めるが、変数ごとの扱いは**未確認**。
 - **Codex：未確認**。MCP サーバーの設定の `env_vars`（「許可して転送する環境変数」。<https://learn.chatgpt.com/docs/config-file/config-reference>）と `env`（サーバーに設定する値）は書かれているが、何も書かないときに親の環境をどこまで渡すかの記述は、公式ドキュメントに見つからなかった。`env_vars` が「許可して追加する」と読める書き方なので、基準の環境が限られている可能性はあるが、断定しない。
 
-引き継ぐかが確かめられなかったので、**Codex の登録だけ、環境変数の名前を転送する指定を常に書く**：`env_vars = ["XDG_DATA_HOME", "HOME"]`（Linux）、`["HOME"]`（macOS）、`["LOCALAPPDATA"]`（Windows）。名前の一覧は、アーキテクチャ設計書 4.5 の「求める環境変数」と同じ（コアの `default_dir_vars`）。値は書かず、Codex が起動したときの自分の環境から渡すので、絶対パスは設定に残らず、引っ越しで古くもならず、`agent setup` を実行した端末の値にも縛られない（上の「値を含めない」理由に当たらない）。Codex が元から引き継ぐ場合は何も変わらず、引き継がない場合は安全になる。環境変数が設定されていない名前を `env_vars` に書いたときに Codex がエラーにしないかは**未確認**（YUN-93 で確かめる。エラーになるなら、その時点で設定されている名前だけ書く）。
+引き継ぐかが確かめられなかったので、**Codex の登録だけ、環境変数の名前を転送する指定を書く**。書く名前は、アーキテクチャ設計書 6章の「求める環境変数」（macOS は `HOME`、Windows は `LOCALAPPDATA`、Linux は `XDG_DATA_HOME` と `HOME`。コアの `default_dir_vars`）のうち、`agent setup` を実行した環境で**設定されているものだけ**（例：Linux で `XDG_DATA_HOME` が未設定なら `env_vars = ["HOME"]`）。設定されていない名前を書いたときに Codex がエラーにするかが**未確認**で、サーバーが起動しなくなる危険を避けるため。値は書かず、Codex が起動したときの自分の環境から渡すので、絶対パスは設定に残らず、引っ越しで古くもならない（上の「値を含めない」理由に当たらない）。Codex が元から引き継ぐ場合は何も変わらず、引き継がない場合は安全になる。設定されていない名前を書いたときの Codex の挙動は YUN-93 で確かめ、エラーにならないと分かれば、設定の有無に関わらず常に書く形に直してよい。`agent setup` の実行後に `XDG_DATA_HOME` を設定した場合は、再実行で名前が足される（それまでは 4.5 の検出と警告に任せる）。
+
+Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変数を展開する書き方があるが、未設定の変数は展開されず `${...}` の文字列のまま渡される（<https://code.claude.com/docs/en/mcp>）ので、使わない。引き継ぎは上のとおり読めるが、条件つきの推測なので、外れていた場合（実機でずれたとき）は 4.5 の検出に頼る。実機での確認は YUN-93 の完了の条件にある。
 
 値そのものを登録に含める（`env` に書く）エージェントは、今は無い。将来、引き継がないと確かめたエージェントを足すときは、名前の転送ができるならそれを使い、できないときに限り、実行時に設定されている `XDG_DATA_HOME`（Linux）・`LOCALAPPDATA`（Windows）の値だけを含める（`HOME` は含めない。引き継がれないと `yunagi mcp` がそもそも動けず、ほかの登録も壊すため）。含める内容は確認の表示に出し、登録済みの値が現在の環境の値と違うときは変更内容の表示で知らせる（書き残す先はエージェントの設定で、`agent setup` を再実行すれば更新できる）。
 
