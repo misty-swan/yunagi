@@ -136,7 +136,9 @@ impl Drop for DbLock {
 #[derive(Debug)]
 pub enum LockError {
     /// ほか（ふつうは別のプロセス）がロックを持っていて、`waited` だけ待っても取れなかった。
-    /// アプリの起動中なら CLI・MCP はローカル API を使う（アーキテクチャ設計書 4章 3）。
+    /// CLI・MCP は、ロックを取れなかったからローカル API を使うのではなく、先にローカル API を
+    /// 試し、無かったときだけ直接モードでロックを取る。この `Busy` は、その待ちの末尾（期限まで
+    /// API を試し直しても取れなかった）で、エラー `busy` になる（アーキテクチャ設計書 4.4）。
     Busy { path: PathBuf, waited: Duration },
     /// ロックファイルを開けない・ロックの操作に失敗した（フォルダが無い、権限が無いなど）。
     Io { path: PathBuf, source: io::Error },
