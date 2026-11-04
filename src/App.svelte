@@ -63,6 +63,7 @@
   // 保存先の変更・選び直し・復元の前に、まだ保存していない入力を送る。選び直しと復元の後は読み込み直す
   const dataSettings = new DataSettings({
     flush: () => save.flushAll(),
+    unsaved: () => save.failing || save.saving,
     reload: reloadPage,
     today: () => session.today,
   });
@@ -74,8 +75,9 @@
     if (!ready || settingsStarted) return;
     settingsStarted = true;
     untrack(() => {
-      void settingsStore.load().then(() => {
-        // 保存してあった、広いウィンドウでのサイドバーの開閉。利用者が開け閉めしたら保存する
+      void settingsStore.load(() => {
+        // 保存してあった、広いウィンドウでのサイドバーの開閉（最初に外枠を描くときから当てる）。
+        // 利用者が開け閉めしたら保存する
         shell.setWideOpen(prefs.sidebarOpen);
         shell.onWideOpenChange = (open) => void settingsStore.save({ sidebarOpen: open });
       });

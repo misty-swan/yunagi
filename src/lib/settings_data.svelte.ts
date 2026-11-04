@@ -24,14 +24,21 @@ export type DataResult =
   | { kind: "exported"; count: number; dir: string }
   /** 書き出すものが無い期間だった（ファイルは作っていない）。 */
   | { kind: "nothing" }
+  /** 保存できていない入力があるので、選び直し・復元をしなかった（`DataSettingsOptions.unsaved`）。 */
+  | { kind: "unsaved" }
   | { kind: "failed"; action: "move" | "switch" | "restore" | "export"; error: CallError };
 
 /** 書き出した結果（ファイルの数とフォルダ）を出しておく時間（ミリ秒）。 */
 export const EXPORTED_SHOWN_MS = 8000;
 
 export interface DataSettingsOptions {
-  /** まだ保存していない入力を送り終える。 */
+  /** まだ保存していない入力を送り終える（保存に失敗していても、待ち終えて返る）。 */
   flush: () => Promise<unknown>;
+  /**
+   * 送り終えた後も、保存できていない入力が残っているか（保存に失敗している間）。残っていれば、選び直し・
+   * 復元をしない（切り替えて読み込み直すと、その入力が失われ、復元前の退避にも入らないため）。
+   */
+  unsaved: () => boolean;
   /** 画面を読み込み直す。 */
   reload: () => void;
   /** 今日の論理日付（書き出しの期間の既定）。 */
@@ -138,8 +145,14 @@ export class DataSettings {
         this.flow = null;
         await this.load();
       } else {
-        // 別のデータになる。入力を送り終えてから行い、行ったら読み込み直す
+        // 別のデータになる。入力を送り終えてから行い、行ったら読み込み直す。送れなかった入力が残って
+        // いれば（保存に失敗している）、何も変えずに断る
         await this.#opts.flush();
+        if (this.#opts.unsaved()) {
+          this.flow = null;
+          this.result = { kind: "unsaved" };
+          return;
+        }
         if (flow.kind === "switch") await core.useDataDir(flow.dir);
         else await core.restoreBackup(flow.backup.path);
         this.flow = null;

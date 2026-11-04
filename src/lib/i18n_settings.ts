@@ -67,7 +67,6 @@ export interface SettingsMessages {
     switchFailed: string;
     /** 保存先の変更・選び直しを使えなかった理由（`rejected`）。 */
     rejected: Record<RejectReason, string>;
-    backupsTitle: string;
     backupsNote: string;
     backupsEmpty: string;
     backupsFailed: string;
@@ -88,7 +87,8 @@ export interface SettingsMessages {
     exportWriteFailed: string;
     exportPartial: (n: number) => string;
     exportReadFailed: string;
-    exportInvalid: string;
+    /** 保存できていない入力があるので、選び直し・復元をしなかった。 */
+    unsaved: string;
   };
   agents: {
     connected: string;
@@ -177,7 +177,6 @@ const ja: SettingsMessages = {
       inside_backups: "いまの保存先の backups の中には移せません。",
       target_has_data: "そのフォルダには、すでにデータベースかバックアップがあります（上書きしません）。",
     },
-    backupsTitle: "バックアップ",
     backupsNote: "定期は直近7日分、更新前と復元前はそれぞれ新しい3つを残します。世代数は変えられません。",
     backupsEmpty: "使えるバックアップがありません。",
     backupsFailed: "バックアップの一覧を読めませんでした。",
@@ -199,7 +198,7 @@ const ja: SettingsMessages = {
     exportWriteFailed: "書き出し先に書き込めませんでした。フォルダがあるか、書き込めるか、空き容量があるかを確かめてください。",
     exportPartial: (n) => `${n} 件までは書き換え済みです。`,
     exportReadFailed: "データを読めなかったため、書き出せませんでした。",
-    exportInvalid: "書き出し先のフォルダを選び直してください。",
+    unsaved: "保存できていない入力があるため、切り替えませんでした。保存できてから、もう一度行ってください。",
   },
   agents: {
     connected: "接続中のエージェント",
@@ -288,7 +287,6 @@ const en: SettingsMessages = {
       inside_backups: "It can't be moved into the backups folder of the current folder.",
       target_has_data: "That folder already has a database or backups. They aren't overwritten.",
     },
-    backupsTitle: "Backups",
     backupsNote: "Daily backups keep the latest 7, and before-update and before-restore backups keep the newest 3 each. The numbers can't be changed.",
     backupsEmpty: "No backups are available.",
     backupsFailed: "Couldn't read the list of backups.",
@@ -310,7 +308,7 @@ const en: SettingsMessages = {
     exportWriteFailed: "Couldn't write to the export folder. Check that it exists, is writable, and has free space.",
     exportPartial: (n) => `${n} files had already been replaced.`,
     exportReadFailed: "Couldn't read the data, so nothing was exported.",
-    exportInvalid: "Choose the export folder again.",
+    unsaved: "Some input isn't saved yet, so nothing was switched. Try again once it is saved.",
   },
   agents: {
     connected: "Connected agents",

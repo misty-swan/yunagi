@@ -51,14 +51,18 @@ export class SettingsStore {
   error = $state<CallError | null>(null);
   #queue: Promise<void> = Promise.resolve();
 
-  /** 設定を読んで当てる。読めなくても既定の値のまま終える。 */
-  async load() {
+  /**
+   * 設定を読んで当てる。読めなくても既定の値のまま終える。`beforeShown` は、読んだ値を当てた後、外枠を
+   * 出す前（`loaded` にする前）に呼ぶ（保存したサイドバーの開閉などを、最初に描くときから当てるため）。
+   */
+  async load(beforeShown?: () => void) {
     try {
       const s = await core.getSettings();
       if (typeof s === "object" && s !== null) prefs.apply(s);
     } catch {
       // 既定の値で続ける
     }
+    beforeShown?.();
     this.loaded = true;
   }
 

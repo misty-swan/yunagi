@@ -34,7 +34,6 @@
             ? `${d.exportWriteFailed} ${d.exportPartial(e.replaced)}`
             : d.exportWriteFailed;
         }
-        if (e.kind === "invalid_argument") return d.exportInvalid;
         return d.exportReadFailed;
     }
   }
@@ -52,6 +51,8 @@
         return { text: d.exported(r.count, r.dir), warn: false };
       case "nothing":
         return { text: d.exportNothing, warn: false };
+      case "unsaved":
+        return { text: d.unsaved, warn: true };
       case "failed":
         return { text: failure(r), warn: true };
     }
