@@ -9,9 +9,12 @@
 //!
 //! 読み取りだけで、change_log にも記録しない。
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
 use super::agent::{self, PermissionDenied};
+use super::day;
 use super::logical_date::LogicalDate;
 use super::note_send::{self, RequestContext};
 use crate::storage::table::item::{self as item_table, ItemKind};
@@ -95,6 +98,30 @@ pub fn build(
     today: LogicalDate,
 ) -> Result<Handoff, HandoffError> {
     in_read_transaction(conn, || read(conn, item_id, today))
+}
+
+/// [`export`] の、今日を同じ読み取りの中で（切り替わり時刻の設定と同じ時点で）求めるもの。ローカル API が
+/// 使う（今日の求め方を呼び出し側に書き写さないため）。
+pub fn export_now(
+    conn: &Connection,
+    client_id: Ulid,
+    item_id: Ulid,
+    tz: &TimeZone,
+    now: Timestamp,
+) -> Result<Handoff, HandoffError> {
+    agent::read_as(conn, client_id, || {
+        read(conn, item_id, day::today(conn, tz, now)?)
+    })
+}
+
+/// [`build`] の、今日を同じ読み取りの中で求めるもの。画面の `copy_handoff` が使う。
+pub fn build_now(
+    conn: &Connection,
+    item_id: Ulid,
+    tz: &TimeZone,
+    now: Timestamp,
+) -> Result<Handoff, HandoffError> {
+    in_read_transaction(conn, || read(conn, item_id, day::today(conn, tz, now)?))
 }
 
 fn read(conn: &Connection, item_id: Ulid, today: LogicalDate) -> Result<Handoff, HandoffError> {

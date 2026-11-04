@@ -12,9 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::handoff::{self, HandoffError};
 use yunagi_core::domain::{
-    archive, board, carryover, day, export, item, note_send, settings, text_doc,
+    archive, board, carryover, export, handoff, item, note_send, settings, text_doc,
 };
 use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
@@ -524,10 +523,7 @@ pub async fn copy_handoff(
     id: Id,
 ) -> Result<(), CommandError> {
     let markdown = blocking(&core, move |core| {
-        core.read(|conn| {
-            let today = day::today(conn, &system_tz(), now()).map_err(HandoffError::Storage)?;
-            handoff::build(conn, id.0, today).map(|h| h.markdown)
-        })
+        core.read(|conn| handoff::build_now(conn, id.0, &system_tz(), now()).map(|h| h.markdown))
     })
     .await?;
     let clipboard = Arc::clone(&clipboard);

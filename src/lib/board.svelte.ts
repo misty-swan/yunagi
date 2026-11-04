@@ -479,7 +479,9 @@ export class BoardModel {
     try {
       await this.items.run(key, (id) => core.copyHandoff(id));
       this.#deps.notify({ kind: "handoff_copied" });
-    } catch {
+    } catch (e) {
+      // 利用者には理由を分けて見せない（04 2章）。原因はログに残す
+      console.warn("handoff failed", errorOf(e));
       this.#deps.notify({ kind: "handoff_failed" });
     }
   }

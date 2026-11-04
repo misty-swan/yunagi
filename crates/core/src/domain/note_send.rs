@@ -197,9 +197,12 @@ fn assign_in(
     }
     for (s, c) in candidates.iter().enumerate() {
         if result[s].is_none() {
+            // 先に別の記録が取った行（`taken`）は、ほかに候補が無いときだけ選ぶ
             result[s] = c
                 .iter()
-                .max_by_key(|&&(score, line)| (score, std::cmp::Reverse(line)))
+                .max_by_key(|&&(score, line)| {
+                    (!taken.contains(&line), score, std::cmp::Reverse(line))
+                })
                 .map(|&(_, line)| line);
         }
     }
@@ -1115,6 +1118,29 @@ mod tests {
         assert_eq!(
             assign(&[&send(&format!("v1:{a}:-:-"))], &line_keys(&["a"])),
             [Some(1)]
+        );
+    }
+
+    #[test]
+    fn records_with_no_free_line_avoid_the_lines_taken_before() {
+        let send = |fp: &str| NoteSend {
+            id: Ulid::generate(),
+            date: date("2026-11-03"),
+            line_text: "a".into(),
+            line_fingerprint: fp.into(),
+            item_id: Ulid::generate(),
+            created_at: at(T0),
+        };
+        let keys = line_keys(&["a", "a"]);
+        let fp = format!("v1:{0}:-:-", line_hash("a"));
+        let (first, second) = (send(&fp), send(&fp));
+        let by_text = line_index(&keys);
+        // 1行目は先に別の記録が取った。1件目が2行目を取り、2件目は空いた行が無いが、取られた1行目より、
+        // 2件目と同じ行を取る1件目の2行目に重ねる
+        let taken = HashSet::from([0]);
+        assert_eq!(
+            assign_in(&[&first, &second], &keys, &by_text, &taken),
+            [Some(2), Some(2)]
         );
     }
 

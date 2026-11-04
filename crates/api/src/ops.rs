@@ -399,8 +399,8 @@ impl ReadCall {
                 }))
             }
             Self::ExportHandoff(id) => {
-                let today = resolve(conn, Date(DateSpec::Today), at)?;
-                let h = handoff::export(conn, client_id, *id, today).map_err(handoff_failure)?;
+                let h = handoff::export_now(conn, client_id, *id, &system_tz(), at)
+                    .map_err(handoff_failure)?;
                 Ok(json!({"id": h.id.to_string(), "markdown": h.markdown}))
             }
         }
