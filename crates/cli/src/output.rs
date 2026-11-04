@@ -56,8 +56,11 @@ fn added(kind: &str, value: &Value) -> String {
 /// `resolve_blocker`（05 3章）：解消した・解消メモを書いた・何も変えていない。`--note` を付けずに解消した
 /// 障害に前の解消メモが残っていたら、その本文を添える（利用者に伝えるため）。
 fn resolved(value: &Value) -> String {
-    let flag = |key| value.get(key).and_then(Value::as_bool).unwrap_or(false);
-    let (resolved, note_written) = (flag("resolved"), flag("note_written"));
+    let flag = |key| value.get(key).and_then(Value::as_bool);
+    // 欄が無い応答は、何も変えていないと偽らず、JSON のまま出す（`changed` と同じ）
+    let (Some(resolved), Some(note_written)) = (flag("resolved"), flag("note_written")) else {
+        return format!("{value}\n");
+    };
     let mut out = match (resolved, note_written) {
         (true, true) => "Resolved. Note added.\n".to_owned(),
         (true, false) => "Resolved.\n".to_owned(),
@@ -407,6 +410,11 @@ mod tests {
         assert_eq!(
             r(false, false, json!("fixed")),
             "Already resolved. Nothing changed.\n"
+        );
+        // 欄が無い応答は、JSON のまま出す
+        assert_eq!(
+            render("resolve_blocker", &json!({"rev": 3})),
+            "{\"rev\":3}\n"
         );
         // `--note` を付けずに解消したとき、前の解消メモが残っていれば伝える
         assert_eq!(

@@ -200,6 +200,15 @@ fn command(
             "no command given\n\n{USAGE}"
         )));
     };
+    // `--heading`・`--delete` は `note` の操作だけの指定。ほかのコマンドでは、読み取りの段階で次の引数を
+    // 値として飲み込むので、引数の数の誤りより先に、知らないオプションとして断る
+    if noun != "note"
+        && let Some((name, _)) = options
+            .iter()
+            .find(|(n, _)| n == "heading" || n == "delete")
+    {
+        return Err(error::invalid_argument(format!("unknown option --{name}")));
+    }
     let mut opts = Options(options.to_vec());
     let command = match noun {
         "board" => {
@@ -245,8 +254,8 @@ fn command(
             }
             // TEXT が無い。`--heading` の直後に置いた TEXT は件名として読まれているので、そう伝える
             ["append"] => {
-                let taken = match opts.take_optional("heading") {
-                    Ok(Some(Some(title))) => format!(
+                let taken = match opts.take_optional("heading")? {
+                    Some(Some(title)) => format!(
                         " (\"{title}\" was read as the --heading title; write --heading= for a heading with just the time, or put TEXT before --heading)"
                     ),
                     _ => String::new(),
@@ -900,6 +909,18 @@ mod tests {
             assert!(error::message(&e).contains("more than once"), "{args:?}");
         }
         assert!(parse_args(&["search", "x", "--kind", "todo", "--kind", "note"]).is_ok());
+        // 繰り返した `--heading` の誤りは、TEXT が無いときも隠さない
+        let e = parse_args(&["note", "append", "--heading", "A", "--heading", "B"]).unwrap_err();
+        assert!(error::message(&e).contains("more than once"));
+        // `note` 以外では、`--heading`・`--delete` が次の引数を飲み込まず、知らないオプションとして断る
+        for args in [
+            &["todo", "add", "--heading", "foo", "bar"][..],
+            &["todo", "edit", "--heading", "ID1", "text"],
+            &["search", "q", "--delete", "foo"],
+        ] {
+            let e = parse_args(args).unwrap_err();
+            assert!(error::message(&e).contains("unknown option --"), "{args:?}");
+        }
     }
 
     #[test]
