@@ -1389,7 +1389,7 @@ fn id_json(id: Option<Ulid>) -> Value {
 }
 
 /// 項目全体のスナップショット（追加の `after`）。キーは列の名前、値は保存する形。
-fn item_json(item: &Item) -> Value {
+pub(crate) fn item_json(item: &Item) -> Value {
     json!({
         "id": item.id.to_string(),
         "date": item.date.to_string(),

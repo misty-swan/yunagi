@@ -92,6 +92,17 @@ yunagi agent setup
 
 registers Yunagi with Claude Code and Codex. Run it in a terminal: it shows what it will write and asks for confirmation (`y`) first, and keeps a copy of your original settings file next to it. It cannot run from a non-interactive shell. Agents start with read-only access. To let them add TODOs or record blockers, enable the permissions in Settings → Agents. Every change made by an agent is marked and can be undone one by one from the change history.
 
+You can also check this from the terminal. Changing permissions and undoing a change show what will happen and ask for confirmation (`y`) first; they cannot run from a non-interactive shell.
+
+```sh
+yunagi agent permissions                              # what each agent may do
+yunagi agent permissions claude-code --allow todo     # allow a permission (--deny removes one)
+yunagi agent history                                  # agent changes, newest first (* = not reviewed yet)
+yunagi agent revert <change ID> [--force]             # undo one change
+```
+
+Undoing restores only the part that the change modified. If you have changed that same part yourself since, it stops without undoing (check the difference, then add `--force` to overwrite that part). Changes to items that were carried over, or to TODOs you dropped, cannot be undone.
+
 Content that an agent reads from Yunagi is sent to that AI service through the agent, under your own agreement with that service. AI usage is billed by that service; Yunagi's agent integration is free.
 
 You can also use the CLI directly. Writing from the CLI is not allowed at first either; to enable it, turn on the permissions for `cli` in Settings → Agents (permission changes can only be confirmed in the app's Settings or at an interactive terminal prompt).

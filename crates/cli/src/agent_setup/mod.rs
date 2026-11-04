@@ -44,7 +44,8 @@ pub struct SetupEnv {
     pub codex_home: Option<PathBuf>,
     /// `PATH`（`claude`・`codex`・`yunagi` を探す）。
     pub path: Option<OsString>,
-    /// 確認を得られる端末か。
+    /// 確認を得られる端末か。`agent permissions`・`agent revert`（`agent_admin`）も同じ判定を使う
+    /// （試験が端末あり・なしを差し替えられるように、`Env::setup` に置いたまま共有する）。
     pub interactive: bool,
     /// `XDG_DATA_HOME` が設定されているか（値は読まない）。
     pub xdg_data_home_set: bool,

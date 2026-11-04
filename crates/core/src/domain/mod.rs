@@ -2,11 +2,13 @@
 //! （docs/design/01-architecture.md 2章）。
 
 pub mod agent;
+pub mod agent_admin;
 pub mod archive;
 pub mod board;
 pub mod carryover;
 pub mod day;
 pub mod export;
+pub mod history;
 pub mod item;
 pub mod logical_date;
 pub mod note_body;

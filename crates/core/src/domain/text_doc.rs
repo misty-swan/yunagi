@@ -580,7 +580,7 @@ fn write_by_agent(
 }
 
 /// 本文を change_log の `before` / `after` に入れる形（JSON の文字列）にする。
-fn json_string(body: &str) -> String {
+pub(crate) fn json_string(body: &str) -> String {
     serde_json::to_string(body).expect("a string always serializes to JSON")
 }
 

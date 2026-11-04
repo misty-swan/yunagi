@@ -24,6 +24,7 @@ pub fn render(method: &str, value: &Value) -> String {
         "resolve_blocker" => resolved(value),
         "append_note" | "append_reflection" => changed(value, "Appended.", "Nothing changed."),
         "edit_note" => changed(value, "Edited.", "Nothing changed."),
+        "list_changes" => changes(value),
         // 知らない操作は JSON のまま出す
         _ => format!("{value}\n"),
     }
@@ -243,6 +244,169 @@ fn search(value: &Value) -> String {
     out
 }
 
+/// 保存した時刻（UTC）を、端末のタイムゾーンの `YYYY-MM-DD HH:MM` にする。読めなければそのまま。
+pub fn local_time(utc: &str) -> String {
+    match utc.parse::<jiff::Timestamp>() {
+        Ok(t) => t
+            .to_zoned(jiff::tz::TimeZone::try_system().unwrap_or(jiff::tz::TimeZone::UTC))
+            .strftime("%Y-%m-%d %H:%M")
+            .to_string(),
+        Err(_) => utc.to_owned(),
+    }
+}
+
+/// 値を1行に収めて短くする（欄の前後の値の表示）。
+fn brief(value: &Value) -> String {
+    let text = match value {
+        Value::String(s) => format!("{s:?}"),
+        other => other.to_string(),
+    };
+    if text.chars().count() > 60 {
+        let cut: String = text.chars().take(57).collect();
+        format!("{cut}...")
+    } else {
+        text
+    }
+}
+
+/// `agent permissions` の一覧（`only` があればそのクライアントだけ）。見つからなければ `None`。
+pub fn agents(value: &Value, only: Option<&str>) -> Option<String> {
+    let list = value["agents"].as_array().map_or(&[][..], Vec::as_slice);
+    let rows: Vec<&Value> = list
+        .iter()
+        .filter(|a| only.is_none_or(|name| str_of(a, "name") == name))
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let scopes = |a: &Value| {
+        let names: Vec<&str> = a["scopes"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        if names.is_empty() {
+            "(none)".to_owned()
+        } else {
+            names.join(", ")
+        }
+    };
+    let width = rows
+        .iter()
+        .map(|a| str_of(a, "name").chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6);
+    let scope_width = rows
+        .iter()
+        .map(|a| scopes(a).chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6);
+    let mut out = format!(
+        "{:<width$}  {:<scope_width$}  LAST SEEN\n",
+        "CLIENT", "SCOPES"
+    );
+    for a in rows {
+        let seen = a
+            .get("last_seen_at")
+            .and_then(Value::as_str)
+            .map_or("-".to_owned(), local_time);
+        let _ = writeln!(
+            out,
+            "{:<width$}  {:<scope_width$}  {seen}",
+            str_of(a, "name"),
+            scopes(a)
+        );
+    }
+    Some(out)
+}
+
+/// `agent history`：1 件を 1 行で、変えた内容を続く行で出す。まだ確認していないエージェントの変更には
+/// `*` を付ける（05 4.1）。
+fn changes(value: &Value) -> String {
+    let list = value["changes"].as_array().map_or(&[][..], Vec::as_slice);
+    if list.is_empty() {
+        return "No changes.\n".to_owned();
+    }
+    let mut out = String::new();
+    for c in list {
+        let unseen = str_of(c, "actor") == "agent" && c.get("seen_at").is_some_and(Value::is_null);
+        let who = c.get("client").and_then(Value::as_str).unwrap_or("you");
+        let reverted = c
+            .get("reverted_at")
+            .and_then(Value::as_str)
+            .map_or(String::new(), |_| "  [reverted]".to_owned());
+        let of = c
+            .get("revert_of")
+            .and_then(Value::as_str)
+            .map_or(String::new(), |id| format!("  (reverts {id})"));
+        let _ = writeln!(
+            out,
+            "{} {}  {}  {who}  {}  {}{reverted}{of}",
+            if unseen { '*' } else { ' ' },
+            str_of(c, "id"),
+            local_time(str_of(c, "created_at")),
+            str_of(c, "operation"),
+            target(&c["target"])
+        );
+        let summary = &c["summary"];
+        match str_of(summary, "type") {
+            "added" => {
+                let _ = writeln!(out, "      added: {}", brief(&summary["text"]));
+            }
+            "fields" => {
+                for f in summary["fields"].as_array().map_or(&[][..], Vec::as_slice) {
+                    let _ = writeln!(
+                        out,
+                        "      {}: {} -> {}",
+                        str_of(f, "name"),
+                        brief(&f["before"]),
+                        brief(&f["after"])
+                    );
+                }
+            }
+            "text" => {
+                let _ = writeln!(
+                    out,
+                    "      text: {} -> {} characters",
+                    summary["before_chars"].as_u64().unwrap_or(0),
+                    summary["after_chars"].as_u64().unwrap_or(0)
+                );
+            }
+            _ => {}
+        }
+    }
+    if let Some(next) = value.get("next_before").and_then(Value::as_str) {
+        let _ = writeln!(out, "(older changes: yunagi agent history --before {next})");
+    }
+    out
+}
+
+/// 履歴の対象の表示：項目は `日付 種類 "本文"`、ノート・振り返りは `種類 日付`。
+fn target(t: &Value) -> String {
+    match str_of(t, "type") {
+        "item" => {
+            if t.get("text").is_none() {
+                return format!("item {}", str_of(t, "id"));
+            }
+            let deleted = if t["deleted"].as_bool() == Some(true) {
+                " (deleted)"
+            } else {
+                ""
+            };
+            format!(
+                "{} {} {}{deleted}",
+                str_of(t, "date"),
+                str_of(t, "kind"),
+                brief(&t["text"])
+            )
+        }
+        kind => format!("{kind} {}", str_of(t, "date")),
+    }
+}
+
 /// エラーを標準エラーに出す文にする（`reason` も出す。05 4.1）。
 pub fn render_error(error: &ErrorObject) -> String {
     let mut out = format!("yunagi: {}", error::code(error));
@@ -439,6 +603,61 @@ mod tests {
         );
         let e = json!({"code": "invalid_argument", "item_kind": "blocker", "use_operation": null, "message": "m"});
         assert!(render_error(&e).ends_with("[ask the user]\n"));
+    }
+
+    #[test]
+    fn agents_are_listed_in_a_table_and_filtered_by_name() {
+        let list = json!({"agents": [
+            {"name": "cli", "scopes": ["read"], "last_seen_at": null},
+            {"name": "claude-code", "scopes": [], "last_seen_at": null},
+        ]});
+        let all = agents(&list, None).unwrap();
+        let rows: Vec<&str> = all.lines().collect();
+        assert_eq!(rows[0], "CLIENT       SCOPES  LAST SEEN");
+        assert_eq!(rows[1], "cli          read    -");
+        assert_eq!(rows[2], "claude-code  (none)  -");
+        assert_eq!(agents(&list, Some("cli")).unwrap().lines().count(), 2);
+        assert!(agents(&list, Some("nobody")).is_none());
+    }
+
+    #[test]
+    fn the_history_marks_unseen_and_reverted_changes() {
+        let value = json!({"changes": [
+            {"id": "C2", "created_at": "bad", "actor": "human", "client": null, "operation": "agent.revert",
+             "target": {"type": "item", "id": "T1", "date": "2026-11-03", "kind": "todo", "text": "x", "deleted": false},
+             "summary": {"type": "fields", "fields": [{"name": "status", "before": "done", "after": "open"}]},
+             "seen_at": null, "reverted_at": null, "revert_of": "C1"},
+            {"id": "C1", "created_at": "bad", "actor": "agent", "client": "claude-code", "operation": "todo.complete",
+             "target": {"type": "item", "id": "T1", "date": "2026-11-03", "kind": "todo", "text": "x", "deleted": false},
+             "summary": {"type": "fields", "fields": [{"name": "status", "before": "open", "after": "done"}]},
+             "seen_at": null, "reverted_at": "2026-11-03T01:00:00.000Z", "revert_of": null},
+            {"id": "N1", "created_at": "bad", "actor": "agent", "client": "cli", "operation": "note.append",
+             "target": {"type": "note", "date": "2026-11-03"},
+             "summary": {"type": "text", "before_chars": 0, "after_chars": 9},
+             "seen_at": "2026-11-03T01:00:00.000Z", "reverted_at": null, "revert_of": null},
+        ], "next_before": "N1"});
+        let text = render("list_changes", &value);
+        let lines: Vec<&str> = text.lines().collect();
+        // 人の取り消しの記録は未確認に数えない（`*` なし）。クライアントが無ければ you
+        assert_eq!(
+            lines[0],
+            "  C2  bad  you  agent.revert  2026-11-03 todo \"x\"  (reverts C1)"
+        );
+        assert_eq!(lines[1], "      status: \"done\" -> \"open\"");
+        assert_eq!(
+            lines[2],
+            "* C1  bad  claude-code  todo.complete  2026-11-03 todo \"x\"  [reverted]"
+        );
+        assert_eq!(lines[4], "  N1  bad  cli  note.append  note 2026-11-03");
+        assert_eq!(lines[5], "      text: 0 -> 9 characters");
+        assert_eq!(
+            lines[6],
+            "(older changes: yunagi agent history --before N1)"
+        );
+        assert_eq!(
+            render("list_changes", &json!({"changes": []})),
+            "No changes.\n"
+        );
     }
 
     #[test]

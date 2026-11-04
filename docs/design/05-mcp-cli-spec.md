@@ -24,7 +24,8 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 - 権限はエージェント（agent_client）ごとに設定する。既定はどのクライアントも `read` のみ。
 - CLI からの操作は、人が実行したかエージェントが実行したかにかかわらず `cli` クライアントとして扱い、change_log に記録する。`cli` の既定スコープも `read` のみ。
 - CLI は人とエージェントを確実には区別できず、防御の境界ではない（エージェントはシェル経由で CLI を呼べる）。そのため、スコープの変更と `yunagi agent revert` は、アプリの設定画面か、対話端末（TTY）上の確認プロンプトでしか確定できない。非対話の実行（エージェントのシェル、git フックなど）では確認を出さず、`permission_denied`（終了コード 3）を返す。
-- エージェントの識別：`yunagi agent setup` は、登録するコマンドを `yunagi mcp --client claude-code` のように識別子付きで書き込む。識別子のない接続は `unknown` クライアントとして `read` のみを与える。
+- 確認は、CLI（対話端末）かアプリの設定画面が行い、確認を得た後の処理はローカル API の管理の操作（4.4。`set_agent_scopes`・`revert_change`）に頼む。API の操作自体は確認を行わない：トークンを読める同じ利用者のプロセスは、ソケットに直接送れる（擬似端末と同じ種類の抜け道で、防御の境界ではない。アーキテクチャ設計書 4.6、SECURITY.md）。管理の操作は呼び出し元のスコープを確かめない（`read` を外したクライアントがいても、利用者は管理を使える。2026-11-04 決定。YUN-94）。動きは 7章。
+- エージェントの識別：`yunagi agent setup` は、登録するコマンドを `yunagi mcp --client claude-code` のように識別子付きで書き込む。識別子のない接続は `unknown` クライアントとして `read` のみを与える。`unknown` には `read` より多くのスコープを足せない（名乗らないすべての接続が書けるようになってしまうため。`agent permissions` が `invalid_argument` で断る。2026-11-04 決定。YUN-94）。
 - 振り返りの既存の文章を書き換える操作は、どのスコープでも提供しない。
 - 許可されていない操作は、エラーコード `permission_denied` と必要なスコープ名を返す。
 - 権限はコアが確かめる（アーキテクチャ設計書 4章 5）ので、アプリ経由（ローカル API）でも直接モードでも同じになる。書き込みだけでなく読み取りも同じで、いま作ってある `get_board`・`open_board`・`get_note` は、コアの関数が呼び出し元のクライアントを受け取り、はじめに `read` を確かめる（2026-11-04 決定。コアの `domain::board`・`domain::text_doc`）。画面が使う読み取り（`get_screen_board`、`text_doc::get`）はエージェントの操作ではないので確かめない。登録されていないクライアントには何も許可しない（`read` も含む）。`search` の入り口（コアの `domain::search::search`）も同じ形（呼び出し元を受け取り、はじめに `read` を確かめる。2026-11-04 決定、YUN-90 で作った）。`export_handoff` の入り口は、依頼文の書き出し（5章）を作るときに同じ形で足す（YUN-70 の完了の条件に書き足した）。
@@ -50,7 +51,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | A-05 | `edit_note` | `yunagi note edit --line N --expect TEXT (--replace TEXT \| --delete \| --move-to M) [--date D]` | — | note_edit |
 | A-06 | `export_handoff` | `yunagi handoff export ID` | `yunagi handoff ID` | read |
 | A-07 | —（MCP には出さない） | `yunagi agent setup [--claude-code] [--codex]` | — | — |
-| A-08 | —（MCP には出さない） | `yunagi agent history` / `yunagi agent revert CHANGE_ID` / `yunagi agent permissions` | — | 閲覧は不要。変更・取り消しは 2章の確認が必要 |
+| A-08 | —（MCP には出さない） | `yunagi agent permissions [CLIENT] [--allow S]... [--deny S]...` / `yunagi agent history [--client NAME] [--unseen] [--limit N] [--before ID]` / `yunagi agent revert CHANGE_ID [--force]` | — | 閲覧は不要。変更・取り消しは 2章の確認が必要。動きは 7章 |
 
 - `D` は `YYYY-MM-DD`、`today`、`yesterday` を受け付ける。省略時は論理日付の今日。`--date` を持たない操作（ID を指定する操作）は、ID の項目が属する日を対象にする。
 - 要件 A-03 の「取り消し」は、完了の取り消し（未完了に戻す＝`reopen_todo`）を指す。エージェントの変更の取り消し（A-08 の `agent revert`）とは別の操作である。
@@ -94,7 +95,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - 判定の順：対象の5つの操作のどれでも、3.2 のとおり `storage_unavailable` の次、`user_editing` の前に確かめる。
   - 読み取り：`get_board`・`open_board` の各項目と、`search` の結果の項目には、持ち越し先の項目の id `carried_to_id` と日付 `carried_to_date` を含める（持ち越し済みでなければどちらも `null`。4.2）。エージェントは、前の日のボードを読んだときに、持ち越し済みの項目を操作の対象から外せる。
   - 持ち越し先の項目が削除され、たどっても削除されていない項目に行き着かない場合（データモデル設計書 3章）、元の項目は持ち越し済みでなくなり、通常どおり受け付ける（その項目が残っている唯一の写しになるため）。
-  - `agent revert` で持ち越し済みの項目を戻す場合の扱いは未決（9章）。
+  - `agent revert` で持ち越し済みの項目の欄を戻す場合は、拒む（`carried_over`。2026-11-04 決定。7.3）。
 - A-01 のノート取得は、`get_board`（見出しと長さ）と `get_note`（本文）の組で満たす（4.2 参照）。
 - `get_note` の扱い（2026-11-04 決定。コアの `domain::text_doc::get_note`）：
   - 見出しを指定しない（`--heading` なし）と、全文と版（`rev`）を返す。まだ書いていない日は空の本文と版 0（day の行は作らない）。
@@ -112,6 +113,9 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない。ローカル API の状態は、アーキテクチャ設計書 4.4 の接続の試し方で1回だけ調べて（待たない）、次のどれかで示す：`connected`（つながり認証も通った）、`no_listener`（待ち受けが無く、ロックも取れた。アプリが動いていない場合のほか、動いていてもデータベースを開いていない「見つからない」「開けなかった」の状態を含む。ここからは区別できないので、「動いていない」とは言わない）、`starting_or_unresponsive`（待ち受けが無く、ロックを別のプロセスが持っている。アプリの起動中、または待ち受けが動いていない。直接モードの操作が長引いているだけのこともある）、`listener_busy`（待ち受けはあるが一時的につながらない。パイプが全部ふさがっている・待ち行列が満杯など。4.4 の試し直しの対象で、`doctor` は1秒だけ試し直してからこれを示す。ロックは取らない）、`auth_failed`・`version_mismatch`・`denied`・`socket_path_too_long`・`default_dir_mismatch`（4.3 の `api_error` の `reason` と同じ。`socket_path_too_long` は、ソケットのパスが長すぎて（UNIX 系）、ロックを別のプロセスが持っているとき。ロックが取れれば `no_listener`。`default_dir_mismatch` は、待ち受けが無く、別の候補の既定ディレクトリを使っているプロセスがいて、直接モードに入れない場合。アーキテクチャ設計書 4.5）。取ったロックはすぐ離す。あわせて、自分の既定ディレクトリ（パスと、求めた環境変数の名前。値は出さない）と、別の候補の既定ディレクトリの状態（`absent`（無い）・`has_data`（データだけある）・`in_use`（使っているプロセスがいる。自分の保存先に別のデータベースがあり、環境を分けている形のときは `in_use_separate`）・`unknown`（調べられない）。アーキテクチャ設計書 4.5）を、ローカル API の状態とは別の欄で出す（ローカル API の状態は、環境を分けている形のときは `no_listener` のまま）。状態を決める順：自分の既定ディレクトリのロックを別のプロセスが持っていれば `starting_or_unresponsive`（ソケットのパスが長すぎるときは `socket_path_too_long`。ずれは調べない）、ロックが取れて、アーキテクチャ設計書 4.5 の判定 2 に当たれば `default_dir_mismatch`、それ以外は `no_listener`。ずれの手がかりを、業務データを含めずに利用者へ示すため。形（2026-11-04 決定。YUN-90。`--json` はこの JSON、テキストは `key: value` の行）：`{"version", "os", "arch", "protocol", "default_dir": {"path", "env_vars", "exists"}, "data_dir": {"path", "database_exists"} または null, "local_api": {"status", "app_version"（`connected` のときだけ）}, "other_default_dir": {"path", "status"} または null}`。上の 9 つに当たらない失敗は次のように示す：接続は受けたが認証に答えない（1 秒試し直しても）は `starting_or_unresponsive`、通信の形が誤っている・そのほかの入出力の失敗も `starting_or_unresponsive`。自分のロックファイルを権限などで調べられないときは `local_api.status` を `unknown` にする（待ち受けが無いとは言えないため。ロックファイルは作らずに調べ、取ったロックはすぐ離す）。環境変数が無くて既定ディレクトリを求められないときは、`default_dir` に `path: null` と `error` を入れ、`local_api` は `null`（調べられない）。終了コードは、診断できた場合はどの状態でも 0 |
 | `yunagi mcp [--client ID]` | MCP サーバー（stdio）を起動する。`agent setup`（6章）が `--client claude-code` などの識別子つきで登録する。入出力は 4.5 |
 | `yunagi agent setup [--claude-code] [--codex]` | Claude Code・Codex の設定に MCP サーバーを登録する（A-07）。変更内容を表示し、対話端末（TTY）での確認を得てから書く。端末でなければ何も書かず `permission_denied`（終了コード 3）。動きは 6章 |
+| `yunagi agent permissions [CLIENT] [--allow S]... [--deny S]...` | エージェントごとの権限を見る。`--allow`・`--deny` があれば変える（A-08）。変える場合は、変更内容を表示し、対話端末（TTY）での確認を得てから書く。端末でなければ何も書かず `permission_denied`（終了コード 3）。動きは 7.1 |
+| `yunagi agent history [--client NAME] [--unseen] [--limit N] [--before ID]` | エージェントの変更の一覧を、新しい順に出す（A-08）。確認は要らない。動きは 7.2 |
+| `yunagi agent revert CHANGE_ID [--force]` | エージェントの変更を 1 件取り消す（A-08）。取り消す内容を表示し、対話端末（TTY）での確認を得てから書く。端末でなければ何も書かず `permission_denied`（終了コード 3）。動きは 7.3 |
 | `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータも削除 |
 | `yunagi --version` | 版を表示する |
 
@@ -145,6 +149,10 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - `doctor`：`key: value` の行（3.1）。
   - 書き込み（2026-11-04 決定。YUN-91）：成功は 1 行で、3章の文（`Resolved.`・`Note added.`・`Already resolved. Nothing changed.`・`Completed.`・`Already done. Nothing changed.`・`Reopened.`・`Already open. Nothing changed.`・`Edited.`・`Same text. Nothing changed.`）に次を足す。`add_todo`・`add_blocker` は `Added TODO ID (日付).`・`Added blocker ID (日付).`（あとで編集や完了に使う ID を出す）。`append_note`・`append_reflection` は `Appended.`、`edit_note` は `Edited.`、どちらも何も変えなかったとき（`updated: false`）は `Nothing changed.`。`resolve_blocker` が解消と解消メモの両方を行ったときは `Resolved. Note added.`。`--note` を付けずに解消した障害に前の解消メモが残っていたら、次の行に `Existing resolution note: 本文` を出す（3章。エージェントが利用者に伝えられるように）。
   - 書き込みの失敗のテキスト（標準エラー）は、`message` の後ろに、次の動きを決める欄を `[...]` で添える（`--json` では欄がそのまま出るため、テキストだけの補い）：`carried_over` は `[carried to: ID (日付)]`、`note_exists` は `[existing resolution note: 本文]`、種類の違う ID の `invalid_argument` は `[use yunagi blocker edit]` のように使う CLI のコマンド（無ければ `[ask the user]`）。必要なスコープは従来どおり `[required scope: S]`。
+- 権限と変更履歴の出力（2026-11-04 決定。YUN-94。元にするのは 4.4 の管理の操作の JSON）：
+  - `agent permissions`：`CLIENT  SCOPES  LAST SEEN` の表（スコープは 2章の表の順にコンマ区切り、無ければ `(none)`、最後の接続は端末の時刻で `YYYY-MM-DD HH:MM`、まだなら `-`）。`--json` は `{"agents": [...]}`（`CLIENT` があればその 1 件）。変える場合は 7.1。
+  - `agent history`：1 件を 1 行で `* ID  日時  クライアント  operation  対象`（`*` は未確認のエージェントの変更。人の取り消しの記録のクライアントは `you`）、続く行に変えた内容を出す（項目の追加は本文、欄の変更は `欄: 前 -> 後`、ノート・振り返りは文字数の前後）。取り消し済みの記録には `[reverted]`、取り消しの記録には `(reverts ID)` を付ける。0 件は `No changes.`。続きがあれば最後に `(older changes: yunagi agent history --before ID)`。`--json` は `{"changes": [...], "next_before": ID または null}`。
+  - `agent revert` の出力は 7.3。`--json` は、確認の質問を含む形（`agent permissions` の `--allow`・`--deny`、`agent revert`）には付けられない（`invalid_argument`。`agent setup` と同じ）。
 - 書き込みの引数の決まり（2026-11-04 決定。YUN-91）：
   - `TEXT`（`todo add`・`todo edit` の本文、`blocker add`・`blocker edit`・`reflection append`・`note append` の本文）と `blocker resolve` の `--note` は、`-` を指定すると標準入力から読む（接続の前に読む）。`--expect` と `--replace` はノートの行そのものを渡すので、`-` も文字として渡し、標準入力からは読まない（`-` だけの行を扱えるように）。`-` を受けつける欄はどのコマンドでも 1 つだけなので、標準入力は 1 回しか読まない。標準入力の誤り（UTF-8 でない・大きすぎる）は、ID や日付の形の誤りと同じく接続の前に返るので、権限の誤りより先になる（3.2 の例外）。読んだ本文の複数行の可否はコアの決まりのままで、`reflection append`・`note append` は複数行を受けつけ（`git log` の出力など）、項目の本文と解消メモは 1 行だけ（途中の改行は `invalid_argument`。3章）。
   - 同じオプションを 2 回以上書くと `invalid_argument`（前の指定の誤りを、後ろの指定で隠さないため。繰り返せるのは `search` の `--kind` だけ。読み取りの `--date` も同じ）。`note append` で `--heading` の直後に `TEXT` を置くと件名として読まれ、`TEXT` が無くなるので、誤りの文でそう伝える。
@@ -230,7 +238,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {"error": {"code": "conflict", "reason": "user_editing", "message": "The user is editing this item. Try again later."}}
 ```
 
-`permission_denied` のうち、スコープの不足ではなく、対話端末（TTY）での確認が要る操作を端末でない実行で呼んだもの（2章。`agent setup`。`agent permissions` の確定と `agent revert` も同じ形にする）には、`required_scope` を付けず、`message` に端末で実行し直すよう書く。終了コードは同じ 3（2026-11-04 決定。YUN-93）。
+`permission_denied` のうち、スコープの不足ではなく、対話端末（TTY）での確認が要る操作を端末でない実行で呼んだもの（2章。`agent setup`、`agent permissions` の `--allow`・`--deny`、`agent revert`）には、`required_scope` を付けず、`message` に端末で実行し直すよう書く（例：`Confirmation needs a terminal. Nothing was changed. Run `yunagi agent revert` yourself in a terminal, or use the Yunagi app (Settings > Agents).`）。終了コードは同じ 3（2026-11-04 決定。YUN-93。`agent permissions`・`agent revert` は YUN-94）。`agent revert` が返す `conflict` の理由は、`changed`（`changed_fields` つき）・`carried_over`（`carried_to_id`・`carried_to_date` つき）・`user_editing` で、取りやめた TODO は `invalid_argument`（`close_reason` つき）。7.3。
 
 エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`、`busy`、`api_error`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。`permission_denied`・`not_found`・`invalid_argument` は先に返す。3.2 の判定の順、アーキテクチャ設計書 4.1）。直接モードで保存先にデータベースが見つからないときも `storage_unavailable` を返す（読み取りを含むすべての操作。アーキテクチャ設計書 6.3）。データベースの読み書きそのものが失敗したとき（ディスクのエラー、壊れたデータベースなど。2026-11-04 決定）も、読み取りを含めて同じコードで返す。`message` は何も変えていないこととアプリを確かめるよう伝えるだけにし、内部の文は含めない（ログに残す）。読み取りが断られるのは、この読み書きの失敗のときだけである。CLI・MCP の既定ディレクトリが無いときも同じコードで、`message` に探した既定ディレクトリと求めた環境変数の名前を書き、アプリを別の環境変数で起動していないか確かめるよう伝える（アーキテクチャ設計書 4.5）。
 
@@ -258,7 +266,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 
 | `reason` | 意味 | エージェントの次の動き |
 | --- | --- | --- |
-| `changed` | 対象が直前に変更された（`edit_note` の `--expect` の不一致、`agent revert` の対象がその後に人に変更されている場合） | 最新の内容を読み直してから、操作を組み立て直す。`agent revert` は人が実行する操作で、差分を確かめたうえで `--force` で上書きもできる（7章） |
+| `changed` | 対象が直前に変更された（`edit_note` の `--expect` の不一致、`agent revert` の対象がその後に人に変更されている場合） | 最新の内容を読み直してから、操作を組み立て直す。`agent revert` は人が実行する操作で、差分を確かめたうえで `--force` で上書きもできる（7.3）。`agent revert` のエラーには、食い違う欄 `changed_fields` を含める |
 | `note_exists` | `resolve_blocker` の `--note` と異なる解消メモが、障害にすでにある（3章）。操作は何も反映していない | 最新の内容を読み直す。エージェントは既存の解消メモを書き換えられないため、足したい内容があれば利用者に伝える。解消だけが目的なら `--note` を付けずに送る（同じ `--note` のままやり直しても必ず失敗する） |
 | `carried_over` | 対象の項目は持ち越し済みで、前の日に残っている元の項目である（3章）。操作は何も反映していない。エラーに `carried_to_id`・`carried_to_date` を含める | 同じ操作を `carried_to_id` の項目に送り直す（同じ ID のままでは、持ち越し先が削除されない限り成功しない）。送り直した先でも `carried_over` なら、同じようにたどる |
 | `user_editing` | 利用者が対象を入力中（画面から知らされた守る行が古い版のもので、知らせ直しを待っている場合を含む。アーキテクチャ設計書 4.1）。操作は何も反映していない | 同じ操作を、しばらくしてからそのままやり直す |
@@ -298,6 +306,19 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 | `append_note` | `text`、`date?`、`heading?` | `{updated, rev}` |
 | `append_reflection` | `text`、`date?` | `{updated, rev}` |
 | `edit_note` | `line`、`expected_text`、`replace`・`delete`（`true`）・`move_to` のうちちょうど 1 つ、`date?` | `{updated, rev}` |
+
+**管理の操作**（A-08。2026-11-04 決定。YUN-94）：利用者が行う管理で、MCP には出さない（`tools/list` に無く、ツールとして呼ぶと `-32602`）。CLI の `agent permissions`・`agent history`・`agent revert` と、アプリの設定画面・変更履歴 S-06（YUN-81）が使う。呼び出し元のスコープは確かめない（2章）。確認はこの操作の外（CLI の端末か画面）で行う。画面の入力中・保存の失敗中は、取り消しだけが見る（7.3）。コアは `domain::agent_admin`・`domain::history`。
+
+| 操作 | 引数 | 成功の返り値 |
+| --- | --- | --- |
+| `list_agents` | なし | `{agents: [{id, name, scopes, created_at, last_seen_at}]}`（登録した順。固定の `cli`・`unknown` が先。`scopes` は 2章の表の順） |
+| `set_agent_scopes` | `client`（識別子）、`allow?`・`deny?`（スコープ名の配列） | `{updated, client, before, scopes}`。変えたら画面に `changed` を出す |
+| `list_changes` | `client?`、`unseen?`（真偽）、`before?`（記録の ID）、`limit?` | `{changes: [...], next_before}`。形は 7.2 |
+| `preview_revert` | `change_id` | `{id, operation, client, created_at, state, token, changed_since, effect}`。何も書かない。形は 7.3 |
+| `revert_change` | `change_id`、`force?`（真偽）、`expect?`（`preview_revert` の `token`） | `{updated, id, operation, state, revert_id, effect}`。書いたとき（と、すでに戻っていた記録を取り消し済みにしたとき）は画面に `changed` を出す |
+
+- エラーは 4.3 と同じ形：知らないスコープ名・形の誤りの ID・`limit` が 0 は `invalid_argument`、クライアントや記録が無いのは `not_found`。
+- `list_changes`・`preview_revert` は何も変えないので、依頼を送った後に接続が切れても、読み取りと同じく 1 回だけ自動でやり直す（4.3 の `result_unknown`）。`set_agent_scopes`・`revert_change` は書き込みと同じく送り直さない。
 
 - `append_note` の `heading` は、あれば現在時刻の見出しを入れてから追記する（CLI の `--heading [TITLE]`。`""` は件名なしの `## HH:MM`）。省略か `null` なら見出しを入れない。
 - `edit_note` の `replace`・`delete`・`move_to` が 0 個か 2 個以上なら `-32602`。`line`・`move_to` は 0 以上の整数（0 の意味はコアが `invalid_argument` にする）。
@@ -442,7 +463,66 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 - todo・blocker・append・note_edit に該当する操作は、MCP・CLI のどちらからでも、すべて change_log に記録する（operation は 3章の命名規則に従う）。ただし、何も変えずに成功を返した操作（解消済みの障害への `resolve_blocker`、今と同じ本文の `edit_todo`・`edit_blocker` など。3章）は記録しない。
 - 利用者が画面で項目の状態を変えてから保存されるまでの間に届いた、同じ状態にする `complete_todo`・`reopen_todo`・`resolve_blocker` は、受け付けて成功を返すが、利用者の保存が書き込まれた時点で利用者の変更として扱い、その操作の記録から状態と完了時刻の欄を外す（何も残らなければ記録を消す。アーキテクチャ設計書 4.1）。利用者の保存が先に届いた場合に記録されないのと同じ結果にするため。
 - MCP・CLI から作成された項目には `origin = agent` と agent_client_id（CLI は `cli`）を記録し、画面で印を表示する。
-- `yunagi agent revert` は取り消しを実行し、対象がその後に人によって変更されている場合は `conflict`（`reason: changed`。終了コード 5）を返す（`--force` で上書き）。項目では、その記録の操作が変えた欄だけで判定し、取り消しもその欄だけを戻す（ほかの欄に人が加えた変更は残る。データモデル設計書 change_log）。取り消しの確定には 2章の確認が必要。
+- `yunagi agent revert` は取り消しを実行し、対象がその後に人によって変更されている場合は `conflict`（`reason: changed`。終了コード 5）を返す（`--force` で上書き）。項目では、その記録の操作が変えた欄だけで判定し、取り消しもその欄だけを戻す（ほかの欄に人が加えた変更は残る。データモデル設計書 change_log）。取り消しの確定には 2章の確認が必要。動きは 7.3。
+
+### 7.1 権限の管理（`agent permissions`。2026-11-04 決定。YUN-94）
+
+コードは、コアが `domain::agent_admin`、CLI が `crates/cli/src/agent_admin.rs`、API の操作が 4.4。
+
+- 見る：`yunagi agent permissions [CLIENT]`。登録されているクライアントと許可したスコープ・最後の接続の一覧（出力は 4.1）。確認は要らない。`CLIENT` が登録されていなければ `not_found`（終了コード 4）。
+- 変える：`--allow S`・`--deny S`（繰り返せる。`todo,blocker` のようにコンマで区切ってもよい。`S` は 2章のスコープ名）。`CLIENT` が要る。結果の並びは 2章の表の順で、足すスコープがすでにあり、外すスコープがすでに無ければ、何も書かない（`updated: false`）。`read` も外せる（外すとそのクライアントは何も読めない。管理の操作は使える。2章）。権限の変更は人の操作なので、change_log には記録しない。
+- 引数の誤り（`invalid_argument`）：知らないスコープ名、同じスコープを足すことと外すことの両方に指定、`unknown` に `read` 以外を足す（2章）、`CLIENT` が無いのに `--allow`・`--deny` を指定（CLI。`--allow`・`--deny` が無ければ一覧になる）、API の `set_agent_scopes` で足すものも外すものも無い。`CLIENT` が登録されていなければ `not_found`。CLI は、確認の質問をする前に、分かる誤りを断る。
+- 確認：対話端末（標準入力と標準出力の両方が端末）でだけ得る。変更内容（`now:` と `after:` のスコープ、足すスコープで何ができるか）を表示し、`Apply this change? [y/N]` と聞く。`y`・`yes`（大文字小文字は問わない）だけを承諾とし、それ以外は「取りやめた」として何も書かずに終了コード 0。入力が閉じている・読めないときは、失敗（終了コード 1）。すでに目的のスコープなら、聞かずに `Nothing to change.` で終わる（0）。端末でなければ何も書かず、`permission_denied`（`required_scope` なし。終了コード 3。4.3）。確認は誤って確定しないための確認で、防御の境界ではない（2章）。
+- 判定の順（CLI）：引数の誤り → `unknown` へ足す誤り → 端末か → `CLIENT` が登録されているか → 確認 → 書き込み。引数の誤りが権限（端末）より先なのは、直してやり直すしかないため（3.2 の例外と同じ）。
+- 画面への知らせ：変えたら `changed`（`by: agent`）を出す。設定画面のエージェントの一覧が読み直される（初めての識別子の登録と同じ経路）。
+
+### 7.2 変更履歴の一覧（`agent history`。2026-11-04 決定。YUN-94）
+
+コアは `domain::history::list_changes`、API の操作は `list_changes`（4.4）。
+
+- 新しい順（記録の ID の降順）に、エージェントの記録と、人の取り消しの記録（`operation` が `agent.revert`）の両方を返す。`--client NAME` はそのクライアントの記録だけ（人の取り消しの記録はクライアントが無いので入らない。登録のない `NAME` は `not_found`）。`--unseen` は、エージェントによる未確認の変更（`actor = agent` で `seen_at` が空。データモデル設計書 change_log）だけ。`--limit N` は 1 以上（既定 50、200 を超える指定は 200。0 は `invalid_argument`）。`--before ID` はその記録より古いものだけ（続きを読む目印。返り値の `next_before` は、`limit` 件ちょうど返したときの最後の記録の ID で、それ未満なら `null`）。
+- 1 件の形：`{id, created_at, actor, client, operation, target, summary, seen_at, reverted_at, revert_of}`。`target` は、項目なら `{type: "item", id, date, kind, text, deleted}`（`text` はいまの本文。項目が見つからなければ `id` だけ）、ノート・振り返りなら `{type: "note" | "reflection", date}`。`summary` は、項目の追加が `{type: "added", kind, text}`、項目の欄の変更が `{type: "fields", fields: [{name, before, after}]}`（変えた欄だけ）、ノート・振り返りが `{type: "text", before_chars, after_chars}`（本文は大きいので文字数だけ。差分は取り消しの計画で見る）、読めない記録が `{type: "unknown"}`。
+- 一覧は確認済みの印（`seen_at`）を付けない。`seen_at` は変更履歴の画面で確認した時刻（データモデル設計書 change_log）なので、CLI で一覧を出しても未確認のまま残る。印を付ける口は、変更履歴 S-06（YUN-81）がコアに足す（YUN-81 の完了の条件に書いた）。
+
+### 7.3 取り消し（`agent revert`。2026-11-04 決定。YUN-94）
+
+コードは、コアが `domain::history`（`preview`・`revert`）、CLI が `crates/cli/src/agent_admin.rs`、API の操作が `preview_revert`・`revert_change`（4.4）。
+
+**何を取り消せるか**：エージェントの記録（`actor = agent`）。取り消しの記録（`agent.revert`）は取り消せない（`invalid_argument`。元の記録を取り消す）。取り消しは `before` を書き戻す新しい操作で、取り消し自体も記録する：`actor = human`、`agent_client_id` は空、`operation = agent.revert`、`revert_of_id` は元の記録、`before` は取り消し前のいまの値、`after` は戻した値（項目の欄は `fields_json` と同じ形のオブジェクト、本文は JSON の文字列。行き違いの判定が状態をこの形で読む。アーキテクチャ設計書 4.1）。元の記録には `reverted_at` を入れる。同じトランザクションで行う。
+
+**記録の種類ごとの戻し方**
+
+| 記録 | 戻すこと | 「人があとから変えたか」を調べる欄 |
+| --- | --- | --- |
+| 項目の欄の変更（`todo.edit`・`todo.complete`・`todo.reopen`・`blocker.edit`・`blocker.resolve`） | その記録の `after` に入っている欄だけを `before` に戻す（ほかの欄に人が加えた変更は残る） | `after` に入っている欄の、いまの値と `after` の値 |
+| 項目の追加（`todo.add`・`blocker.add`） | 項目を削除する（画面の削除と同じ論理削除。`deleted_at` を入れる） | 本文・状態・取りやめた理由・解消メモ・完了時刻。並び順は調べない（並べ替えだけで必ず食い違うのを避けるため） |
+| ノート・振り返りの本文の変更（`note.append`・`note.edit`・`reflection.append`） | 本文全体を `before` に戻す（版を進める） | 本文全体と `after` |
+
+- 後の記録がある欄：エージェントが同じ欄を続けて変えた場合も、人の変更と区別せず、`changed` になる。新しい記録から順に取り消す。
+- すでに戻っている：いまの値がすでに戻したい値と同じ（人が先に戻した、追加した項目をすでに削除した、本文がすでに前の本文）なら、何も書かずに、元の記録を取り消し済みにして成功を返す（`updated: false`、`state: already_restored`）。取り消しの記録は作らない。
+- すでに取り消し済み（`reverted_at` がある、または取り消しの記録から指されている）：何も書かずに成功を返す（`updated: false`、`state: already_reverted`）。取り消しの応答が届かずに、人がやり直した場合を失敗にしないため。
+- `--force` が越えるのは「人があとから変えた」（`changed`）だけ。確認で見せた値だけを上書きする：CLI は取り消す内容を見せたときの状態を表す `token`（`preview_revert` の返り値）を `expect` に付けて送り、確認の後に変わっていれば、`--force` でも書かずに `conflict`（`changed`）で止める（確認を待つ間に人が変えた内容を、見せずに消さないため）。ノートの `--force` は本文全体を `before` に戻すので、表示する差分は「いまの本文 → 戻す本文」で、失う内容が全部見える。
+
+**判定の順**（コア。最初に当たったものを返す。3.2 と同じ形）
+
+1. 記録が無い：`not_found`（利用者の保存と行き違って消えた記録も含む。アーキテクチャ設計書 4.1）。
+2. 取り消しの記録、または人の記録：`invalid_argument`。
+3. すでに取り消し済み：`updated: false` の成功。
+4. 対象の項目が削除されている：`not_found`（項目の欄の変更。追加の記録は、すでに戻っている扱いで成功）。
+5. 項目の欄の変更で、項目が持ち越し済み：`conflict`（`reason: carried_over`、`carried_to_id`・`carried_to_date` つき）。`--force` でも通さない。
+6. 項目の欄の変更で、項目が取りやめた TODO（`dropped`）：`invalid_argument`（`close_reason` つき）。`--force` でも通さない。
+7. 画面の保存の失敗中：`storage_unavailable`。続けて、書き戻す欄を利用者が入力中なら `conflict`（`reason: user_editing`。項目の本文・解消メモ、ノート・振り返りの守る行がある間）。アプリの停止中は画面が無いので、どちらも起きない。
+8. `expect` が合わない、または人があとから変えている（`--force` なし）：`conflict`（`reason: changed`、`changed_fields`）。
+
+**持ち越し済み・取りやめた TODO（9章の決定）**：取り消しは「画面で人ができること」だけを行う。持ち越し済みの項目と取りやめた TODO の `status`・`text`・`resolution_note`・`completed_at`・`close_reason` は、画面でも変えられない（データモデル設計書 3章 item）ので、取り消しでも変えない。エージェントの項目の記録が持つ欄は、どれもこの欄にあたるため、5・6 で拒んでも、取り消せずに残る欄は無い（持ち越した後の誤りは、持ち越し先の項目を人が直す）。一方、追加の取り消しは削除で、削除は画面でもできるので、持ち越し済みでも取りやめた TODO でも拒まない（確認の表示に、持ち越し先の項目 `carried_to_id` が残ることを出す）。
+
+**CLI の流れ**：引数（`CHANGE_ID` の形。ULID）→ 端末か（端末でなければ何も呼ばずに `permission_denied`。終了コード 3）→ `preview_revert` → 取り消す内容の表示 → `[y/N]` → `revert_change`。
+- 表示：`Change ID: operation by クライアント at 日時`、続けて取り消す内容。項目の欄は `欄: いま -> 戻す値`（人が変えた欄には `(changed after the record)`）、追加の取り消しは `This deletes the todo added on 日付: "本文"`（持ち越し先があれば残ることも）、本文は変わる行の差分（いまの本文にあって無くなる行に `-`、戻すと入る行に `+`。共通の先頭と末尾の行は除く。20 行まで、API は 200 行まで `truncated`）。
+- 人が変えた欄があり `--force` が無ければ、表示のあとで `conflict`（`changed`。終了コード 5）で終わる。`--force` があれば `--force: this overwrites changes made after the record (欄).` を表示して聞く。
+- 値を書かない場合（すでに取り消し済み・すでに戻っている）は、聞かずに結果を表示する（`Already reverted. Nothing changed.`、`Already back to the earlier values. The change is marked as reverted.`）。書いたら `Reverted.`（0）。取りやめたら `Cancelled. Nothing was changed.`（0）。
+- 画面への知らせ：書いたとき（と、取り消し済みにしたとき）は `changed`（`by: agent`）を出す。ノートの取り込みはエージェントの変更と同じ（アーキテクチャ設計書 4.1）。
+
+**`origin = human` にする手段（9章の決定）**：設けない。CLI は人とエージェントを確実には区別できない（2章）ので、対話端末で実行したことを理由に `human` にすると、エージェントが擬似端末で通して、自分の変更を履歴・未確認の印・取り消しの対象から外せてしまう。人が項目を足すのはアプリ（画面）の役割で、CLI で足した項目は、誰が実行しても `origin = agent` の `cli` クライアントとして記録する。
 
 ## 8. 第2フェーズで追加する操作（案。段階はロードマップ参照）
 
@@ -453,5 +533,4 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 ## 9. 未決事項
 
 - エラーの `message` を利用者の言語設定（`locale`）に合わせて日英で出すか、英語固定にするか
-- `agent revert` の対象が、記録の後に持ち越し済みになった項目である場合（持ち越す前にエージェントが本文を変えていた場合など）に、取り消しを拒むか、元の項目だけを戻すか（3章では持ち越し済みの項目への書き込みを拒むが、取り消しは人が確認して行う操作のため、別に決める）。記録の後に取りやめた TODO（`dropped`）になった項目の `todo.edit`・`todo.complete`・`todo.reopen` を取り消す場合も、同じく別に決める（3章では取りやめた TODO の本文・状態への書き込みを拒む）
-- `cli` クライアントで作成した項目を、人が CLI で直接作ったものとして `origin = human` にする手段（対話端末での実行時など）を設けるか
+- 登録できるクライアントの数の上限（4.4。64）に達したとき、利用者が使っていない登録を整理する手段（`TooMany` の `message` は「設定 > エージェントで整理して」と案内するが、消す口がまだ無い。change_log と item が `agent_client_id` で指しているため、行を消すと履歴の表示に困る。消さずに「使わない」印を付けるか、履歴ごと扱いを決める）。変更履歴 S-06 と設定のエージェント区分（YUN-81）で決める（YUN-81 の完了の条件に書いた）

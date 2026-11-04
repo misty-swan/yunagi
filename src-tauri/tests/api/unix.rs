@@ -44,7 +44,11 @@ pub fn main() {
     }
     let dir = data_dir::default_dir().unwrap();
     assert!(dir.path().starts_with(&home));
-    let tests: [(&str, Test); 11] = [
+    let tests: [(&str, Test); 12] = [
+        (
+            "admin_calls_go_through_the_app_and_respect_the_screen",
+            admin_calls_go_through_the_app_and_respect_the_screen,
+        ),
         (
             "the_cli_goes_through_the_app_and_follows_its_permissions",
             the_cli_goes_through_the_app_and_follows_its_permissions,
@@ -764,6 +768,124 @@ fn the_screen_state_protects_what_the_user_is_editing(dir: &DefaultDir) {
             .is_ok()
     );
     h.core.screen().set_save_failing(false);
+}
+
+/// 権限の変更・履歴・取り消し（管理の操作。05 4.4）：権限のスコープは要らず、変えたら `changed` を出し、
+/// 取り消しは画面の入力中・保存の失敗中を見る。
+fn admin_calls_go_through_the_app_and_respect_the_screen(dir: &DefaultDir) {
+    let h = Harness::opened(dir);
+    let date = "2031-08-09";
+    h.grant("claude-code", &[Scope::Todo, Scope::Append]);
+    let todo = h.ok(
+        "claude-code",
+        "add_todo",
+        json!({"date": date, "text": "調査"}),
+    );
+    let id = todo["id"].as_str().unwrap().to_owned();
+    h.ok(
+        "claude-code",
+        "edit_todo",
+        json!({"id": id, "text": "調査する"}),
+    );
+    h.drain();
+
+    // 読み取りを外したクライアントでも、管理の操作（一覧・履歴）は使える。何も変えないので changed も無い
+    let agents = h.ok("cli", "list_agents", json!({}));
+    let names: Vec<&str> = agents["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"claude-code"), "{agents}");
+    let history = h.ok(
+        "cli",
+        "list_changes",
+        json!({"client": "claude-code", "limit": 10}),
+    );
+    let edit = history["changes"][0].clone();
+    assert_eq!(edit["operation"], "todo.edit");
+    assert_eq!(edit["target"]["text"], "調査する");
+    h.assert_no_changed();
+
+    // 権限の変更：変えたら changed（設定画面の一覧が変わる）。同じなら何も変えない
+    let changed = h.ok(
+        "cli",
+        "set_agent_scopes",
+        json!({"client": "claude-code", "allow": ["note_edit"], "deny": ["append"]}),
+    );
+    assert_eq!(changed["updated"], true);
+    assert_eq!(changed["scopes"], json!(["read", "todo", "note_edit"]));
+    assert_eq!(h.next_changed(), "agent");
+    let same = h.ok(
+        "cli",
+        "set_agent_scopes",
+        json!({"client": "claude-code", "allow": ["todo"]}),
+    );
+    assert_eq!(same["updated"], false);
+    h.assert_no_changed();
+    let bad = h.err(
+        "cli",
+        "set_agent_scopes",
+        json!({"client": "nobody", "allow": ["todo"]}),
+    );
+    assert_eq!(bad["code"], "not_found");
+    let unknown = h.err(
+        "cli",
+        "set_agent_scopes",
+        json!({"client": "unknown", "allow": ["todo"]}),
+    );
+    assert_eq!(unknown["code"], "invalid_argument");
+
+    // 取り消しの計画は何も書かない。画面が本文を入力中なら、取り消しは user_editing
+    let change_id = edit["id"].as_str().unwrap().to_owned();
+    let plan = h.ok("cli", "preview_revert", json!({"change_id": change_id}));
+    assert_eq!(plan["state"], "apply");
+    assert_eq!(plan["effect"]["fields"][0]["restore"], "調査");
+    h.assert_no_changed();
+    let report: UiReport = serde_json::from_value(json!({
+        "session": "t", "seq": 1,
+        "editingItems": [{"itemId": id, "field": "text"}],
+        "editors": [],
+    }))
+    .unwrap();
+    h.core.screen().report(report).unwrap();
+    let editing = h.err("cli", "revert_change", json!({"change_id": change_id}));
+    assert_eq!(editing["reason"], "user_editing");
+    h.assert_no_changed();
+    let report: UiReport = serde_json::from_value(json!({
+        "session": "t", "seq": 2, "editingItems": [], "editors": [],
+    }))
+    .unwrap();
+    h.core.screen().report(report).unwrap();
+
+    // 保存の失敗中は取り消せない。直れば取り消せて、changed を出す
+    h.core.screen().set_save_failing(true);
+    let failing = h.err("cli", "revert_change", json!({"change_id": change_id}));
+    assert_eq!(failing["code"], "storage_unavailable");
+    h.core.screen().set_save_failing(false);
+    let stale = h.err(
+        "cli",
+        "revert_change",
+        json!({"change_id": change_id, "expect": "[\"古い\"]"}),
+    );
+    assert_eq!(stale["reason"], "changed");
+    h.assert_no_changed();
+    let done = h.ok(
+        "cli",
+        "revert_change",
+        json!({"change_id": change_id, "expect": plan["token"]}),
+    );
+    assert_eq!(done["updated"], true);
+    assert_eq!(done["state"], "reverted");
+    assert_eq!(h.next_changed(), "agent");
+    let board = h.ok("claude-code", "get_board", json!({"date": date}));
+    assert_eq!(board["todos"][0]["text"], "調査");
+    // 同じ記録をもう一度：何も変えない
+    let again = h.ok("cli", "revert_change", json!({"change_id": change_id}));
+    assert_eq!(again["updated"], false);
+    assert_eq!(again["state"], "already_reverted");
+    h.assert_no_changed();
 }
 
 /// 保存先の変更・復元の最中（データベースを使えない間）の依頼は、最大 `db_wait` 待って、何も反映せずに

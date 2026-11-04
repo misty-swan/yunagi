@@ -214,10 +214,94 @@ fn hold_lock(dir: &Path) -> File {
     f
 }
 
+/// 端末で動かしたことにして（`interactive`）、標準入力 `input` を確認の答えとして渡す。
+fn exec_in_terminal(w: &World, args: &[&str], input: &[u8]) -> Out {
+    let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    let env = Env {
+        setup: yunagi_cli::agent_setup::SetupEnv {
+            interactive: true,
+            ..Env::default().setup
+        },
+        ..w.env()
+    };
+    let (mut stdin, mut stdout, mut stderr) = (input, Vec::new(), Vec::new());
+    let code = yunagi_cli::run(
+        &args,
+        &env,
+        &mut Io {
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+    Out {
+        code,
+        stdout: String::from_utf8(stdout).unwrap(),
+        stderr: String::from_utf8(stderr).unwrap(),
+    }
+}
+
+/// データベースを開いて `f` を行う（直接、人の操作として）。
+fn with_db<T>(dir: &DefaultDir, f: impl FnOnce(&Database) -> T) -> T {
+    let lock = DbLock::acquire(dir, Duration::ZERO).unwrap();
+    let db = Database::open(lock).unwrap();
+    let value = f(&db);
+    db.close().unwrap();
+    value
+}
+
+fn item_text(dir: &DefaultDir, id: &str) -> String {
+    with_db(dir, |db| {
+        yunagi_core::storage::table::item::get(db.connection(), id.parse().unwrap())
+            .unwrap()
+            .unwrap()
+            .text
+    })
+}
+
+/// 画面の保存と同じ経路で、人が項目の本文を変える。
+fn human_edit(dir: &DefaultDir, id: &str, text: &str) {
+    with_db(dir, |db| {
+        item::save(
+            db.connection(),
+            id.parse().unwrap(),
+            &item::ItemSave {
+                text: Some(text.to_owned()),
+                ..item::ItemSave::default()
+            },
+            "2026-11-02T05:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+    });
+}
+
+/// 履歴（新しい順）の記録の ID を、`operation` で探す。
+fn change_id(w: &World, operation: &str) -> String {
+    let history = exec(w, &["agent", "history", "--json"]).json();
+    history["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["operation"] == operation)
+        .unwrap_or_else(|| panic!("no {operation} in {history}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 type Test = fn(&World);
 
 pub fn main() {
-    let tests: [(&str, Test); 25] = [
+    let tests: [(&str, Test); 28] = [
+        (
+            "agent_permissions_and_history_are_read_without_confirmation",
+            agent_admin_reads,
+        ),
+        (
+            "agent_permissions_and_revert_are_confirmed_in_a_terminal",
+            agent_admin_confirmation,
+        ),
+        ("agent_revert_judges_by_the_changed_fields", agent_revert),
         ("direct_mode_reads_as_the_cli_client", direct_mode_reads),
         ("reads_need_the_read_scope_first", read_scope),
         ("exit_codes_for_not_found_and_bad_arguments", exit_codes),
@@ -272,6 +356,300 @@ pub fn main() {
         passed += 1;
     }
     println!("\ntest result: ok. {passed} passed");
+}
+
+// ---- 権限の管理と変更履歴（A-08） ----
+
+fn cli_scopes(dir: &DefaultDir) -> Vec<Scope> {
+    client_row(dir, "cli").scopes
+}
+
+fn agent_admin_reads(w: &World) {
+    let dir = seed(w);
+    // 権限の一覧：確認は要らない（端末でなくてもよい）
+    let list = exec(w, &["agent", "permissions"]);
+    assert_eq!(list.code, 0, "{}", list.stderr);
+    assert!(list.stdout.starts_with("CLIENT"), "{}", list.stdout);
+    assert!(list.stdout.contains("cli"), "{}", list.stdout);
+    assert!(list.stdout.contains("unknown"), "{}", list.stdout);
+    let one = exec(w, &["agent", "permissions", "cli"]);
+    assert!(!one.stdout.contains("unknown"));
+    let json = exec(w, &["agent", "permissions", "--json"]).json();
+    let names: Vec<&str> = json["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["cli", "unknown"]);
+    assert_eq!(json["agents"][0]["scopes"], json!(["read"]));
+    let missing = exec(w, &["agent", "permissions", "nobody"]);
+    assert_eq!(missing.code, 4, "{}", missing.stderr);
+
+    // 履歴：seed が足した3件（古い順に todo.add・blocker.add・note.append）。新しい順
+    let history = exec(w, &["agent", "history"]);
+    assert_eq!(history.code, 0, "{}", history.stderr);
+    let ops: Vec<&str> = history
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with('*'))
+        .map(|l| l.split_whitespace().nth(5).unwrap())
+        .collect();
+    assert_eq!(
+        ops,
+        ["note.append", "blocker.add", "todo.add"],
+        "{}",
+        history.stdout
+    );
+    assert!(history.stdout.contains("added: \"rate limit survey\""));
+    let json = exec(w, &["agent", "history", "--json", "--limit", "2"]).json();
+    assert_eq!(json["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(json["changes"][0]["client"], "cli");
+    assert_eq!(json["changes"][0]["summary"]["type"], "text");
+    let next = json["next_before"].as_str().unwrap().to_owned();
+    let rest = exec(w, &["agent", "history", "--json", "--before", &next]).json();
+    assert_eq!(rest["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(rest["changes"][0]["operation"], "todo.add");
+    assert!(rest["next_before"].is_null());
+    assert_eq!(
+        exec(w, &["agent", "history", "--unseen", "--json"]).json()["changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(exec(w, &["agent", "history", "--client", "nobody"]).code, 4);
+    assert_eq!(exec(w, &["agent", "history", "--limit", "0"]).code, 2);
+    assert_eq!(exec(w, &["agent", "history", "--before", "nope"]).code, 2);
+
+    // 確認が要る形は --json を断る
+    for args in [
+        &["agent", "permissions", "cli", "--allow", "todo", "--json"][..],
+        &["agent", "revert", MISSING_ID, "--json"],
+    ] {
+        let out = exec(w, args);
+        assert_eq!(out.code, 2, "{args:?}: {}", out.stderr);
+    }
+    // 権限の一覧と履歴は、MCP には出さない（ツールとして呼ぶと -32602）
+    let calls = [
+        tool_call(1, "list_agents", json!({})),
+        tool_call(2, "list_changes", json!({})),
+        tool_call(
+            3,
+            "set_agent_scopes",
+            json!({"client": "cli", "allow": ["todo"]}),
+        ),
+        tool_call(4, "revert_change", json!({"change_id": MISSING_ID})),
+        tool_call(5, "preview_revert", json!({"change_id": MISSING_ID})),
+    ];
+    let run = mcp_run(w, &["--client", "claude-code"], &calls);
+    for (i, response) in run.responses.iter().enumerate() {
+        assert_eq!(response["error"]["code"], -32602, "{i}: {response}");
+    }
+    assert_eq!(cli_scopes(&dir), [Scope::Read]);
+}
+
+fn agent_admin_confirmation(w: &World) {
+    let dir = seed(w);
+    let before = change_log(&dir);
+    // 端末でなければ、何も書かずに permission_denied（required_scope なし。終了コード 3）
+    for args in [
+        &["agent", "permissions", "cli", "--allow", "todo"][..],
+        &["agent", "permissions", "cli", "--deny", "read"],
+    ] {
+        let out = exec_with_stdin(w, args, b"y\n");
+        assert_eq!(out.code, 3, "{args:?}: {}", out.stderr);
+        assert!(out.stderr.contains("needs a terminal"), "{}", out.stderr);
+        assert!(!out.stderr.contains("required scope"), "{}", out.stderr);
+    }
+    let todo = change_id(w, "todo.add");
+    let out = exec_with_stdin(w, &["agent", "revert", &todo], b"y\n");
+    assert_eq!(out.code, 3, "{}", out.stderr);
+    assert!(!out.stderr.contains("required scope"), "{}", out.stderr);
+    assert_eq!(cli_scopes(&dir), [Scope::Read]);
+    assert_eq!(change_log(&dir), before);
+    // ID の形の誤りは、端末の確認より先
+    assert_eq!(exec(w, &["agent", "revert", "nope"]).code, 2);
+    // 引数の誤り（CLIENT が無い）
+    assert_eq!(
+        exec_in_terminal(w, &["agent", "permissions", "--allow", "todo"], b"y\n").code,
+        2
+    );
+
+    // 端末でも、答えが y でなければ何も変えない。入力が閉じていれば失敗
+    let no = exec_in_terminal(
+        w,
+        &["agent", "permissions", "cli", "--allow", "todo"],
+        b"n\n",
+    );
+    assert_eq!(no.code, 0, "{}", no.stderr);
+    assert!(no.stdout.contains("Cancelled"), "{}", no.stdout);
+    let closed = exec_in_terminal(w, &["agent", "permissions", "cli", "--allow", "todo"], b"");
+    assert_eq!(closed.code, 1, "{}", closed.stderr);
+    assert_eq!(cli_scopes(&dir), [Scope::Read]);
+
+    // 変更内容を見せて y で確定する（スコープは決まった順に並ぶ）
+    let yes = exec_in_terminal(
+        w,
+        &["agent", "permissions", "cli", "--allow", "note_edit,todo"],
+        b"yes\n",
+    );
+    assert_eq!(yes.code, 0, "{}", yes.stderr);
+    assert!(yes.stdout.contains("now:   read"), "{}", yes.stdout);
+    assert!(
+        yes.stdout.contains("after: read, todo, note_edit"),
+        "{}",
+        yes.stdout
+    );
+    assert!(yes.stdout.contains("Updated."), "{}", yes.stdout);
+    assert_eq!(
+        cli_scopes(&dir),
+        [Scope::Read, Scope::Todo, Scope::NoteEdit]
+    );
+    // すでにそうなっていれば、聞かずに終わる
+    let same = exec_in_terminal(w, &["agent", "permissions", "cli", "--allow", "todo"], b"");
+    assert_eq!(same.code, 0, "{}", same.stderr);
+    assert!(same.stdout.contains("Nothing to change"), "{}", same.stdout);
+    // 外すこともできる
+    let deny = exec_in_terminal(
+        w,
+        &["agent", "permissions", "cli", "--deny", "note_edit"],
+        b"y\n",
+    );
+    assert_eq!(deny.code, 0, "{}", deny.stderr);
+    assert_eq!(cli_scopes(&dir), [Scope::Read, Scope::Todo]);
+    // 識別子のない接続（unknown）には、read より多くは足せない（聞く前に断る）
+    let unknown = exec_in_terminal(
+        w,
+        &["agent", "permissions", "unknown", "--allow", "todo"],
+        b"y\n",
+    );
+    assert_eq!(unknown.code, 2, "{}", unknown.stderr);
+    assert!(!unknown.stdout.contains("[y/N]"));
+    // 登録のないクライアント
+    let nobody = exec_in_terminal(
+        w,
+        &["agent", "permissions", "nobody", "--allow", "todo"],
+        b"y\n",
+    );
+    assert_eq!(nobody.code, 4, "{}", nobody.stderr);
+}
+
+fn agent_revert(w: &World) {
+    let dir = seed(w);
+    set_cli_scopes(&dir, &[Scope::Read, Scope::Todo]);
+    let added = exec(
+        w,
+        &["todo", "add", "first", "--date", "2026-11-02", "--json"],
+    )
+    .json();
+    let id = added["id"].as_str().unwrap().to_owned();
+    assert_eq!(exec(w, &["todo", "edit", &id, "second"]).code, 0);
+    let edit = change_id(w, "todo.edit");
+
+    // 確認の前に何が起きるかを見せ、y で取り消す。取り消しは人の操作として記録される
+    let ok = exec_in_terminal(w, &["agent", "revert", &edit], b"y\n");
+    assert_eq!(ok.code, 0, "{}{}", ok.stdout, ok.stderr);
+    assert!(
+        ok.stdout.contains("text: \"second\" -> \"first\""),
+        "{}",
+        ok.stdout
+    );
+    assert!(
+        ok.stdout.contains("Revert this change? [y/N]"),
+        "{}",
+        ok.stdout
+    );
+    assert!(ok.stdout.contains("Reverted."), "{}", ok.stdout);
+    assert_eq!(item_text(&dir, &id), "first");
+    let log = change_log(&dir);
+    let last = log.last().unwrap();
+    assert_eq!(
+        (last.0.as_str(), last.1.as_str(), last.2.clone()),
+        ("agent.revert", "human", None)
+    );
+    let history = exec(w, &["agent", "history"]);
+    assert!(history.stdout.contains("[reverted]"), "{}", history.stdout);
+    // 同じ記録をもう一度：聞かずに、何も変えない
+    let again = exec_in_terminal(w, &["agent", "revert", &edit], b"");
+    assert_eq!(again.code, 0, "{}", again.stderr);
+    assert!(
+        again.stdout.contains("Already reverted"),
+        "{}",
+        again.stdout
+    );
+    assert_eq!(change_log(&dir).len(), log.len());
+
+    // 答えが y でなければ取り消さない
+    assert_eq!(exec(w, &["todo", "edit", &id, "third"]).code, 0);
+    let third = change_id(w, "todo.edit");
+    let no = exec_in_terminal(w, &["agent", "revert", &third], b"\n");
+    assert_eq!(no.code, 0, "{}", no.stderr);
+    assert!(no.stdout.contains("Cancelled"), "{}", no.stdout);
+    assert_eq!(item_text(&dir, &id), "third");
+
+    // 人があとから同じ欄を変えていれば conflict（changed。終了コード 5）。force で上書きする
+    human_edit(&dir, &id, "by a human");
+    let conflict = exec_in_terminal(w, &["agent", "revert", &third], b"y\n");
+    assert_eq!(conflict.code, 5, "{}{}", conflict.stdout, conflict.stderr);
+    assert!(
+        conflict.stderr.contains("conflict (changed)"),
+        "{}",
+        conflict.stderr
+    );
+    assert!(conflict.stderr.contains("--force"), "{}", conflict.stderr);
+    assert!(
+        conflict.stdout.contains("changed after the record"),
+        "{}",
+        conflict.stdout
+    );
+    assert_eq!(item_text(&dir, &id), "by a human");
+    let forced = exec_in_terminal(w, &["agent", "revert", &third, "--force"], b"y\n");
+    assert_eq!(forced.code, 0, "{}{}", forced.stdout, forced.stderr);
+    assert!(
+        forced.stdout.contains("--force: this overwrites"),
+        "{}",
+        forced.stdout
+    );
+    assert_eq!(item_text(&dir, &id), "first");
+
+    // 存在しない記録は not_found（4）。取り消しの記録は取り消せない（2）
+    assert_eq!(
+        exec_in_terminal(w, &["agent", "revert", MISSING_ID], b"y\n").code,
+        4
+    );
+    let revert_record = change_id(w, "agent.revert");
+    assert_eq!(
+        exec_in_terminal(w, &["agent", "revert", &revert_record], b"y\n").code,
+        2
+    );
+
+    // 追加の取り消しは、項目を消す
+    let add = change_id_of(w, "todo.add", "first");
+    let deleted = exec_in_terminal(w, &["agent", "revert", &add], b"y\n");
+    assert_eq!(deleted.code, 0, "{}{}", deleted.stdout, deleted.stderr);
+    assert!(
+        deleted.stdout.contains("This deletes the todo"),
+        "{}",
+        deleted.stdout
+    );
+    let board = exec(w, &["board", "--date", "2026-11-02"]);
+    assert!(!board.stdout.contains("first"), "{}", board.stdout);
+    assert!(board.stdout.contains("rate limit survey"));
+}
+
+/// `operation` の記録のうち、対象の項目の本文が `text` のものの ID。
+fn change_id_of(w: &World, operation: &str, text: &str) -> String {
+    let history = exec(w, &["agent", "history", "--json"]).json();
+    history["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["operation"] == operation && c["target"]["text"] == text)
+        .unwrap_or_else(|| panic!("no {operation} for {text} in {history}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 // ---- 直接モード ----

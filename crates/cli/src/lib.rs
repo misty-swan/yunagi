@@ -8,11 +8,14 @@
 //! - [`doctor`]：`yunagi doctor`。
 //! - [`mcp`]：`yunagi mcp`（MCP サーバー。stdio）。ツールの定義は `mcp_tools`。
 //! - [`agent_setup`]：`yunagi agent setup`（Claude Code・Codex への登録）。
+//! - [`agent_admin`]：`yunagi agent permissions`・`agent revert`（権限の変更と取り消し。端末での確認つき）。
+//!   `agent history` は読み取りなので、ふつうの操作として [`output`] が整える。
 //! - [`error`]：エラー（05 4.3）と終了コード（05 4.1）。
 //!
 //! 実行ファイルの `main` は [`run`] を呼ぶだけにして、試験が同じプロセスの中で、入出力と環境を差し替えて
 //! 動かせるようにしている。
 
+pub mod agent_admin;
 pub mod agent_setup;
 pub mod args;
 pub mod connect;
@@ -80,6 +83,14 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
         Command::Doctor => run_doctor(json, env, io),
         Command::Mcp { client } => mcp::run(client.as_deref(), env, io),
         Command::AgentSetup { claude_code, codex } => agent_setup::run(claude_code, codex, env, io),
+        Command::AgentPermissions {
+            client,
+            allow,
+            deny,
+        } => agent_admin::permissions(client.as_deref(), &allow, &deny, json, env, io),
+        Command::AgentRevert { change_id, force } => {
+            agent_admin::revert(&change_id, force, env, io)
+        }
     }
 }
 
@@ -132,10 +143,8 @@ fn operation(mut op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     if let Err(e) = op.read_stdin(io.stdin) {
         return fail(&e, json, io);
     }
-    let warnings = Warnings::default();
     let Operation { method, params, .. } = op;
-    let result = connector(env, &warnings, "cli").and_then(|c| c.call(method, params));
-    flush_warnings(&warnings, io);
+    let result = call_api(env, io, method, params);
     match result {
         Ok(value) => {
             if json {
@@ -149,6 +158,20 @@ fn operation(mut op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
         }
         Err(e) => fail(&e, json, io),
     }
+}
+
+/// 操作 `method` を `cli` クライアントとして行う（接続の手順は 05 4.3・アーキテクチャ設計書 4.4）。環境を
+/// 分けている形の警告は、操作の後に標準エラーへ出す。
+pub(crate) fn call_api(
+    env: &Env,
+    io: &mut Io<'_>,
+    method: &'static str,
+    params: serde_json::Map<String, Value>,
+) -> Result<Value, ErrorObject> {
+    let warnings = Warnings::default();
+    let result = connector(env, &warnings, "cli").and_then(|c| c.call(method, params));
+    flush_warnings(&warnings, io);
+    result
 }
 
 fn run_doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {

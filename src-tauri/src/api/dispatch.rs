@@ -9,7 +9,7 @@
 use std::cell::Cell;
 
 use serde_json::Value;
-use yunagi_api::ops::{self, Call, Failure, ReadCall, Reply, WriteCall};
+use yunagi_api::ops::{self, AdminCall, Call, Failure, ReadCall, Reply, WriteCall};
 use yunagi_api::wire::{self, Request};
 
 use crate::app_core::{AppCore, Busy, now, system_tz};
@@ -45,6 +45,7 @@ fn run(core: &AppCore, client: Option<&str>, request: &Request) -> Result<Value,
     let result = match &call {
         Call::Read(read) => read_call(core, read, deadline, client, &registered),
         Call::Write(write) => write_call(core, write, deadline, client, &registered),
+        Call::Admin(admin) => admin_call(core, admin, deadline, client, &registered),
     };
     // 初めての識別子を登録したら、設定画面のエージェントの一覧が変わるので、画面に知らせる
     if registered.get() {
@@ -74,6 +75,26 @@ fn read_call(
 fn write_call(
     core: &AppCore,
     call: &WriteCall,
+    deadline: std::time::Instant,
+    client: Option<&str>,
+    registered: &Cell<bool>,
+) -> Result<Value, Failure> {
+    let result = core
+        .api_write(
+            deadline,
+            |conn| ops::resolve_client(conn, client, registered),
+            |conn, agent| call.execute(conn, agent, &system_tz(), now()).map(Changed),
+        )
+        .map_err(|Busy| Failure::App(busy_error()))??;
+    Ok(result.0.value)
+}
+
+/// 管理の操作（権限・変更履歴・取り消し。05 4.4）を `AppCore::api_write` に渡す。一覧と取り消しの計画は
+/// 何も変えない（`changed` を出さない）が、取り消しは画面の入力中・保存の失敗中の状態を見るので、
+/// 書き込みと同じ経路で行う。
+fn admin_call(
+    core: &AppCore,
+    call: &AdminCall,
     deadline: std::time::Instant,
     client: Option<&str>,
     registered: &Cell<bool>,

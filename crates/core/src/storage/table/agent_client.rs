@@ -25,6 +25,17 @@ text_enum! {
     }
 }
 
+impl Scope {
+    /// すべてのスコープ。表示と保存で並べるときの順（MCP・CLI 仕様書 2章の表の順）。
+    pub const ALL: [Scope; 5] = [
+        Scope::Read,
+        Scope::Todo,
+        Scope::Blocker,
+        Scope::Append,
+        Scope::NoteEdit,
+    ];
+}
+
 /// agent_client の1行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentClient {

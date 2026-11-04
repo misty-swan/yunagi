@@ -6,6 +6,7 @@
 use std::io::Read;
 
 use serde_json::{Map, Value, json};
+use yunagi_core::storage::table::agent_client::Scope;
 
 use crate::error::{self, ErrorObject};
 
@@ -34,6 +35,15 @@ pub enum Command {
     /// `agent setup [--claude-code] [--codex]`：エージェントの設定に MCP サーバーを登録する（05 6章）。
     /// どちらの指定も無ければ、検出したエージェントすべて。
     AgentSetup { claude_code: bool, codex: bool },
+    /// `agent permissions [CLIENT] [--allow S]... [--deny S]...`（05 2章・7章）：クライアントの権限を
+    /// 見る。`--allow`・`--deny` があれば変える（変えるには、変更内容を見せて端末で確認する）。
+    AgentPermissions {
+        client: Option<String>,
+        allow: Vec<Scope>,
+        deny: Vec<Scope>,
+    },
+    /// `agent revert CHANGE_ID [--force]`：エージェントの変更を取り消す（05 7章。端末で確認する）。
+    AgentRevert { change_id: String, force: bool },
 }
 
 /// ローカル API の操作の名前（05 3章のツール名）と引数。
@@ -101,6 +111,13 @@ Commands:
   agent setup [--claude-code] [--codex]
                                     Register the MCP server with Claude Code and Codex
                                     (shows the changes and asks first; needs a terminal)
+  agent permissions [CLIENT] [--allow S]... [--deny S]...
+                                    Show what each agent may do, or change it
+                                    (changing shows the result and asks first; needs a terminal)
+  agent history [--client NAME] [--unseen] [--limit N] [--before ID]
+                                    List the changes agents made, newest first
+  agent revert CHANGE_ID [--force]  Undo one change an agent made
+                                    (shows what changes and asks first; needs a terminal)
 
 Options:
   --json       Print JSON instead of text
@@ -108,6 +125,7 @@ Options:
   -h, --help   Print this help
 
 D is YYYY-MM-DD, today or yesterday. K is todo, blocker, note or reflection.
+S is read, todo, blocker, append or note_edit (--allow todo,blocker also works).
 TEXT (and --note) is read from standard input when it is -.
 A value that starts with -- is written as --name=VALUE (for example --expect=---).
 --heading=TITLE (or --heading TITLE) sets the title; a bare --heading adds just the time.
@@ -160,7 +178,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
                         options.push((name.to_owned(), Some(value.to_owned())));
                     }
                     // 値を取らない指定
-                    None if matches!(rest, "delete" | "claude-code" | "codex") => {
+                    None if matches!(
+                        rest,
+                        "delete" | "claude-code" | "codex" | "force" | "unseen"
+                    ) =>
+                    {
                         options.push((rest.to_owned(), None));
                     }
                     // 値を省略できる指定。次の引数が `-` で始まらなければ件名として読む
@@ -203,10 +225,20 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
         return Err(fail(error));
     }
     let command = command(&positionals, &options).map_err(fail)?;
-    // `agent setup` は人が読む文だけを出す（確認の質問を含むため）。`--json` は断る
-    if json && matches!(command, Command::AgentSetup { .. }) {
+    // 確認の質問を含むコマンドは人が読む文だけを出す。`--json` は断る（権限を見るだけなら JSON も出せる）
+    let asks = match &command {
+        Command::AgentSetup { .. } => Some("agent setup"),
+        Command::AgentPermissions { allow, deny, .. } if !(allow.is_empty() && deny.is_empty()) => {
+            Some("agent permissions with --allow or --deny")
+        }
+        Command::AgentRevert { .. } => Some("agent revert"),
+        _ => None,
+    };
+    if json && let Some(name) = asks {
         return Err(ParseError {
-            error: error::invalid_argument("agent setup prints text only; --json is not supported"),
+            error: error::invalid_argument(format!(
+                "{name} prints text only (it asks a question); --json is not supported"
+            )),
             json: false,
         });
     }
@@ -413,11 +445,77 @@ fn command(
                 opts.finish()?;
                 Command::AgentSetup { claude_code, codex }
             }
+            ["permissions"] | ["permissions", _] => {
+                let client = match rest {
+                    ["permissions", name] => Some((*name).to_owned()),
+                    _ => None,
+                };
+                let allow = take_scopes(&mut opts, "allow")?;
+                let deny = take_scopes(&mut opts, "deny")?;
+                opts.finish()?;
+                if client.is_none() && !(allow.is_empty() && deny.is_empty()) {
+                    return Err(error::invalid_argument(
+                        "agent permissions needs the CLIENT to change (see `yunagi agent permissions` for the names)",
+                    ));
+                }
+                if let Some(both) = allow.iter().find(|s| deny.contains(s)) {
+                    return Err(error::invalid_argument(format!(
+                        "the scope {both} is both allowed and denied"
+                    )));
+                }
+                Command::AgentPermissions {
+                    client,
+                    allow,
+                    deny,
+                }
+            }
+            ["history"] => {
+                let mut params = Map::new();
+                opts.take_into(&mut params, "client", "client")?;
+                opts.take_into(&mut params, "before", "before")?;
+                if opts.take_flag("unseen")? {
+                    params.insert("unseen".into(), json!(true));
+                }
+                if let Some(limit) = opts.take_value("limit")? {
+                    let n: u64 = limit.parse().map_err(|_| {
+                        error::invalid_argument("--limit must be a positive whole number")
+                    })?;
+                    params.insert("limit".into(), json!(n));
+                }
+                opts.finish()?;
+                Command::Operation(Operation::new("list_changes", params))
+            }
+            ["revert", change_id] => {
+                let force = opts.take_flag("force")?;
+                opts.finish()?;
+                Command::AgentRevert {
+                    change_id: (*change_id).to_owned(),
+                    force,
+                }
+            }
             _ => return Err(unknown_or_usage(positionals, rest)),
         },
         _ => return Err(unknown(positionals)),
     };
     Ok(command)
+}
+
+/// `--allow`・`--deny` の値（繰り返せる。`todo,blocker` のようにコンマで区切ってもよい）をスコープにする。
+fn take_scopes(opts: &mut Options, name: &str) -> Result<Vec<Scope>, ErrorObject> {
+    let mut scopes = Vec::new();
+    for value in opts.take_all(name)? {
+        for part in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let scope = part.parse::<Scope>().map_err(|_| {
+                error::invalid_argument(format!(
+                    "unknown scope \"{part}\" for --{name} (use read, todo, blocker, append or note_edit)"
+                ))
+            })?;
+            if !scopes.contains(&scope) {
+                scopes.push(scope);
+            }
+        }
+    }
+    Ok(scopes)
 }
 
 fn unknown(positionals: &[&str]) -> ErrorObject {
@@ -1097,6 +1195,81 @@ mod tests {
             error::code(&bad.read_stdin(&mut bytes).unwrap_err()),
             "invalid_argument"
         );
+    }
+
+    #[test]
+    fn agent_permissions_history_and_revert_are_read() {
+        let command = |args: &[&str]| parse_args(args).unwrap().command;
+        assert_eq!(
+            command(&["agent", "permissions"]),
+            Command::AgentPermissions {
+                client: None,
+                allow: vec![],
+                deny: vec![]
+            }
+        );
+        // --allow はコンマ区切りでも繰り返しでもよく、重なりは1つにする
+        assert_eq!(
+            command(&[
+                "agent",
+                "permissions",
+                "codex",
+                "--allow",
+                "todo, blocker",
+                "--allow=todo",
+                "--deny",
+                "note_edit"
+            ]),
+            Command::AgentPermissions {
+                client: Some("codex".into()),
+                allow: vec![Scope::Todo, Scope::Blocker],
+                deny: vec![Scope::NoteEdit]
+            }
+        );
+        let message = |args: &[&str]| error::message(&parse_args(args).unwrap_err()).to_owned();
+        assert!(
+            message(&["agent", "permissions", "x", "--allow", "root"]).contains("unknown scope")
+        );
+        assert!(message(&["agent", "permissions", "--allow", "todo"]).contains("needs the CLIENT"));
+        assert!(
+            message(&[
+                "agent",
+                "permissions",
+                "x",
+                "--allow",
+                "todo",
+                "--deny",
+                "todo"
+            ])
+            .contains("both allowed and denied")
+        );
+        // 確認の質問を含む形は --json を断る。見るだけなら JSON も出せる
+        assert!(parse_args(&["agent", "permissions", "--json"]).is_ok());
+        assert!(
+            message(&["agent", "permissions", "x", "--deny", "read", "--json"])
+                .contains("--json is not supported")
+        );
+        assert!(message(&["agent", "revert", "ID", "--json"]).contains("--json is not supported"));
+        assert_eq!(
+            command(&["agent", "revert", "ID", "--force"]),
+            Command::AgentRevert {
+                change_id: "ID".into(),
+                force: true
+            }
+        );
+        // --force は revert だけのオプション
+        assert!(message(&["agent", "history", "--force"]).contains("unknown option --force"));
+        let Command::Operation(history) = command(&[
+            "agent", "history", "--client", "cli", "--unseen", "--limit", "5", "--before", "ID",
+        ]) else {
+            panic!("not an operation");
+        };
+        assert_eq!(history.method, "list_changes");
+        assert_eq!(
+            Value::Object(history.params),
+            json!({"client": "cli", "unseen": true, "limit": 5, "before": "ID"})
+        );
+        assert!(message(&["agent", "history", "--limit", "x"]).contains("--limit"));
     }
 
     #[test]
