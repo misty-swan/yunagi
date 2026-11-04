@@ -110,6 +110,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | --- | --- |
 | `yunagi show [--note]` | アプリを前面に表示する（Wayland 環境でのショートカット割当にも使う。操作仕様書 1章「OS 全体の操作」、ビルド・配布手順書 4.1 の案内がこのコマンドを前提にしている。まだ作っていない） |
 | `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない。ローカル API の状態は、アーキテクチャ設計書 4.4 の接続の試し方で1回だけ調べて（待たない）、次のどれかで示す：`connected`（つながり認証も通った）、`no_listener`（待ち受けが無く、ロックも取れた。アプリが動いていない場合のほか、動いていてもデータベースを開いていない「見つからない」「開けなかった」の状態を含む。ここからは区別できないので、「動いていない」とは言わない）、`starting_or_unresponsive`（待ち受けが無く、ロックを別のプロセスが持っている。アプリの起動中、または待ち受けが動いていない。直接モードの操作が長引いているだけのこともある）、`listener_busy`（待ち受けはあるが一時的につながらない。パイプが全部ふさがっている・待ち行列が満杯など。4.4 の試し直しの対象で、`doctor` は1秒だけ試し直してからこれを示す。ロックは取らない）、`auth_failed`・`version_mismatch`・`denied`・`socket_path_too_long`・`default_dir_mismatch`（4.3 の `api_error` の `reason` と同じ。`socket_path_too_long` は、ソケットのパスが長すぎて（UNIX 系）、ロックを別のプロセスが持っているとき。ロックが取れれば `no_listener`。`default_dir_mismatch` は、待ち受けが無く、別の候補の既定ディレクトリを使っているプロセスがいて、直接モードに入れない場合。アーキテクチャ設計書 4.5）。取ったロックはすぐ離す。あわせて、自分の既定ディレクトリ（パスと、求めた環境変数の名前。値は出さない）と、別の候補の既定ディレクトリの状態（`absent`（無い）・`has_data`（データだけある）・`in_use`（使っているプロセスがいる。自分の保存先に別のデータベースがあり、環境を分けている形のときは `in_use_separate`）・`unknown`（調べられない）。アーキテクチャ設計書 4.5）を、ローカル API の状態とは別の欄で出す（ローカル API の状態は、環境を分けている形のときは `no_listener` のまま）。状態を決める順：自分の既定ディレクトリのロックを別のプロセスが持っていれば `starting_or_unresponsive`（ソケットのパスが長すぎるときは `socket_path_too_long`。ずれは調べない）、ロックが取れて、アーキテクチャ設計書 4.5 の判定 2 に当たれば `default_dir_mismatch`、それ以外は `no_listener`。ずれの手がかりを、業務データを含めずに利用者へ示すため。形（2026-11-04 決定。YUN-90。`--json` はこの JSON、テキストは `key: value` の行）：`{"version", "os", "arch", "protocol", "default_dir": {"path", "env_vars", "exists"}, "data_dir": {"path", "database_exists"} または null, "local_api": {"status", "app_version"（`connected` のときだけ）}, "other_default_dir": {"path", "status"} または null}`。上の 9 つに当たらない失敗は次のように示す：接続は受けたが認証に答えない（1 秒試し直しても）は `starting_or_unresponsive`、通信の形が誤っている・そのほかの入出力の失敗も `starting_or_unresponsive`。自分のロックファイルを権限などで調べられないときは `local_api.status` を `unknown` にする（待ち受けが無いとは言えないため。ロックファイルは作らずに調べ、取ったロックはすぐ離す）。環境変数が無くて既定ディレクトリを求められないときは、`default_dir` に `path: null` と `error` を入れ、`local_api` は `null`（調べられない）。終了コードは、診断できた場合はどの状態でも 0 |
+| `yunagi mcp [--client ID]` | MCP サーバー（stdio）を起動する。`agent setup`（6章）が `--client claude-code` などの識別子つきで登録する。入出力は 4.5 |
 | `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータも削除 |
 | `yunagi --version` | 版を表示する |
 
@@ -301,6 +302,55 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 - `search` は上の表のとおり（4.2 に返り値）。`export_handoff` は、依頼文の書き出しを作るとき（YUN-70）に、コアの入口と一緒に同じ形で足す。
 - 権限・入力中・持ち越し・保存の失敗中の判定とエラーは、3章・3.2 のとおり（コアが行う。直接モードと同じ）。内部のエラーの文は応答に出さず（4.3）、読み書きの失敗は `storage_unavailable`（`message` は、何も変えていないことと、アプリを確かめるよう伝える）にする。
 - データベースを使えるまで待つのは最大 5 秒。保存先の変更・復元の最中などで使えなければ、何も反映せずに `busy`（4.3）。アプリが止め始めていて始めなかった依頼も `busy`。`hello` の後で依頼が時間切れになった接続・止めるときに閉じる接続には、依頼を待たずに `busy`（`id` が `null` の失敗の応答）を 1 行返してから閉じる（後から依頼を送ったクライアントが `result_unknown` と取り違えず、そのまま送り直せるため。アーキテクチャ設計書 4.6）。
+
+### 4.5 MCP サーバー（`yunagi mcp`。2026-11-04 決定。YUN-92）
+
+作り方（薄い層にする、SDK を使わない理由、仕様の版）はアーキテクチャ設計書 4.7。ここは入出力の決まり。MCP のツールは、4.4 の操作を同じ名前・同じ引数で公開するだけで、返り値（4.2）とエラー（4.3）はローカル API・直接モードの JSON をそのまま載せる。
+
+**起動と終わり**
+
+- `yunagi mcp [--client ID]`。`ID` は 2章の識別子（`claude-code` など。形は 4.4 の `client` と同じ）。無ければ `unknown` クライアント（`read` のみ）。`--json` は無視する（引数の誤りも、`--json` を付けていても標準エラーにテキストで出し、標準出力には書かない）。
+- 識別子の形の誤りは、起動のときに一度だけ、標準エラーに `invalid_argument` を書いて終了コード 2 で終わる（標準出力には何も出さない）。ツールを呼ぶたびにエラーにはしない。
+- 標準入力が閉じられたら終了コード 0 で終わる。標準出力に書けなくなったとき（クライアントが閉じた）と、標準入力を読めなくなったとき（入出力の失敗。標準エラーに理由を書く）は 1。
+- 既定ディレクトリを求める環境変数が無いときは終了せず、標準エラーに 1 行（4.3 の `storage_unavailable` の `message`）を書き、ツールを呼ぶたびに同じ `storage_unavailable`（探した環境変数の名前つき）を返す。起動に失敗してエージェントが何も見えないより、呼んだ結果に理由が出るほうが利用者に伝わるため。
+- 標準出力には MCP のメッセージ以外を書かない。警告（アーキテクチャ設計書 4.5 の 3。プロセスごとに 1 回）と内部の失敗の診断は標準エラー（接続の道具を作るときに出たものは起動のときに、そのあとのものは各ツールの呼び出しの後に出す）。
+
+**メッセージ**：JSON-RPC 2.0 を、1 行 1 メッセージ（途中に改行を含まない）で、標準入力から読み、標準出力へ書く。接続の状態は持たず、握手の前の `tools/call` も受ける。
+
+- `id` は文字列か数で、受けたとおりに返す。`id` の無いもの（通知。`notifications/initialized` など）と、クライアントからの応答には、何も返さない。
+- JSON でない行は `-32700`（`id: null`）、まとめての依頼（配列）・オブジェクトでない行・`method` の無い行・`id` が文字列でも数でもないものは `-32600`（`id` が読めるときは、`method` の無い行の応答にもその `id` を付ける）、知らない `method` は `-32601`、`params` がオブジェクトでない・`tools/call` の `name` が無い・知らないツール名は `-32602`。いずれもサーバーは終了せず、次の行を読む。
+- 標準入力が改行の無いまま閉じられたときの最後の行も、1 行として処理する（最後の改行を付けずに閉じるクライアントの依頼を、黙って捨てないため）。
+- 1 行の上限は 8 MiB（ローカル API の依頼の上限 4 MiB（アーキテクチャ設計書 4.6）の 2 倍）。超えた行は、残りを読み捨てて `-32600`（`id: null`）を返し、次の行から続ける（上限を超える行は最後まで読み込まずに捨てるので、その依頼の `id` は分からない）。
+- 依頼は 1 件ずつ順に処理する（アーキテクチャ設計書 4.7）。そのため、`tools/call` が接続の手順で待っている間（最大 5 秒）に届いた `ping` と `notifications/cancelled`（キャンセル）は、その呼び出しが終わるまで読まれず、キャンセルは何もしない（反映済みの書き込みを途中で止められないため。応答は必ず返る）。
+
+**握手と版**：仕様の 2 つの世代に答える（確かめた日と出典はアーキテクチャ設計書 4.7）。
+
+| 依頼 | 答え |
+| --- | --- |
+| `initialize`（`2025-11-25` 以前） | `protocolVersion` が `2025-11-25`・`2025-06-18`・`2025-03-26`・`2024-11-05` のどれかならその版、それ以外なら `2025-11-25`。あわせて `capabilities`（`{"tools": {}}`）、`serverInfo`（`name: yunagi`、`title`、`version`＝`yunagi --version` の版）、`instructions`。`protocolVersion` が無ければ `-32602` |
+| `server/discover`（`2026-07-28`） | `supportedVersions`（`["2026-07-28"]`）、`capabilities`、`_meta` の `io.modelcontextprotocol/serverInfo`、`instructions`、キャッシュの案内（`ttlMs` 300000・`cacheScope: public`） |
+| `ping` | `{}` |
+| `tools/list` | 下記のツール。最新の仕様の依頼にはキャッシュの案内（`ttlMs` 300000・`cacheScope: public`）を付ける |
+| `tools/call` | 下記 |
+
+- 依頼の `params._meta` に `io.modelcontextprotocol/protocolVersion` があるものは最新の仕様の依頼で、結果に `resultType: "complete"` を付ける。値が `2026-07-28` 以外なら `-32022`（`data.supported`・`data.requested`）。ない依頼（旧い仕様）の結果には、`resultType` もキャッシュの案内も付けない。`_meta` の版が旧い仕様の版（`2025-11-25` 以前の 4 つ）の依頼は、断らず、旧い仕様の依頼として答える。
+- `instructions`（エージェントへの案内。英語）：Yunagi は利用者の日次の作業ノートであること、先に `get_board`・`open_board` で項目の ID を得ること、権限は利用者が Yunagi で決めるので `permission_denied` は利用者に伝えること、エラーの次の動き（4.3 の表：`busy` はそのまま送り直す、`user_editing` はしばらくして、`changed` は読み直して、`result_unknown` は読んで確かめてから、そのほかの `api_error` は送り直さず利用者に伝える）。
+
+**ツール**：`tools/list` は次の 14 個（3章の表のうち A-07・A-08 を除いたもの。A-06 の `export_handoff` は、コアの入口を作るとき（YUN-70）に足す）。この順に返す。
+
+`get_board`・`open_board`・`get_note`・`search`・`add_todo`・`edit_todo`・`complete_todo`・`reopen_todo`・`add_blocker`・`edit_blocker`・`resolve_blocker`・`append_reflection`・`append_note`・`edit_note`
+
+- 各ツールに、`name`・`title`・`description`（英語。必要なスコープ、エラーの次の動き、やり直してよいかを書く）・`inputSchema`（引数は 4.4 の表と同じ名前で、`additionalProperties: false`。`edit_note` の「ちょうど 1 つ」は `description` に書く。`line`・`move_to` はスキーマでは 1 以上とし、0 はコアが `invalid_argument` にする）・`annotations.readOnlyHint`（読み取りの 4 つだけ `true`）を付ける。スキーマは手で書く。引数の読み取りと判定は `ops::Call::parse` とコアが行い、スキーマから作り直したり検査したりしない（決まりを 2 か所に書き写さないため）。名前が食い違わないことは試験で確かめる（スキーマの名前を `Call::parse` が断らないこと、スキーマに無い名前を断ること）。
+- 後からローカル API の操作が増えても、この一覧に足すまでは MCP に出ない（呼ぶと `-32602`）。
+
+**`tools/call` の結果**
+
+- 成功：`{"content": [{"type": "text", "text": "<返り値の JSON を 1 行にしたもの>"}], "isError": false}`。返り値は 4.2・4.4 のとおり。`structuredContent` と `outputSchema` は付けない（同じ中身を 2 回返すと、エージェントの文脈に 2 倍入るため。`text` を JSON として読めば足りる）。
+- 失敗：`Connector::call` が返すエラー（4.3 のすべてのコード。`busy`・`api_error`（`reason` つき）・`default_dir_mismatch` を含む）は、`isError: true` で、`text` に `{"error": {...}}`（CLI の `--json` の失敗と同じ形）を入れる。アプリが返した `error.data.error`（4.4）のオブジェクトはそのまま載せる。サーバーは終了せず、次の依頼を受け付ける。
+- プロトコルのエラー（JSON-RPC の `error`）にするのは、知らないツール名と `name` の欠けだけ（仕様の Error Handling：エージェントが直せない依頼の形の誤り）。引数の誤り（知らない名前・型違い・形の誤りの ID や日付）は、エージェントが直して送り直せるので、ツールのエラー（`invalid_argument`）にする。
+- `arguments` が無いか `null` なら `{}` として扱う。オブジェクトでなければ `invalid_argument`。
+- 引数を JSON にした大きさがローカル API の依頼の 1 行の上限（4 MiB）から包みの余裕（16 KiB）を引いた大きさを超えるときは、接続する前に `invalid_argument`（`The arguments are too large. Send less text at a time.`）。直接モードでは通る大きさの依頼が、アプリ経由では断られる（経路で結果が変わる）ことを避けるため、CLI の標準入力の本文（4.1）と同じ考え方で、MCP から先に断る。
+- 書き込みの二重を避ける決まり（アーキテクチャ設計書 4.4・4.6）：引数が揃ってから `Connector::call` を呼ぶ。送った後に切れた書き込みは送り直さず `result_unknown`（`isError: true`）を返す。
 
 ## 5. 依頼文の書き出し（A-06）
 

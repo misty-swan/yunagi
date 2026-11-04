@@ -28,6 +28,9 @@ pub enum Command {
     Operation(Operation),
     /// `doctor`：診断情報を出す。
     Doctor,
+    /// `mcp [--client ID]`：MCP サーバー（stdio）を動かす（05 4.5）。`client` は識別子で、無ければ
+    /// `unknown` クライアントになる。形は読む段階で確かめてある。
+    Mcp { client: Option<String> },
 }
 
 /// ローカル API の操作の名前（05 3章のツール名）と引数。
@@ -90,6 +93,8 @@ Commands:
   note edit --line N --expect TEXT (--replace TEXT | --delete | --move-to M) [--date D]
                                     Change a line of the note
   doctor                            Show diagnostic information (no work data)
+  mcp [--client ID]                 Run the MCP server on standard input and output
+                                    (for AI agents; ID is for example claude-code)
 
 Options:
   --json       Print JSON instead of text
@@ -170,6 +175,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
             }
         }
     }
+    // `yunagi mcp` の標準出力は MCP のメッセージだけにする：`--json` を付けても、引数の誤りは標準エラーに
+    // テキストで出す（05 4.5）
+    let json = json && positionals.first() != Some(&"mcp");
     let fail = |error| ParseError { error, json };
     if help {
         return Ok(Parsed {
@@ -366,6 +374,22 @@ fn command(
             }
             opts.finish()?;
             Command::Doctor
+        }
+        "mcp" => {
+            if !rest.is_empty() {
+                return Err(unknown(positionals));
+            }
+            let client = opts.take_value("client")?;
+            opts.finish()?;
+            // 識別子の形の誤りは、起動のときに一度だけ断る（ツールの呼び出しのたびには返さない。05 4.5）
+            if let Some(name) = &client
+                && !yunagi_core::domain::agent::is_valid_client_name(name)
+            {
+                return Err(error::invalid_argument(
+                    "--client must start with a lowercase letter or digit and use only lowercase letters, digits, '-', '_' and '.' (up to 64 characters), for example --client claude-code",
+                ));
+            }
+            Command::Mcp { client }
         }
         _ => return Err(unknown(positionals)),
     };
@@ -661,6 +685,45 @@ mod tests {
     }
 
     #[test]
+    fn mcp_takes_an_optional_client() {
+        assert_eq!(
+            parse_args(&["mcp"]).unwrap().command,
+            Command::Mcp { client: None }
+        );
+        let with_client = Command::Mcp {
+            client: Some("claude-code".into()),
+        };
+        assert_eq!(
+            parse_args(&["mcp", "--client", "claude-code"])
+                .unwrap()
+                .command,
+            with_client
+        );
+        assert_eq!(
+            parse_args(&["mcp", "--client=claude-code"])
+                .unwrap()
+                .command,
+            with_client
+        );
+    }
+
+    #[test]
+    fn mcp_ignores_json_so_that_errors_stay_off_standard_output() {
+        assert!(!parse_args(&["mcp", "--json"]).unwrap().json);
+        // `--json` や値を取るオプションが `mcp` の前にあっても、`mcp` が最初の位置引数なら同じ
+        for args in [
+            &["--json", "mcp", "--client", "Bad Name"][..],
+            &["mcp", "--json", "--client", "Bad Name"],
+            &["--json", "--client", "Bad", "mcp"],
+        ] {
+            let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+            let e = parse(&args).unwrap_err();
+            assert!(!e.json, "{args:?}");
+            assert_eq!(error::code(&e.error), "invalid_argument");
+        }
+    }
+
+    #[test]
     fn json_can_be_given_anywhere() {
         assert!(parse_args(&["--json", "doctor"]).unwrap().json);
         assert!(parse_args(&["doctor", "--json"]).unwrap().json);
@@ -689,6 +752,11 @@ mod tests {
             &["search", "a", "--limit", "x"],
             &["note"],
             &["doctor", "extra"],
+            &["mcp", "extra"],
+            &["mcp", "--client"],
+            &["mcp", "--client", "Claude"],
+            &["mcp", "--client", "a", "--client", "b"],
+            &["mcp", "--nope", "x"],
             &["-x"],
         ];
         for args in bad {

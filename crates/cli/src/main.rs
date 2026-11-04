@@ -4,8 +4,12 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let (mut stdin, mut stdout, mut stderr) =
-        (std::io::stdin(), std::io::stdout(), std::io::stderr());
+    // 標準入力は 1 行ずつ読む（`yunagi mcp`）ので、読み込みの入れ物つきのロックを使う
+    let (mut stdin, mut stdout, mut stderr) = (
+        std::io::stdin().lock(),
+        std::io::stdout(),
+        std::io::stderr(),
+    );
     let mut io = yunagi_cli::Io {
         stdin: &mut stdin,
         stdout: &mut stdout,

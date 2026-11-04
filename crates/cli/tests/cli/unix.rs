@@ -216,7 +216,7 @@ fn hold_lock(dir: &Path) -> File {
 type Test = fn(&World);
 
 pub fn main() {
-    let tests: [(&str, Test); 18] = [
+    let tests: [(&str, Test); 24] = [
         ("direct_mode_reads_as_the_cli_client", direct_mode_reads),
         ("reads_need_the_read_scope_first", read_scope),
         ("exit_codes_for_not_found_and_bad_arguments", exit_codes),
@@ -244,6 +244,12 @@ pub fn main() {
             "a_write_does_not_run_in_a_mismatched_default_dir",
             write_mismatch,
         ),
+        ("mcp_handshake_and_tool_list", mcp_handshake),
+        ("mcp_tools_follow_the_clients_scopes", mcp_scopes),
+        ("mcp_keeps_serving_after_connection_errors", mcp_errors),
+        ("mcp_warns_once_per_process", mcp_warns_once),
+        ("mcp_without_a_default_dir_answers_every_call", mcp_no_dir),
+        ("mcp_passes_the_apps_errors_through", mcp_via_app),
     ];
     let filters: Vec<String> = std::env::args()
         .skip(1)
@@ -590,6 +596,8 @@ fn too_long(w: &World) {
 enum Conn {
     /// `hello` に答え、依頼を受けて `result` を返す。
     Answer(Value),
+    /// `hello` に答え、依頼を受けて、アプリのエラー（`error.data.error` にこのオブジェクト）を返す。
+    AppError(Value),
     /// `hello` に答え、依頼を受け取ってから、答えずに閉じる。
     DropAfterRequest,
     /// `hello` に失敗（`reason`）を返す。
@@ -623,7 +631,7 @@ impl FakeApp {
                         );
                         let _ = writer.write_all(line.as_bytes());
                     }
-                    Conn::Answer(_) | Conn::DropAfterRequest => {
+                    Conn::Answer(_) | Conn::AppError(_) | Conn::DropAfterRequest => {
                         let _hello = read_json(&mut reader);
                         let hello = json!({"protocol": 1, "app_version": "9.9.9"});
                         writer
@@ -631,10 +639,14 @@ impl FakeApp {
                             .unwrap();
                         let request = read_json(&mut reader);
                         seen.lock().unwrap().push(request.clone());
-                        if let Conn::Answer(result) = step {
-                            writer
+                        match step {
+                            Conn::Answer(result) => writer
                                 .write_all(wire::result_line(&request["id"], &result).as_bytes())
-                                .unwrap();
+                                .unwrap(),
+                            Conn::AppError(error) => writer
+                                .write_all(wire::app_error_line(&request["id"], &error).as_bytes())
+                                .unwrap(),
+                            _ => {}
                         }
                     }
                 }
@@ -1078,4 +1090,375 @@ fn write_mismatch(w: &World) {
     }
     assert!(!own.path().exists());
     drop(held);
+}
+
+// ---- MCP サーバー（YUN-92） ----
+
+/// `yunagi mcp` の 1 回の実行。
+struct McpRun {
+    code: i32,
+    /// 標準出力の行（どれも JSON のメッセージでなければならない）。
+    responses: Vec<Value>,
+    stderr: String,
+}
+
+/// `yunagi mcp <args>` に `lines`（1 行 1 メッセージ）を渡して、入力が終わるまで動かす。
+fn mcp_run(w: &World, args: &[&str], lines: &[Value]) -> McpRun {
+    let mut input = lines
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    input.push('\n');
+    let mut full = vec!["mcp"];
+    full.extend_from_slice(args);
+    let out = exec_with_stdin(w, &full, input.as_bytes());
+    let responses = out
+        .stdout
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("stdout has a line that is not JSON ({e}): {line:?}"))
+        })
+        .collect();
+    McpRun {
+        code: out.code,
+        responses,
+        stderr: out.stderr,
+    }
+}
+
+fn rpc(id: u64, method: &str, params: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
+fn tool_call(id: u64, name: &str, arguments: Value) -> Value {
+    rpc(
+        id,
+        "tools/call",
+        json!({"name": name, "arguments": arguments}),
+    )
+}
+
+/// ツールの結果を `(isError, 中身)` にする。中身は text の JSON。
+fn tool_outcome(response: &Value) -> (bool, Value) {
+    let result = &response["result"];
+    let text = result["content"][0]["text"].as_str().unwrap_or_else(|| {
+        panic!("no text content: {response}");
+    });
+    (
+        result["isError"].as_bool().unwrap(),
+        serde_json::from_str(text).unwrap(),
+    )
+}
+
+fn client_row(dir: &DefaultDir, name: &str) -> agent_client::AgentClient {
+    let lock = DbLock::acquire(dir, Duration::ZERO).unwrap();
+    let db = Database::open(lock).unwrap();
+    let client = agent_client::get_by_name(db.connection(), name)
+        .unwrap()
+        .unwrap_or_else(|| panic!("{name} is not registered"));
+    db.close().unwrap();
+    client
+}
+
+fn set_client_scopes(dir: &DefaultDir, name: &str, scopes: &[Scope]) {
+    let id = client_row(dir, name).id;
+    let lock = DbLock::acquire(dir, Duration::ZERO).unwrap();
+    let db = Database::open(lock).unwrap();
+    agent_client::update_scopes(db.connection(), id, scopes).unwrap();
+    db.close().unwrap();
+}
+
+fn mcp_handshake(w: &World) {
+    seed(w);
+    let init = rpc(
+        1,
+        "initialize",
+        json!({"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}),
+    );
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"});
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[
+            init,
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            rpc(2, "tools/list", json!({})),
+            rpc(3, "server/discover", json!({"_meta": meta})),
+            rpc(4, "ping", json!({})),
+        ],
+    );
+    // 終了コードは 0、標準エラーには何も出ない。通知には答えない
+    assert_eq!((run.code, run.stderr.as_str()), (0, ""));
+    assert_eq!(run.responses.len(), 4);
+    assert_eq!(run.responses[0]["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(run.responses[0]["result"]["serverInfo"]["name"], "yunagi");
+    let names: Vec<&str> = run.responses[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 14);
+    for name in [
+        "get_board",
+        "open_board",
+        "get_note",
+        "search",
+        "add_todo",
+        "edit_todo",
+        "complete_todo",
+        "reopen_todo",
+        "add_blocker",
+        "edit_blocker",
+        "resolve_blocker",
+        "append_reflection",
+        "append_note",
+        "edit_note",
+    ] {
+        assert!(names.contains(&name), "{name}");
+    }
+    // 導入（A-07）と権限・履歴（A-08）は MCP に出さない
+    assert!(!names.iter().any(|n| n.starts_with("agent")));
+    assert_eq!(
+        run.responses[2]["result"]["supportedVersions"],
+        json!(["2026-07-28"])
+    );
+    assert_eq!(run.responses[3]["result"], json!({}));
+    // 標準入力が閉じられたら終わる：何も渡さなくても 0
+    let empty = exec_with_stdin(w, &["mcp"], b"");
+    assert_eq!((empty.code, empty.stdout.as_str()), (0, ""));
+    // 識別子の形の誤りは、起動のときに終了コード 2 で断る（標準出力には何も出さない）
+    // `--json` を付けても、標準出力には何も出さない
+    for args in [
+        &["mcp", "--client", "Bad Name"][..],
+        &["--json", "mcp", "--client", "Bad Name"],
+    ] {
+        let bad = exec_with_stdin(w, args, b"");
+        assert_eq!((bad.code, bad.stdout.as_str()), (2, ""), "{args:?}");
+        assert!(bad.stderr.contains("invalid_argument"), "{}", bad.stderr);
+    }
+}
+
+fn mcp_scopes(w: &World) {
+    let dir = seed(w);
+    let reads = [
+        tool_call(1, "get_board", json!({"date": "2026-11-02"})),
+        tool_call(
+            2,
+            "add_todo",
+            json!({"text": "from mcp", "date": "2026-11-02"}),
+        ),
+        tool_call(3, "search", json!({"query": "rate limit"})),
+        tool_call(4, "get_note", json!({"date": "2026-11-02"})),
+        tool_call(5, "open_board", json!({"date": "2026-11-02"})),
+    ];
+    // 識別子を付けた初めての接続は、read だけで登録される。書き込みは permission_denied
+    let run = mcp_run(w, &["--client", "claude-code"], &reads);
+    assert_eq!((run.code, run.stderr.as_str()), (0, ""));
+    let (is_error, board) = tool_outcome(&run.responses[0]);
+    assert!(!is_error);
+    assert_eq!(board["todos"][0]["text"], "rate limit survey");
+    assert_eq!(board["todos"][0]["carried_to_id"], Value::Null);
+    let (is_error, denied) = tool_outcome(&run.responses[1]);
+    assert!(is_error);
+    assert_eq!(denied["error"]["code"], "permission_denied");
+    assert_eq!(denied["error"]["required_scope"], "todo");
+    // search の結果の項目に carried_to_id・carried_to_date が入る
+    let (_, found) = tool_outcome(&run.responses[2]);
+    assert_eq!(found["hits"][0]["kind"], "todo");
+    assert_eq!(found["hits"][0]["carried_to_id"], Value::Null);
+    assert_eq!(found["hits"][0]["carried_to_date"], Value::Null);
+    assert!(!tool_outcome(&run.responses[3]).0);
+    assert!(!tool_outcome(&run.responses[4]).0);
+    let client = client_row(&dir, "claude-code");
+    assert_eq!(client.scopes, [Scope::Read]);
+    assert!(client.last_seen_at.is_some());
+    // 識別子の無い接続は unknown クライアント：読み取りだけ
+    let run = mcp_run(w, &[], &reads);
+    assert!(!tool_outcome(&run.responses[0]).0);
+    let (is_error, denied) = tool_outcome(&run.responses[1]);
+    assert!(is_error);
+    assert_eq!(denied["error"]["code"], "permission_denied");
+    let before = change_log(&dir).len();
+    // 利用者が許可すると書き込める。MCP の書き込みは、そのクライアントとして change_log に残る
+    set_client_scopes(&dir, "claude-code", &[Scope::Read, Scope::Todo]);
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[tool_call(
+            1,
+            "add_todo",
+            json!({"text": "from mcp", "date": "2026-11-02"}),
+        )],
+    );
+    let (is_error, added) = tool_outcome(&run.responses[0]);
+    assert!(!is_error, "{added}");
+    let id = added["id"].as_str().unwrap().to_owned();
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[
+            tool_call(1, "complete_todo", json!({"id": id})),
+            tool_call(2, "complete_todo", json!({"id": id})),
+            tool_call(3, "edit_todo", json!({"id": "nope", "text": "x"})),
+            tool_call(4, "edit_todo", json!({"id": id, "text": "x", "extra": 1})),
+            tool_call(5, "reopen_todo", json!({"id": MISSING_ID})),
+        ],
+    );
+    assert_eq!(tool_outcome(&run.responses[0]).1["updated"], true);
+    // 何も変えない成功（やり直してよい）
+    let (is_error, again) = tool_outcome(&run.responses[1]);
+    assert!(!is_error);
+    assert_eq!(again["updated"], false);
+    // 引数の誤りは、ツールのエラー（invalid_argument）
+    let (is_error, bad_id) = tool_outcome(&run.responses[2]);
+    assert!(is_error);
+    assert_eq!(bad_id["error"]["code"], "invalid_argument");
+    let (is_error, unknown_arg) = tool_outcome(&run.responses[3]);
+    assert!(is_error);
+    assert_eq!(unknown_arg["error"]["code"], "invalid_argument");
+    assert_eq!(
+        tool_outcome(&run.responses[4]).1["error"]["code"],
+        "not_found"
+    );
+    let rows = change_log(&dir);
+    assert_eq!(rows.len(), before + 2, "{rows:?}");
+    let id_text = client.id.to_string();
+    assert_eq!(rows[before].0, "todo.add");
+    assert_eq!(rows[before + 1].0, "todo.complete");
+    for row in &rows[before..] {
+        assert_eq!(row.2.as_deref(), Some(id_text.as_str()), "{row:?}");
+    }
+}
+
+fn mcp_errors(w: &World) {
+    let dir = seed(w);
+    let calls = [
+        tool_call(1, "get_board", json!({"date": "2026-11-02"})),
+        rpc(2, "ping", json!({})),
+        tool_call(3, "add_todo", json!({"text": "x"})),
+    ];
+    // ロックを別のプロセスが持っている：busy は書き込みも読み取りもツールのエラーで、サーバーは続く
+    let held = DbLock::acquire(&dir, Duration::ZERO).unwrap();
+    let started = Instant::now();
+    let run = mcp_run(w, &["--client", "claude-code"], &calls);
+    assert!(started.elapsed() >= TIMING.wait * 2);
+    assert_eq!(run.code, 0);
+    assert_eq!(run.responses.len(), 3);
+    for i in [0, 2] {
+        let (is_error, e) = tool_outcome(&run.responses[i]);
+        assert!(is_error);
+        assert_eq!(e["error"]["code"], "busy");
+    }
+    assert_eq!(run.responses[1]["result"], json!({}));
+    drop(held);
+    // 解放すれば、次の接続で同じ依頼が通る
+    let run = mcp_run(w, &["--client", "claude-code"], &calls[..1]);
+    assert!(!tool_outcome(&run.responses[0]).0);
+
+    // 既定ディレクトリのずれ：default_dir_mismatch もツールのエラーで、サーバーは続く
+    w.use_data_home("xdg-other");
+    let cand = w.candidate_dir();
+    let _app = hold_lock(&cand);
+    let run = mcp_run(w, &["--client", "claude-code"], &calls);
+    assert_eq!(run.code, 0);
+    assert_eq!(run.responses.len(), 3);
+    for i in [0, 2] {
+        let (is_error, e) = tool_outcome(&run.responses[i]);
+        assert!(is_error);
+        assert_eq!(e["error"]["code"], "api_error");
+        assert_eq!(e["error"]["reason"], "default_dir_mismatch");
+    }
+    assert_eq!(run.responses[1]["result"], json!({}));
+}
+
+fn mcp_warns_once(w: &World) {
+    seed(w);
+    let cand = w.candidate_dir();
+    let _app = hold_lock(&cand);
+    // 環境を分けている形：止めずに、警告は標準エラーにプロセスごとに 1 回（呼び出しごとではない）
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[
+            tool_call(1, "get_board", json!({"date": "2026-11-02"})),
+            tool_call(2, "get_board", json!({"date": "2026-11-02"})),
+        ],
+    );
+    assert_eq!(run.code, 0);
+    assert!(run.responses.iter().all(|r| !tool_outcome(r).0));
+    assert_eq!(run.stderr.lines().count(), 1, "{}", run.stderr);
+    assert!(run.stderr.contains(&cand.display().to_string()));
+}
+
+fn mcp_no_dir(w: &World) {
+    // 既定ディレクトリを求める環境変数が無い：終了せず、ツールの呼び出しのたびに storage_unavailable
+    // SAFETY: 試験は 1 つのスレッドで順に走る
+    unsafe {
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::remove_var("HOME");
+    }
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[
+            tool_call(1, "get_board", json!({})),
+            rpc(2, "ping", json!({})),
+            tool_call(3, "get_board", json!({})),
+        ],
+    );
+    w.use_data_home("xdg");
+    assert_eq!(run.code, 0);
+    assert_eq!(run.responses.len(), 3);
+    for i in [0, 2] {
+        let (is_error, e) = tool_outcome(&run.responses[i]);
+        assert!(is_error);
+        assert_eq!(e["error"]["code"], "storage_unavailable");
+        assert!(
+            e["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("XDG_DATA_HOME")
+        );
+    }
+    assert_eq!(run.stderr.lines().count(), 1, "{}", run.stderr);
+}
+
+fn mcp_via_app(w: &World) {
+    let own = w.own();
+    data_dir::create_default_dir(&own).unwrap();
+    let denied = json!({"code": "permission_denied", "required_scope": "todo", "message": "This agent is not allowed to modify TODOs."});
+    let app = FakeApp::start(
+        &own,
+        vec![
+            Conn::AppError(denied.clone()),
+            Conn::DropAfterRequest,
+            Conn::Answer(board_result()),
+        ],
+    );
+    let run = mcp_run(
+        w,
+        &["--client", "claude-code"],
+        &[
+            tool_call(1, "add_todo", json!({"text": "x"})),
+            tool_call(2, "add_todo", json!({"text": "x"})),
+            rpc(3, "ping", json!({})),
+            tool_call(4, "get_board", json!({})),
+        ],
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    // アプリのエラー（error.data.error）はそのままツールのエラーに載る
+    assert_eq!(
+        tool_outcome(&run.responses[0]),
+        (true, json!({"error": denied}))
+    );
+    // 依頼を送った後に切れた書き込みは送り直さず、反映されたか分からないエラー。サーバーは続く
+    let (is_error, e) = tool_outcome(&run.responses[1]);
+    assert!(is_error);
+    assert_eq!(e["error"]["reason"], "result_unknown");
+    assert_eq!(run.responses[2]["result"], json!({}));
+    assert_eq!(tool_outcome(&run.responses[3]).1["date"], "2026-11-02");
+    assert_eq!(app.finish(), ["add_todo", "add_todo", "get_board"]);
 }
