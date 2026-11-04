@@ -2,6 +2,7 @@
 //! （docs/design/01-architecture.md 2章）。
 
 pub mod agent;
+pub mod archive;
 pub mod board;
 pub mod carryover;
 pub mod day;

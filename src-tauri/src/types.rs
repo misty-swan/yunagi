@@ -13,6 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(test)]
 use ts_rs::TS;
 use yunagi_core::domain::agent::ItemField as CoreItemField;
+use yunagi_core::domain::archive;
 use yunagi_core::domain::board;
 use yunagi_core::domain::carryover;
 use yunagi_core::domain::item::{self as core_item, CloseReason as CoreCloseReason};
@@ -577,6 +578,111 @@ impl Overview {
                 })
                 .collect(),
             unseen_changes: o.unseen_changes,
+        }
+    }
+}
+
+// ---- ふりかえり（S-08） ----
+
+/// 週のカードの1日：日付とその日の件数。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct DayCounts {
+    pub date: Date,
+    pub counts: Counts,
+}
+
+/// Daily notes の1日：日付、件数、振り返りの本文（GOOD / STUCK の1行は画面が取り出す）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct DailyEntry {
+    pub date: Date,
+    pub counts: Counts,
+    pub reflection: String,
+}
+
+/// プレビューのノートの1区間：時刻付き見出しと、その下の最初の行。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct NotePreview {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub hour: u8,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub minute: u8,
+    pub title: String,
+    pub lines: Vec<String>,
+}
+
+/// 選んだ日のプレビュー。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct DayPreview {
+    pub counts: Counts,
+    pub reflection: String,
+    pub note: Vec<NotePreview>,
+}
+
+/// ふりかえり画面の内容（画面設計書 9章。コアの `domain::archive`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Archive {
+    /// 選んだ日。
+    pub date: Date,
+    /// 今日の論理日付。
+    pub today: Date,
+    /// 選んだ日を含む週（月〜金）の日ごとの件数。
+    pub week: Vec<DayCounts>,
+    /// 週の合計。
+    pub week_total: Counts,
+    /// 記録のある直近の日（新しい順）。
+    pub daily: Vec<DailyEntry>,
+    pub preview: DayPreview,
+}
+
+impl From<archive::Archive> for Archive {
+    fn from(a: archive::Archive) -> Self {
+        Self {
+            date: Date(a.date),
+            today: Date(a.today),
+            week: a
+                .week
+                .days
+                .into_iter()
+                .map(|(date, counts)| DayCounts {
+                    date: Date(date),
+                    counts: counts.into(),
+                })
+                .collect(),
+            week_total: a.week.total.into(),
+            daily: a
+                .daily
+                .into_iter()
+                .map(|d| DailyEntry {
+                    date: Date(d.date),
+                    counts: d.counts.into(),
+                    reflection: d.reflection,
+                })
+                .collect(),
+            preview: DayPreview {
+                counts: a.preview.counts.into(),
+                reflection: a.preview.reflection,
+                note: a
+                    .preview
+                    .note
+                    .into_iter()
+                    .map(|n| NotePreview {
+                        hour: n.hour,
+                        minute: n.minute,
+                        title: n.title,
+                        lines: n.lines,
+                    })
+                    .collect(),
+            },
         }
     }
 }

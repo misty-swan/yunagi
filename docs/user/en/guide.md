@@ -52,7 +52,7 @@ The meter at the top of the screen shows your day as a sky and a sea. The sun ma
 
 The sidebar on the left holds Today, Archive, Recent days, and Settings. Press **Mod+\\** to open or close it. It closes automatically in Note mode.
 
-To look back at past days, press **Mod+Shift+L** to open Archive. It shows each day of the week (Mon–Fri) along with summaries of your reflections and notes. Use ← / → to pick a day, **Mod+[ / Mod+]** to move by week, and Enter to open that day. Press Esc to go back.
+To look back at past days, press **Mod+Shift+L** to open Archive. It shows each day of the week (Mon–Fri) along with the "went well" and "got stuck" lines from your recent reflections, and the reflection and note headings of the selected day. Use ← / → to pick a day, **Mod+[ / Mod+]** to move by week, and Enter to open that day. Press Esc (or **Mod+Shift+L**) to go back.
 
 ## 4. Key shortcuts
 

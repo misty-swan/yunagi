@@ -13,7 +13,7 @@
   import { prefs } from "../lib/prefs.svelte";
   import type { Session } from "../lib/session.svelte";
   import type { Mode, Shell } from "../lib/shell.svelte";
-  import type { ShellCommand } from "./commands";
+  import type { ArchiveControl, ShellCommand } from "./commands";
   import KeyHints from "./KeyHints.svelte";
   import NagiMeter from "./NagiMeter.svelte";
   import Sidebar from "./Sidebar.svelte";
@@ -27,8 +27,14 @@
     notice = null,
     onCommand,
     saveDetailRequest = 0,
+    archive = null,
     children,
   }: {
+    /**
+     * ふりかえり（S-08）を開いているとき、そのキー・サイドバーの動き。上部のバーは「Archive」の見出しにし、
+     * 凪メーターは出さず、Mod+[ / Mod+] は週の移動、Mod+J は受けず、Mod+T は今日を選ぶ（画面設計書 9章）。
+     */
+    archive?: ArchiveControl | null;
     session: Session;
     save: SaveStatus;
     shell: Shell;
@@ -65,7 +71,10 @@
   const from = () => session.showing ?? date;
 
   function show(next: LogicalDate | null) {
-    if (next !== null) session.show(next);
+    if (next === null) return;
+    // ふりかえりの間は、日を選ぶだけ（表示している日は、Enter でその日を開くまで動かさない）
+    if (archive) archive.onSelect(next);
+    else session.show(next);
   }
 
   function goToday() {
@@ -77,15 +86,18 @@
   }
 
   const actions: Record<ShellAction, () => void> = {
-    toggleMode: () => shell.toggleMode(),
+    toggleMode: () => {
+      if (archive === null) shell.toggleMode();
+    },
     // 読んでいる途中に続けて押しても1日ずつ進むよう、表示しようとしている日から数える
-    prevDay: () => show(from() === null ? null : addDays(from()!, -1)),
-    nextDay: () => show(from() === null ? null : addDays(from()!, 1)),
-    today: goToday,
+    prevDay: () => (archive ? archive.onWeek(-1) : show(from() === null ? null : addDays(from()!, -1))),
+    nextDay: () => (archive ? archive.onWeek(1) : show(from() === null ? null : addDays(from()!, 1))),
+    today: () => (archive ? show(today) : goToday()),
     palette: () => onCommand("palette"),
     settings: () => onCommand("settings"),
     sidebar: () => shell.toggleSidebar(),
-    archive: () => onCommand("archive"),
+    // 開いていれば閉じる（Mod+Shift+L は開け閉め。サイドバー・パレットの「開く」は開くだけ）
+    archive: () => (archive ? archive.onClose() : onCommand("archive")),
   };
 
   function onKeydown(e: KeyboardEvent) {
@@ -101,16 +113,26 @@
 
 <svelte:window bind:innerWidth onkeydown={onKeydown} />
 
-<div class="shell" data-mode={shell.mode} data-sidebar={shell.sidebarOpen ? "open" : "closed"}>
+<div
+  class="shell"
+  data-mode={archive ? "archive" : shell.mode}
+  data-sidebar={shell.sidebarOpen ? "open" : "closed"}
+>
   {#if shell.sidebarOpen}
     <Sidebar
       {overview}
-      {date}
+      date={archive ? archive.date : date}
       {today}
+      archiveOpen={archive !== null}
       saveFailed={save.failing}
       {mac}
       onShow={show}
       onToday={() => {
+        // ふりかえりの間の Today は、今日のボードを開く
+        if (archive) {
+          if (today !== null) archive.onOpenDay(today);
+          return;
+        }
         setMode("board");
         goToday();
       }}
@@ -135,14 +157,15 @@
       onMode={setMode}
       {onCommand}
       {saveDetailRequest}
+      archive={archive !== null}
     />
-    {#if scene && overview}
+    {#if scene && overview && !archive}
       <NagiMeter {scene} counts={overview.counts} compact={shell.mode === "note"} />
     {/if}
     <div class="body">
       {@render children?.()}
     </div>
-    <KeyHints mode={shell.mode} {mac} />
+    <KeyHints mode={shell.mode} archive={archive !== null} {mac} />
   </div>
 </div>
 

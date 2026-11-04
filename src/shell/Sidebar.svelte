@@ -14,6 +14,7 @@
     overview,
     date,
     today,
+    archiveOpen = false,
     saveFailed,
     mac,
     onShow,
@@ -21,8 +22,10 @@
     onCommand,
   }: {
     overview: Overview | null;
-    /** 表示している日。 */
+    /** 表示している日（ふりかえり S-08 の間は、そこで選んでいる日）。 */
     date: LogicalDate | null;
+    /** ふりかえりを開いている（Archive に印を付け、Today には付けない）。 */
+    archiveOpen?: boolean;
     /** 今日の論理日付（上部のバーと同じもの）。 */
     today: LogicalDate | null;
     saveFailed: boolean;
@@ -45,7 +48,7 @@
     <button
       type="button"
       class="nav-btn"
-      aria-current={date !== null && date === today ? "page" : undefined}
+      aria-current={!archiveOpen && date !== null && date === today ? "page" : undefined}
       onclick={onToday}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -56,7 +59,12 @@
         <span class="nm" aria-label={m.leftToday(todayLeft)}>{todayLeft}</span>
       {/if}
     </button>
-    <button type="button" class="nav-btn" onclick={() => onCommand("archive")}>
+    <button
+      type="button"
+      class="nav-btn"
+      aria-current={archiveOpen ? "page" : undefined}
+      onclick={() => onCommand("archive")}
+    >
       <svg viewBox="0 0 16 16" aria-hidden="true">
         <path d="M3 4.5h10v9H3zM3 7.5h10M5.8 3v3M10.2 3v3" />
       </svg>
