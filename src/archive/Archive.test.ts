@@ -305,6 +305,43 @@ test("Enter（とダブルクリック・Open）で選んだ日の整理モー�
   expect($("main.content")?.dataset.date).toBe("2026-11-02");
 });
 
+test("ノートや振り返りのエディタにフォーカスがあっても Mod+Shift+L で開き、開いている間は裏の画面のキーが動かない", async () => {
+  const calls = await start();
+  // 振り返りのエディタ（整理モード）
+  const reflection = $(".board .cm-content") as HTMLElement;
+  reflection.focus();
+  expect(document.activeElement).toBe(reflection);
+  press(MOD_SHIFT_L, reflection);
+  await until(() => $(".archive .card") !== null);
+  expect(document.activeElement).toBe($(".archive"));
+  // 裏の整理モードのキー（取り消し・領域の移動・完了の切替）は、ふりかえりの間は動かさない
+  const before = calls.length;
+  press({ key: "z", code: "KeyZ", ctrlKey: true });
+  press({ key: "1", code: "Digit1", ctrlKey: true });
+  press({ key: "Enter", ctrlKey: true });
+  expect(document.activeElement).toBe($(".archive"));
+  expect(calls.slice(before).map((c) => c.cmd)).not.toContain("save_item");
+  expect($(".archive")).not.toBeNull();
+  // 戻ると、振り返りのエディタへフォーカスが戻る
+  press({ key: "Escape" }, $(".archive") as HTMLElement);
+  await until(() => $(".archive") === null);
+  expect(document.activeElement).toBe(reflection);
+
+  // ノートのエディタ
+  press({ key: "j", code: "KeyJ", ctrlKey: true });
+  await until(() => $("main.content")?.dataset.mode === "note");
+  const note = $(".note .cm-content") as HTMLElement;
+  await until(() => document.activeElement === note);
+  press(MOD_SHIFT_L, note);
+  await until(() => $(".archive .card") !== null);
+  // ノートの時刻付き見出しの挿入（Mod+Shift+H）は、ふりかえりの間は動かさない
+  press({ key: "H", code: "KeyH", ctrlKey: true, shiftKey: true });
+  expect(calls.slice(before).map((c) => c.cmd)).not.toContain("save_text_doc");
+  press(MOD_SHIFT_L);
+  await until(() => $(".archive") === null);
+  await until(() => document.activeElement === note);
+});
+
 test("見ている日がある（今日でない）ときは、その日から始める", async () => {
   const calls = await start();
   press(MOD_LEFT);
