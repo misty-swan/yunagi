@@ -90,7 +90,7 @@ On Windows and Linux, enabling Vim mode changes previous/next day (and previous/
 yunagi agent setup
 ```
 
-registers Yunagi with Claude Code and Codex. Agents start with read-only access. To let them add TODOs or record blockers, enable the permissions in Settings → Agents. Every change made by an agent is marked and can be undone one by one from the change history.
+registers Yunagi with Claude Code and Codex. Run it in a terminal: it shows what it will write and asks for confirmation (`y`) first, and keeps a copy of your original settings file next to it. It cannot run from a non-interactive shell. Agents start with read-only access. To let them add TODOs or record blockers, enable the permissions in Settings → Agents. Every change made by an agent is marked and can be undone one by one from the change history.
 
 Content that an agent reads from Yunagi is sent to that AI service through the agent, under your own agreement with that service. AI usage is billed by that service; Yunagi's agent integration is free.
 

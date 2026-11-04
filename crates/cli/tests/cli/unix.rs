@@ -76,6 +76,7 @@ impl World {
         Env {
             alt_home: AltHome::Fixed(Some(self.path("althome"))),
             timing: TIMING,
+            setup: Env::default().setup,
         }
     }
 }
@@ -216,7 +217,7 @@ fn hold_lock(dir: &Path) -> File {
 type Test = fn(&World);
 
 pub fn main() {
-    let tests: [(&str, Test); 24] = [
+    let tests: [(&str, Test); 25] = [
         ("direct_mode_reads_as_the_cli_client", direct_mode_reads),
         ("reads_need_the_read_scope_first", read_scope),
         ("exit_codes_for_not_found_and_bad_arguments", exit_codes),
@@ -224,6 +225,10 @@ pub fn main() {
         ("nothing_is_created_when_the_data_is_missing", missing_data),
         ("a_different_default_dir_in_use_is_an_error", mismatch),
         ("a_separate_environment_runs_with_a_warning", separate),
+        (
+            "agent_setup_warns_about_a_different_default_dir",
+            agent_setup_warnings,
+        ),
         (
             "doctor_reports_the_states_without_a_listener",
             doctor_states,
@@ -479,6 +484,84 @@ fn mismatch(w: &World) {
     let doctor = exec(w, &["doctor", "--json"]).json();
     assert_eq!(doctor["local_api"]["status"], "no_listener");
     assert_eq!(doctor["other_default_dir"]["status"], "absent");
+}
+
+/// `agent setup` の変更内容の表示（確認の前）。Codex だけを、一時フォルダの `CODEX_HOME` で対象にする。
+/// 端末でない（`interactive: false`）ので、表示だけして何も書かない。
+fn agent_setup_preview(w: &World) -> Out {
+    let codex_home = w.path("codex-home");
+    let env = Env {
+        setup: yunagi_cli::agent_setup::SetupEnv {
+            codex_home: Some(codex_home.clone()),
+            home: Some(w.path("home")),
+            path: None,
+            interactive: false,
+            ..Env::default().setup
+        },
+        ..w.env()
+    };
+    let args = vec!["agent".to_owned(), "setup".to_owned(), "--codex".to_owned()];
+    let (mut stdin, mut stdout, mut stderr) = (&b"y\n"[..], Vec::new(), Vec::new());
+    let code = yunagi_cli::run(
+        &args,
+        &env,
+        &mut Io {
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+    assert!(
+        !codex_home.exists(),
+        "nothing is written without a terminal"
+    );
+    Out {
+        code,
+        stdout: String::from_utf8(stdout).unwrap(),
+        stderr: String::from_utf8(stderr).unwrap(),
+    }
+}
+
+fn agent_setup_warnings(w: &World) {
+    let own = w.own();
+    let cand = w.candidate_dir();
+    // 自分の既定ディレクトリが無い：警告（アプリを起動する環境と同じにするよう案内する）
+    let out = agent_setup_preview(w);
+    assert_eq!(out.code, 3, "{}", out.stderr);
+    assert!(
+        out.stdout
+            .contains("Warning: this terminal's default folder"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("does not exist"), "{}", out.stdout);
+    assert!(out.stdout.contains(&own.path().display().to_string()));
+    assert!(out.stdout.contains("XDG_DATA_HOME / HOME"));
+    // アプリが標準の場所で動いている：別の既定ディレクトリを使っていると警告する
+    let held = hold_lock(&cand);
+    let out = agent_setup_preview(w);
+    assert!(
+        out.stdout.contains("another default folder"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains(&cand.display().to_string()));
+    // 調べるために、別の候補に何も増やさず、ロックは調べた後に取れる
+    drop(held);
+    assert_eq!(fs::read_dir(&cand).unwrap().count(), 1);
+    let probe_left_no_lock = File::options()
+        .read(true)
+        .write(true)
+        .open(cand.join("yunagi.lock"))
+        .unwrap();
+    probe_left_no_lock.try_lock().unwrap();
+    drop(probe_left_no_lock);
+    // ずれていない（自分の既定ディレクトリがあり、別の候補は使われていない）：警告は出ない
+    fs::create_dir_all(own.path()).unwrap();
+    let out = agent_setup_preview(w);
+    assert_eq!(out.code, 3);
+    assert!(!out.stdout.contains("Warning:"), "{}", out.stdout);
+    assert!(out.stdout.contains("Changes to make:") && out.stdout.contains("env_vars"));
 }
 
 fn separate(w: &World) {

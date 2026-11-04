@@ -7,11 +7,13 @@
 //! - [`output`]：テキスト出力と、エラーの表示。
 //! - [`doctor`]：`yunagi doctor`。
 //! - [`mcp`]：`yunagi mcp`（MCP サーバー。stdio）。ツールの定義は `mcp_tools`。
+//! - [`agent_setup`]：`yunagi agent setup`（Claude Code・Codex への登録）。
 //! - [`error`]：エラー（05 4.3）と終了コード（05 4.1）。
 //!
 //! 実行ファイルの `main` は [`run`] を呼ぶだけにして、試験が同じプロセスの中で、入出力と環境を差し替えて
 //! 動かせるようにしている。
 
+pub mod agent_setup;
 pub mod args;
 pub mod connect;
 pub mod doctor;
@@ -43,6 +45,8 @@ pub struct Env {
     pub alt_home: AltHome,
     /// 接続の手順の時間。
     pub timing: Timing,
+    /// `agent setup` が見る環境（エージェントの設定の場所・`PATH`・端末か）。
+    pub setup: agent_setup::SetupEnv,
 }
 
 impl Default for Env {
@@ -50,6 +54,7 @@ impl Default for Env {
         Self {
             alt_home: AltHome::Os,
             timing: Timing::default(),
+            setup: agent_setup::SetupEnv::from_process(),
         }
     }
 }
@@ -74,6 +79,7 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
         Command::Operation(op) => operation(op, json, env, io),
         Command::Doctor => run_doctor(json, env, io),
         Command::Mcp { client } => mcp::run(client.as_deref(), env, io),
+        Command::AgentSetup { claude_code, codex } => agent_setup::run(claude_code, codex, env, io),
     }
 }
 
@@ -161,7 +167,7 @@ fn run_doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
 }
 
 /// エラーを出して、終了コードを返す。`--json` なら標準出力に `{"error": ...}`、そうでなければ標準エラーに文。
-fn fail(error: &ErrorObject, json: bool, io: &mut Io<'_>) -> i32 {
+pub(crate) fn fail(error: &ErrorObject, json: bool, io: &mut Io<'_>) -> i32 {
     if json {
         let _ = writeln!(io.stdout, "{}", wrap(error));
     } else {
