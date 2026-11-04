@@ -33,6 +33,8 @@ const MAX_CONNECTIONS: usize = 64;
 /// 止めるとき、処理中の依頼が終わるのを待つ時間の上限。超えたら待たずに続ける（アプリの終了を
 /// 止めない）。依頼の待ちは [`ApiOptions::db_wait`] までなので、ふつうはこれより前に終わる。
 const DRAIN_LIMIT: Duration = Duration::from_secs(15);
+/// 止めるとき、待ち受けのスレッドが終わるまで、起こし直す間隔。
+const WAKE_RETRY: Duration = Duration::from_millis(200);
 /// 止めるとき、待ち受けのスレッドが終わるのを待つ時間の上限。
 const STOP_LIMIT: Duration = Duration::from_secs(20);
 
@@ -206,8 +208,9 @@ impl ApiServer {
             }
         }
         self.shared.stopping.store(true, Ordering::Release);
-        self.waker.wake();
-        // 待ち受けのスレッドが、ソケットを消し、処理中の依頼の終わりを待ち、トークンを消して終わる
+        // 待ち受けのスレッドが、ソケットを消し、処理中の依頼の終わりを待ち、トークンを消して終わる。
+        // 起こすための接続は、待ち行列が満杯・パイプがふさがっているときに失敗しうるので、終わるまで
+        // 一定の間隔で起こし直す
         let (finished, changed) = &self.shared.finished;
         let mut done = finished.lock().unwrap_or_else(PoisonError::into_inner);
         let deadline = Instant::now() + STOP_LIMIT;
@@ -216,8 +219,14 @@ impl ApiServer {
                 eprintln!("yunagi: the local API did not stop in time");
                 return;
             };
+            drop(done);
+            self.waker.wake();
+            done = finished.lock().unwrap_or_else(PoisonError::into_inner);
+            if *done {
+                break;
+            }
             done = changed
-                .wait_timeout(done, left)
+                .wait_timeout(done, left.min(WAKE_RETRY))
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
@@ -298,26 +307,33 @@ fn spawn_connection(shared: &Arc<Shared>, stream: Stream) {
         id
     };
     let handler = Arc::clone(shared);
-    let spawned = thread::Builder::new()
+    // 登録とストリームは 1 つにまとめて運ぶ。手放すとき、登録（`registration`）が先に消える
+    // （フィールドは宣言の順に捨てられる）ので、スレッドを作れずに捨てられても、処理が panic しても、
+    // 消した後のハンドルを止める側が中断することがない（Windows の `Interrupter` は生のハンドル）
+    let connection = Connection {
+        _registration: Registration {
+            shared: Arc::clone(shared),
+            id,
+        },
+        stream,
+    };
+    let _ = thread::Builder::new()
         .name("yunagi-api-conn".into())
         .spawn(move || {
-            // 処理が panic しても、登録を消して止める側に知らせる（`Drop`）。登録を消してから
-            // ストリームを閉じる（Windows では、消した後のハンドルを中断しないため）
-            let _registration = Registration {
-                shared: Arc::clone(&handler),
-                id,
-            };
-            serve(&handler, id, &stream);
-            drop(_registration);
-            drop(stream);
+            // 全体を取り込む（フィールドだけを取り込むと、登録がここに来る前に捨てられる）
+            let connection = connection;
+            serve(&handler, id, &connection.stream);
         });
-    if spawned.is_err() {
-        shared.registry().conns.remove(&id);
-        shared.drained.notify_all();
-    }
 }
 
-/// 接続の登録。手放す（処理が終わる・panic する）と登録を消し、止める側に知らせる。
+/// 受けた接続：登録と、つながった相手。
+struct Connection {
+    _registration: Registration,
+    stream: Stream,
+}
+
+/// 接続の登録。手放す（処理が終わる・panic する・スレッドを作れない）と登録を消し、止める側に
+/// 知らせる。
 struct Registration {
     shared: Arc<Shared>,
     id: u64,
@@ -339,13 +355,7 @@ struct Timed<'a> {
 
 impl Read for Timed<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let left = self
-            .deadline
-            .get()
-            .checked_duration_since(Instant::now())
-            .filter(|d| !d.is_zero())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "the read deadline passed"))?;
-        self.stream.set_read_timeout(Some(left))?;
+        self.stream.set_read_deadline(self.deadline.get())?;
         (&*self.stream).read(buf)
     }
 }
@@ -457,7 +467,7 @@ fn handshake(shared: &Shared, line: &[u8]) -> Result<(String, Option<String>), S
     }
     let invalid =
         |message: &str| wire::error_line(&request.id, wire::INVALID_PARAMS, message, None);
-    let params: HelloParams = serde_json::from_value(request.params.clone())
+    let params: HelloParams = serde_json::from_value(Value::Object(request.params.clone()))
         .map_err(|_| invalid("Invalid params: hello needs protocol and token"))?;
     let api_error = |reason: &str, message: &str, extra: Value| {
         let mut error = json!({"code": "api_error", "reason": reason, "message": message});

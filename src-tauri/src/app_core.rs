@@ -710,13 +710,16 @@ impl AppCore {
         client_id: Ulid,
         f: impl FnOnce(&Connection, &Agent<'_>) -> Result<T, E>,
     ) -> Result<Result<T, E>, CommandError> {
-        let agent = Agent {
-            client_id,
-            ui: &self.screen,
-        };
-        let result = self.with_db(|db| Ok(f(db.connection(), &agent)))?;
-        self.notify_agent_write(&result);
-        Ok(result)
+        // ローカル API の書き込み（`api_write`）と同じ経路。待つ期限だけが無い（ほぼ無期限）
+        let far = Instant::now() + Duration::from_secs(60 * 60 * 24 * 365);
+        self.api_write(far, |_| Ok(client_id), f)
+            .map_err(|Busy| CommandError::NotReady)
+    }
+
+    /// 初めての識別子の登録（設定画面のエージェントの一覧が変わる）を画面に知らせる。データの
+    /// 書き込みではないので、`changed` の `by` はエージェント。
+    pub fn notify_agent_registered(&self) {
+        self.notify_changed(ChangeSource::Agent);
     }
 
     /// [`AppCore::agent_write`] の、ローカル API 用の版。データベースを使うのを待つのは最大

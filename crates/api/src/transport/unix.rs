@@ -173,6 +173,21 @@ impl Stream {
         self.0.set_read_timeout(timeout)
     }
 
+    /// 次の読みを `deadline` までしか待たない（読みごとに呼ぶ。残りの時間を読みの時間切れにする）。
+    /// 期限を過ぎていれば `TimedOut` で失敗する。
+    pub fn set_read_deadline(&self, deadline: std::time::Instant) -> io::Result<()> {
+        match deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|d| !d.is_zero())
+        {
+            Some(left) => self.0.set_read_timeout(Some(left)),
+            None => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the read deadline passed",
+            )),
+        }
+    }
+
     /// 書くときの待ちの上限（`None` で無制限）。
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         self.0.set_write_timeout(timeout)

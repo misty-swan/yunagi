@@ -271,6 +271,10 @@ struct Watch {
 pub struct Stream {
     file: File,
     watch: Arc<Watch>,
+    /// 見張りを置いてある読みの期限（[`Stream::set_read_deadline`]）。
+    armed: Mutex<Option<std::time::Instant>>,
+    /// 書きの待ちの上限（[`Stream::finish`] が相手の読みを待つ上限にも使う）。
+    write_timeout: Mutex<Option<Duration>>,
 }
 
 impl Stream {
@@ -278,12 +282,19 @@ impl Stream {
         Self {
             file,
             watch: Arc::default(),
+            armed: Mutex::new(None),
+            write_timeout: Mutex::new(None),
         }
     }
 
     /// 読むときの待ちの上限（`None` で無制限）。超えると、読みは中断されて `TimedOut` で失敗する。
     /// 同期のパイプには時間切れが無いので、見張りのスレッドが期限に `CancelIoEx` で読みを中断する。
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        *self.armed.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        self.arm(timeout)
+    }
+
+    fn arm(&self, timeout: Option<Duration>) -> io::Result<()> {
         let generation = {
             let mut g = self
                 .watch
@@ -318,11 +329,32 @@ impl Stream {
         Ok(())
     }
 
+    /// 次の読みを `deadline` までしか待たない（読みごとに呼んでよい）。期限は絶対の時刻なので、同じ
+    /// 期限ならすでに見張りを置いてあり、置き直さない（読みのたびにスレッドを作らない）。期限を
+    /// 過ぎていれば `TimedOut` で失敗する。
+    pub fn set_read_deadline(&self, deadline: std::time::Instant) -> io::Result<()> {
+        let mut armed = self.armed.lock().unwrap_or_else(PoisonError::into_inner);
+        if *armed == Some(deadline) {
+            return Ok(());
+        }
+        let left = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "the read deadline passed"))?;
+        self.arm(Some(left))?;
+        *armed = Some(deadline);
+        Ok(())
+    }
+
     /// 書くときの待ちの上限。同期のパイプの書きにも時間切れが無いので、読みと同じ見張りを使う
     /// （[`Stream::set_read_timeout`]。同時に読みの見張りは置けないが、応答を書くときは読みを
     /// 待っていない）。応答の後の [`Stream::finish`] の待ちは、この見張りでは中断できないことがあり、
     /// 実機で確かめる（テスト計画書 4.5）。
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        *self
+            .write_timeout
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = timeout;
         self.set_read_timeout(timeout)
     }
 
@@ -336,8 +368,31 @@ impl Stream {
 
     /// 応答を書き終えたことを相手に伝える。相手が読み終えるまで待って（`FlushFileBuffers`）から
     /// 閉じないと、パイプの中の書いたものが捨てられる。
+    ///
+    /// 相手が読まずに黙っているとき、ここで止まり続けて接続の枠を塞がないよう、別のスレッドが
+    /// （複製したハンドルで）待ち、こちらは書きの待ちの上限（[`Stream::set_write_timeout`]）までしか
+    /// 待たない。上限を過ぎたら、こちらのハンドルを閉じて先へ進む（待っていたスレッドは、相手が
+    /// 読むか閉じるまで残り、パイプの実体もそれまで残る）。
     pub fn finish(&self) {
-        let _ = self.file.sync_all();
+        let timeout = (*self
+            .write_timeout
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner))
+        .unwrap_or(Duration::from_secs(5));
+        let Ok(dup) = self.file.try_clone() else {
+            let _ = self.file.sync_all();
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("yunagi-pipe-flush".into())
+            .spawn(move || {
+                let _ = dup.sync_all();
+                let _ = tx.send(());
+            });
+        if spawned.is_ok() {
+            let _ = rx.recv_timeout(timeout);
+        }
     }
 }
 

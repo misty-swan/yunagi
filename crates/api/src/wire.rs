@@ -142,7 +142,7 @@ pub struct Request {
     pub id: Value,
     pub method: String,
     /// `params`（無ければ空のオブジェクト）。
-    pub params: Value,
+    pub params: Map<String, Value>,
 }
 
 /// 依頼の形が誤っている。応答の `id` と、標準のコードと文を持つ。
@@ -161,8 +161,8 @@ impl BadRequest {
 }
 
 /// 1 行を依頼として読む。JSON でなければ [`PARSE_ERROR`]（`id` は `null`）、依頼の形（`jsonrpc` が
-/// `"2.0"`、`method` が文字列、`id` がある、`params` が無いかオブジェクト）が誤っていれば
-/// [`INVALID_REQUEST`]。batch（配列）と通知（`id` が無い）は受け付けない。
+/// `"2.0"`、`method` が文字列、`id` がある）が誤っていれば [`INVALID_REQUEST`]、`params` がオブジェクト
+/// でなければ [`INVALID_PARAMS`]。batch（配列）と通知（`id` が無い）は受け付けない。
 pub fn parse_request(line: &[u8]) -> Result<Request, BadRequest> {
     let bad = |id: Value, code, message| BadRequest { id, code, message };
     let value: Value =
@@ -193,12 +193,13 @@ pub fn parse_request(line: &[u8]) -> Result<Request, BadRequest> {
         ));
     };
     let params = match object.remove("params") {
-        None | Some(Value::Null) => Value::Object(Map::new()),
-        Some(p @ Value::Object(_)) => p,
+        None | Some(Value::Null) => Map::new(),
+        Some(Value::Object(p)) => p,
         Some(_) => {
-            return Err(invalid(
-                Some(id),
-                "Invalid Request: params must be an object",
+            return Err(bad(
+                id,
+                INVALID_PARAMS,
+                "Invalid params: params must be an object",
             ));
         }
     };
@@ -243,9 +244,9 @@ mod tests {
         .unwrap();
         assert_eq!(r.id, json!(7));
         assert_eq!(r.method, "get_board");
-        assert_eq!(r.params, json!({"date": "today"}));
+        assert_eq!(Value::Object(r.params), json!({"date": "today"}));
         let r = parse_request(br#"{"jsonrpc":"2.0","id":"a","method":"open_board"}"#).unwrap();
-        assert_eq!(r.params, json!({}));
+        assert!(r.params.is_empty());
     }
 
     #[test]
@@ -265,7 +266,7 @@ mod tests {
         );
         assert_eq!(
             code(br#"{"jsonrpc":"2.0","id":1,"method":"x","params":[1]}"#),
-            INVALID_REQUEST
+            INVALID_PARAMS
         );
         assert_eq!(
             code(br#"{"jsonrpc":"2.0","id":null,"method":"x"}"#),

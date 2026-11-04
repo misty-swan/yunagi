@@ -23,7 +23,7 @@ use yunagi_api::{CLIENT_CONNECT_TIMEOUT, PROTOCOL_VERSION};
 use yunagi_app::api::{ApiOptions, ApiState, ApiUnavailableReason};
 use yunagi_app::types::UiReport;
 use yunagi_app::{AppCore, Notice};
-use yunagi_core::domain::agent;
+use yunagi_core::domain::agent::{self, ClientLookup};
 use yunagi_core::storage::data_dir::{self, DefaultDir};
 use yunagi_core::storage::table::agent_client::{self, Scope};
 use yunagi_core::storage::{StorageError, Ulid};
@@ -189,8 +189,14 @@ impl Harness {
         all.extend_from_slice(scopes);
         self.core
             .read(|conn| -> Result<(), StorageError> {
-                let id = agent::client_for(conn, Some(client), yunagi_core::storage::table::now())?
-                    .unwrap();
+                let id = match agent::client_for(
+                    conn,
+                    Some(client),
+                    yunagi_core::storage::table::now(),
+                )? {
+                    ClientLookup::Known(id) | ClientLookup::Registered(id) => id,
+                    other => panic!("{other:?}"),
+                };
                 agent_client::update_scopes(conn, id, &all)?;
                 Ok(())
             })
@@ -436,6 +442,13 @@ fn hello_checks_the_version_the_token_and_the_form(dir: &DefaultDir) {
 fn reads_need_the_read_scope_and_writes_need_theirs(dir: &DefaultDir) {
     let h = Harness::opened(dir);
     let date = "2031-02-03";
+
+    // 初めての識別子の最初の依頼は、読み取りでも、設定画面のエージェントの一覧が変わるので `changed`
+    // を出す。2 回目からは出さない
+    h.ok("fresh-agent", "get_board", json!({"date": date}));
+    assert_eq!(h.next_changed(), "agent");
+    h.ok("fresh-agent", "get_board", json!({"date": date}));
+    h.assert_no_changed();
 
     // 識別子なし（unknown）と初めての識別子は read だけ
     let board = h.call(None, "get_board", json!({"date": date})).unwrap();

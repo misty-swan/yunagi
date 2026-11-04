@@ -201,7 +201,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 **接続の失敗（2026-11-04 決定。アーキテクチャ設計書 4.4）**：操作がコアに届く前、または届いたか分からないときに、CLI・MCP が返すエラー。どちらも項目の判定（3.2）には入らず、読み取りを含むすべての操作に返す。
 
 ```json
-{"error": {"code": "busy", "message": "Yunagi is using its data and did not respond within 5 seconds. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi."}}
+{"error": {"code": "busy", "message": "Yunagi is using its data and did not respond in time. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi."}}
 {"error": {"code": "api_error", "reason": "result_unknown", "message": "The connection to Yunagi was lost after the request was sent. It may or may not have been applied. Read the data again before retrying."}}
 ```
 
@@ -242,7 +242,7 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"…","data":{"error":{"code":"permission_denied","required_scope":"todo","message":"…"}}}}
 ```
 
-- `client` は識別子（`yunagi mcp --client claude-code` の `claude-code`。CLI は `cli`）。省略すると `unknown`（2章）。初めての識別子は `read` だけの権限で登録される。使える形は、英小文字か数字で始まり、英小文字・数字・`-`・`_`・`.` だけの 64 文字まで。誤っていれば `-32602`。
+- `client` は識別子（`yunagi mcp --client claude-code` の `claude-code`。CLI は `cli`）。省略すると `unknown`（2章）。初めての識別子は `read` だけの権限で登録される（このとき画面に `changed` を出す。設定画面のエージェントの一覧が変わるため）。登録できる識別子は、固定の `cli`・`unknown` を含めて 64 までで、超えると新しい識別子の依頼は `invalid_argument`（登録の整理を利用者に頼む）。使える形は、英小文字か数字で始まり、英小文字・数字・`-`・`_`・`.` だけの 64 文字まで。誤っていれば `-32602`。`params` がオブジェクトでないときも `-32602`。
 - エラー：プロトコルの誤りは JSON-RPC の標準のコード（`-32700` JSON でない、`-32600` 依頼の形が誤り・`hello` より先に依頼を送った、`-32601` 知らない操作、`-32602` 引数が誤り・知らない引数名・必須の引数が無い）。4.3 のエラー（`permission_denied`・`not_found`・`invalid_argument`・`conflict`・`storage_unavailable`・`busy`・`api_error`）は、コード `-32000` で、`error.data.error` に 4.3 のオブジェクトをそのまま入れる。`hello` の失敗は `api_error` の `reason: auth_failed`（トークンが合わない）・`version_mismatch`（プロトコルの版が合わない。エラーにアプリの版 `server_protocol`）。
 - 引数の名前は MCP のツールの引数にそろえる。省略できるのは `date`（既定は今日。`today`・`yesterday`・`YYYY-MM-DD`。形の誤りや存在しない日付は `invalid_argument`）。知らない名前の引数は、綴りの誤りを黙って無視しないよう `-32602`。
 

@@ -38,21 +38,27 @@ pub fn is_valid_client_name(name: &str) -> bool {
 /// - 初めての識別子は `read` だけの権限で登録する（MCP・CLI 仕様書 2章。権限を足すのは利用者）。
 ///
 /// 識別子は名乗るだけのもので、本人であることは確かめない（SECURITY.md 4.2）。使えない形の識別子は
-/// `Ok(None)`（何も登録しない）。最後に接続した時刻の更新は [`touch_client`]（失敗しても依頼を
+/// [`ClientLookup::InvalidName`]、登録の数が [`MAX_CLIENTS`] に達していれば [`ClientLookup::TooMany`]
+/// （どちらも何も登録しない）。最後に接続した時刻の更新は [`touch_client`]（失敗しても依頼を
 /// 失敗させないよう、別にしてある）。
 pub fn client_for(
     conn: &Connection,
     name: Option<&str>,
     now: jiff::Timestamp,
-) -> Result<Option<Ulid>, StorageError> {
+) -> Result<ClientLookup, StorageError> {
     let Some(name) = name else {
-        return Ok(Some(agent_client::UNKNOWN_ID));
+        return Ok(ClientLookup::Known(agent_client::UNKNOWN_ID));
     };
     if !is_valid_client_name(name) {
-        return Ok(None);
+        return Ok(ClientLookup::InvalidName);
     }
     if let Some(client) = agent_client::get_by_name(conn, name)? {
-        return Ok(Some(client.id));
+        return Ok(ClientLookup::Known(client.id));
+    }
+    // 識別子は名乗るだけなので、トークンを持つ相手が名前を変えて登録を増やし続けられないよう、
+    // 登録の数に上限を付ける
+    if agent_client::list(conn)?.len() >= MAX_CLIENTS {
+        return Ok(ClientLookup::TooMany);
     }
     let id = Ulid::generate();
     agent_client::insert(
@@ -65,7 +71,23 @@ pub fn client_for(
             last_seen_at: Some(now),
         },
     )?;
-    Ok(Some(id))
+    Ok(ClientLookup::Registered(id))
+}
+
+/// 登録できるクライアント（agent_client の行）の数の上限（固定の `cli`・`unknown` を含む）。
+pub const MAX_CLIENTS: usize = 64;
+
+/// [`client_for`] の結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientLookup {
+    /// すでにある（識別子なしの `unknown`、固定の `cli`、登録済みの識別子）。
+    Known(Ulid),
+    /// 初めての識別子を、`read` だけの権限で登録した（設定画面のエージェントの一覧が変わる）。
+    Registered(Ulid),
+    /// 識別子の形が誤っている。何も登録していない。
+    InvalidName,
+    /// 登録の数が [`MAX_CLIENTS`] に達していて、新しい識別子は登録できない。
+    TooMany,
 }
 
 /// 最後に接続した時刻を、これより新しければ更新しない間隔（依頼のたびに書き込みが増えないように）。
@@ -424,18 +446,52 @@ mod tests {
         // 識別子なしは unknown、固定の cli は既存の行、使えない形は登録しない
         assert_eq!(
             client_for(conn, None, now).unwrap(),
-            Some(agent_client::UNKNOWN_ID)
+            ClientLookup::Known(agent_client::UNKNOWN_ID)
         );
-        assert_eq!(client_for(conn, Some("cli"), now).unwrap(), Some(CLI_ID));
-        assert_eq!(client_for(conn, Some("Bad Name"), now).unwrap(), None);
+        assert_eq!(
+            client_for(conn, Some("cli"), now).unwrap(),
+            ClientLookup::Known(CLI_ID)
+        );
+        assert_eq!(
+            client_for(conn, Some("Bad Name"), now).unwrap(),
+            ClientLookup::InvalidName
+        );
         assert_eq!(agent_client::get_by_name(conn, "Bad Name").unwrap(), None);
         // 初めての識別子は read だけで登録され、2 回目は同じ id
-        let id = client_for(conn, Some("claude-code"), now).unwrap().unwrap();
+        let ClientLookup::Registered(id) = client_for(conn, Some("claude-code"), now).unwrap()
+        else {
+            panic!("not registered");
+        };
         let row = agent_client::get(conn, id).unwrap().unwrap();
         assert_eq!(row.scopes, vec![Scope::Read]);
         assert_eq!(
             client_for(conn, Some("claude-code"), now).unwrap(),
-            Some(id)
+            ClientLookup::Known(id)
+        );
+    }
+
+    #[test]
+    fn the_number_of_registered_clients_is_capped() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let now = jiff::Timestamp::from_second(1_000_000).unwrap();
+        let existing = agent_client::list(conn).unwrap().len();
+        for i in existing..MAX_CLIENTS {
+            let result = client_for(conn, Some(&format!("agent-{i}")), now).unwrap();
+            assert!(matches!(result, ClientLookup::Registered(_)), "{i}");
+        }
+        assert_eq!(
+            client_for(conn, Some("one-too-many"), now).unwrap(),
+            ClientLookup::TooMany
+        );
+        // 登録済みの識別子と、固定の 2 つは、上限に関係なく使える
+        assert!(matches!(
+            client_for(conn, Some("agent-2"), now).unwrap(),
+            ClientLookup::Known(_)
+        ));
+        assert_eq!(
+            client_for(conn, Some("cli"), now).unwrap(),
+            ClientLookup::Known(CLI_ID)
         );
     }
 

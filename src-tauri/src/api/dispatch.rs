@@ -9,13 +9,14 @@
 //! 用の版。画面と同じ `changed` を出す）を通る。`date` は受け取ったまま（`today` など）で、
 //! アプリが自分の設定とタイムゾーンで日付を求める。
 
+use std::cell::Cell;
 use std::time::Instant;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::{Map, Value, json};
 use yunagi_api::wire::{self, Request};
-use yunagi_core::domain::agent::{self, PermissionDenied, ReadError};
+use yunagi_core::domain::agent::{self, ClientLookup, PermissionDenied, ReadError};
 use yunagi_core::domain::board::{self, BoardItem};
 use yunagi_core::domain::day;
 use yunagi_core::domain::item::{
@@ -68,33 +69,52 @@ impl From<Busy> for Failure {
     }
 }
 
-/// 5 秒の待ちで始められなかった（保存先の変更・復元の最中、またはデータベースを開いていない）。
-/// 何も反映していない。
+/// 待っても始められなかった（保存先の変更・復元の最中、またはデータベースを開いていない）。
+/// 何も反映していない。待つ時間は設定できる（`ApiOptions::db_wait`。既定 5 秒）ので、文には書かない。
 pub fn busy_error() -> Value {
     json!({
         "code": "busy",
-        "message": "Yunagi is using its data and did not respond within 5 seconds. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi.",
+        "message": "Yunagi is using its data and did not respond in time. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi.",
     })
 }
 
 fn run(core: &AppCore, client: Option<&str>, request: &Request) -> Result<Value, Failure> {
-    let params = request
-        .params
-        .as_object()
-        .ok_or_else(|| Failure::Params("params must be an object".into()))?;
-    let call = Call::parse(&request.method, params)?;
+    let call = Call::parse(&request.method, &request.params)?;
     // データベースを使えるまで待つ期限は、依頼ごとに 1 回だけ求める（クライアントを求める処理も、
     // 操作の本体も、同じ期限と同じ錠の中で行う）
-    call.execute(core, core.api_deadline(), client)
+    let registered = Cell::new(false);
+    let result = call.execute(core, core.api_deadline(), client, &registered);
+    // 初めての識別子を登録したら、設定画面のエージェントの一覧が変わるので、画面に知らせる
+    if registered.get() {
+        core.notify_agent_registered();
+    }
+    result
 }
 
-/// 呼び出し元のクライアントを求める（初めての識別子は `read` だけで登録する）。最後に接続した時刻の
-/// 更新は、できたらやる（ディスクがいっぱいなどで書けなくても、読み取りは断らない）。
-fn resolve_client(conn: &rusqlite::Connection, client: Option<&str>) -> Result<Ulid, Failure> {
+/// 呼び出し元のクライアントを求める（初めての識別子は `read` だけで登録し、`registered` を立てる）。
+/// 最後に接続した時刻の更新は、できたらやる（ディスクがいっぱいなどで書けなくても、読み取りは
+/// 断らない）。
+fn resolve_client(
+    conn: &rusqlite::Connection,
+    client: Option<&str>,
+    registered: &Cell<bool>,
+) -> Result<Ulid, Failure> {
     let at = now();
-    let id = agent::client_for(conn, client, at)
-        .map_err(storage_failure)?
-        .ok_or_else(|| Failure::Params("client is not a valid identifier".into()))?;
+    let id = match agent::client_for(conn, client, at).map_err(storage_failure)? {
+        ClientLookup::Known(id) => id,
+        ClientLookup::Registered(id) => {
+            registered.set(true);
+            id
+        }
+        ClientLookup::InvalidName => {
+            return Err(Failure::Params("client is not a valid identifier".into()));
+        }
+        ClientLookup::TooMany => {
+            return Err(Failure::App(invalid_argument(
+                "Too many clients are registered. Ask the user to remove unused ones in Yunagi > Settings > Agents.",
+            )));
+        }
+    };
     if let Err(e) = agent::touch_client(conn, id, at) {
         eprintln!(
             "yunagi: could not record the last connection of a client: {}",
@@ -198,11 +218,13 @@ impl Call {
         core: &AppCore,
         deadline: Instant,
         client: Option<&str>,
+        registered: &Cell<bool>,
     ) -> Result<Value, Failure> {
         match self {
             Self::GetBoard(date) => core.api_read(deadline, |conn| {
-                let client_id = resolve_client(conn, client)?;
-                let date = resolve(conn, date)?;
+                let client_id = resolve_client(conn, client, registered)?;
+                let at = now();
+                let date = resolve(conn, date, at)?;
                 let b = board::get_board(conn, client_id, date).map_err(read_failure)?;
                 Ok(json!({
                     "date": b.date.to_string(),
@@ -216,8 +238,9 @@ impl Call {
                 }))
             })?,
             Self::OpenBoard(date) => core.api_read(deadline, |conn| {
-                let client_id = resolve_client(conn, client)?;
-                let date = resolve(conn, date)?;
+                let client_id = resolve_client(conn, client, registered)?;
+                let at = now();
+                let date = resolve(conn, date, at)?;
                 let b = board::open_board(conn, client_id, date).map_err(read_failure)?;
                 Ok(json!({
                     "date": b.date.to_string(),
@@ -226,8 +249,9 @@ impl Call {
                 }))
             })?,
             Self::GetNote(date, heading) => core.api_read(deadline, |conn| {
-                let client_id = resolve_client(conn, client)?;
-                let date = resolve(conn, date)?;
+                let client_id = resolve_client(conn, client, registered)?;
+                let at = now();
+                let date = resolve(conn, date, at)?;
                 let read = text_doc::get_note(conn, client_id, date, heading.as_deref())
                     .map_err(note_read_failure)?;
                 Ok(match read {
@@ -245,101 +269,112 @@ impl Call {
                     }),
                 })
             })?,
-            Self::AddTodo(date, text) => write(core, deadline, client, |conn, agent, tz, at| {
-                let date = resolve(conn, date)?;
+            Self::AddTodo(date, text) => write(core, deadline, client, registered, |conn, agent, tz, at| {
+                let date = resolve(conn, date, at)?;
                 let i = item::add_todo(conn, agent, date, &text, tz, at).map_err(item_failure)?;
-                Ok(added_json(&i))
+                Ok(Reply::new(added_json(&i), true))
             })?,
-            Self::AddBlocker(date, text) => write(core, deadline, client, |conn, agent, tz, at| {
-                let date = resolve(conn, date)?;
+            Self::AddBlocker(date, text) => write(core, deadline, client, registered, |conn, agent, tz, at| {
+                let date = resolve(conn, date, at)?;
                 let i =
                     item::add_blocker(conn, agent, date, &text, tz, at).map_err(item_failure)?;
-                Ok(added_json(&i))
+                Ok(Reply::new(added_json(&i), true))
             })?,
-            Self::EditTodo(id, text) => write(core, deadline, client, |conn, agent, _, at| {
+            Self::EditTodo(id, text) => write(core, deadline, client, registered, |conn, agent, _, at| {
                 let o = item::edit_todo(conn, agent, id, &text, at).map_err(item_failure)?;
-                Ok(json!({"updated": o.updated, "id": o.item.id.to_string(), "text": o.item.text}))
+                let value =
+                    json!({"updated": o.updated, "id": o.item.id.to_string(), "text": o.item.text});
+                Ok(Reply::new(value, o.updated))
             })?,
-            Self::EditBlocker(id, text) => write(core, deadline, client, |conn, agent, _, at| {
+            Self::EditBlocker(id, text) => write(core, deadline, client, registered, |conn, agent, _, at| {
                 let o = item::edit_blocker(conn, agent, id, &text, at).map_err(item_failure)?;
-                Ok(json!({"updated": o.updated, "id": o.item.id.to_string(), "text": o.item.text}))
+                let value =
+                    json!({"updated": o.updated, "id": o.item.id.to_string(), "text": o.item.text});
+                Ok(Reply::new(value, o.updated))
             })?,
-            Self::CompleteTodo(id) => write(core, deadline, client, |conn, agent, _, at| {
+            Self::CompleteTodo(id) => write(core, deadline, client, registered, |conn, agent, _, at| {
                 let o = item::complete_todo(conn, agent, id, at).map_err(item_failure)?;
-                Ok(status_json(o.updated, &o.item))
+                Ok(Reply::new(status_json(o.updated, &o.item), o.updated))
             })?,
-            Self::ReopenTodo(id) => write(core, deadline, client, |conn, agent, _, at| {
+            Self::ReopenTodo(id) => write(core, deadline, client, registered, |conn, agent, _, at| {
                 let o = item::reopen_todo(conn, agent, id, at).map_err(item_failure)?;
-                Ok(status_json(o.updated, &o.item))
+                Ok(Reply::new(status_json(o.updated, &o.item), o.updated))
             })?,
-            Self::ResolveBlocker(id, note) => write(core, deadline, client, |conn, agent, _, at| {
+            Self::ResolveBlocker(id, note) => write(core, deadline, client, registered, |conn, agent, _, at| {
                 let r = item::resolve_blocker(conn, agent, id, note.as_deref(), at)
                     .map_err(item_failure)?;
-                Ok(json!({
+                let value = json!({
                     "updated": r.updated(),
                     "resolved": r.resolved,
                     "note_written": r.note_written,
                     "id": r.item.id.to_string(),
                     "status": r.item.status.as_str(),
                     "resolution_note": r.item.resolution_note,
-                }))
+                });
+                Ok(Reply::new(value, r.updated()))
             })?,
-            Self::AppendNote(date, text, heading) => write(core, deadline, client, |conn, agent, tz, at| {
-                let date = resolve(conn, date)?;
+            Self::AppendNote(date, text, heading) => write(core, deadline, client, registered, |conn, agent, tz, at| {
+                let date = resolve(conn, date, at)?;
                 let w = text_doc::append_note(conn, date, &text, heading.as_deref(), agent, tz, at)
                     .map_err(text_doc_failure)?;
-                Ok(written_json(&w))
+                Ok(Reply::new(written_json(&w), w.updated))
             })?,
-            Self::AppendReflection(date, text) => write(core, deadline, client, |conn, agent, tz, at| {
-                let date = resolve(conn, date)?;
+            Self::AppendReflection(date, text) => write(core, deadline, client, registered, |conn, agent, tz, at| {
+                let date = resolve(conn, date, at)?;
                 let w = text_doc::append_reflection(conn, date, &text, agent, tz, at)
                     .map_err(text_doc_failure)?;
-                Ok(written_json(&w))
+                Ok(Reply::new(written_json(&w), w.updated))
             })?,
-            Self::EditNote(date, edit) => write(core, deadline, client, |conn, agent, tz, at| {
-                let date = resolve(conn, date)?;
+            Self::EditNote(date, edit) => write(core, deadline, client, registered, |conn, agent, tz, at| {
+                let date = resolve(conn, date, at)?;
                 let w = text_doc::edit_note(conn, date, &edit, agent, tz, at)
                     .map_err(text_doc_failure)?;
-                Ok(written_json(&w))
+                Ok(Reply::new(written_json(&w), w.updated))
             })?,
         }
     }
 }
 
-/// 書き込みの依頼を `AppCore::api_write` に渡す。成功の JSON は、変えたかを `updated` で持つ。
+/// 書き込みの依頼を `AppCore::api_write` に渡す。
 ///
-/// 書き込む時刻とタイムゾーンは、錠を取ってから（待った後に）求めて `f` に渡す。待つ間に時刻が
-/// 進んでも、記録の時刻と日付の求め方がずれないようにする。
+/// 書き込む時刻とタイムゾーンは、錠を取ってから（待った後に）1 回だけ求めて `f` に渡す（日付の
+/// 求め方にも同じ時刻を使う）。待つ間に時刻が進んでも、記録の時刻と日付がずれないようにする。
 fn write(
     core: &AppCore,
     deadline: Instant,
     client: Option<&str>,
+    registered: &Cell<bool>,
     f: impl FnOnce(
         &rusqlite::Connection,
         &agent::Agent<'_>,
         &TimeZone,
         Timestamp,
-    ) -> Result<Value, Failure>,
+    ) -> Result<Reply, Failure>,
 ) -> Result<Result<Value, Failure>, Busy> {
-    // `api_write` は、変えたかを `Changes` で求める。JSON の `updated` を見る
     let result = core.api_write(
         deadline,
-        |conn| resolve_client(conn, client),
-        |conn, agent| f(conn, agent, &system_tz(), now()).map(Changed),
+        |conn| resolve_client(conn, client, registered),
+        |conn, agent| f(conn, agent, &system_tz(), now()),
     )?;
-    Ok(result.map(|Changed(v)| v))
+    Ok(result.map(|reply| reply.value))
 }
 
-/// `updated` が `false` でない成功の応答（`changed` を出す対象）。
-struct Changed(Value);
+/// 書き込みの成功の応答の JSON と、データを実際に変えたか（コアの結果から決める。`changed` を出す
+/// 対象かの判断に使う）。
+struct Reply {
+    value: Value,
+    changed: bool,
+}
 
-impl crate::app_core::Changes for Changed {
+impl Reply {
+    fn new(value: Value, changed: bool) -> Self {
+        Self { value, changed }
+    }
+}
+
+impl crate::app_core::Changes for Reply {
     fn changed(&self) -> bool {
-        // 追加（`updated` が無い）は常に変えている。それ以外は `updated` に従う
-        self.0
-            .get("updated")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
+        self.changed
     }
 }
 
@@ -442,10 +477,10 @@ impl<'a> Params<'a> {
 }
 
 /// 日付の指定を、端末の時計・タイムゾーン・切り替わり時刻で論理日付にする。
-fn resolve(conn: &rusqlite::Connection, date: Date) -> Result<LogicalDate, Failure> {
+fn resolve(conn: &rusqlite::Connection, date: Date, at: Timestamp) -> Result<LogicalDate, Failure> {
     let boundary = day::day_boundary(conn).map_err(storage_failure)?;
     date.0
-        .resolve_at(now(), &system_tz(), boundary)
+        .resolve_at(at, &system_tz(), boundary)
         .ok_or_else(|| Failure::App(invalid_argument("date is out of range.")))
 }
 
