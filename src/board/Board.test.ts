@@ -84,6 +84,8 @@ function emptyBoard(date: string): BoardData {
 interface Opts {
   boards?: Record<string, BoardData>;
   reflection?: string;
+  /** `copy_handoff` が失敗するときの、コマンドのエラー。 */
+  handoffError?: { kind: string };
 }
 
 function mockCore(opts: Opts = {}) {
@@ -115,6 +117,9 @@ function mockCore(opts: Opts = {}) {
         case "save_text_doc":
           return { result: "saved", rev: 2, updated: true };
         case "report_ui_state":
+          return null;
+        case "copy_handoff":
+          if (opts.handoffError !== undefined) throw opts.handoffError;
           return null;
       }
       return null;
@@ -676,6 +681,93 @@ test("振り返りテンプレートの挿入は、設定で変えた割当に�
   expect(content.textContent).toBe("");
   press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true });
   await until(() => (content.textContent ?? "") !== "");
+  prefs.shortcuts = {};
+});
+
+/**
+ * 行にフォーカスを置いて、Ctrl+Shift+A（`init` で上書きできる）を押す。本文を入力欄にしない行（持ち越し済み
+ * など。キーは行そのものが受ける）は行に、そうでなければ本文の入力欄に置く。
+ */
+function pressHandoff(row: HTMLElement, init: KeyboardEventInit = {}) {
+  const txt = row.querySelector<HTMLElement>(".txt")!;
+  const target = txt.getAttribute("contenteditable") === null ? row : txt;
+  target.focus();
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true, ...init }),
+  );
+  flushSync();
+}
+
+test("Mod+Shift+A：選んだ TODO の依頼文をコピーして知らせる（持ち越し済み・完了の TODO も書き出せる）", async () => {
+  const { calls, notice } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [
+          bi(item(A, "調べる")),
+          bi(item(B, "済んだ", { status: "done" })),
+          bi(item(C, "持ち越した"), { carriedTo: { id: D, date: "2026-11-04" } }),
+        ],
+      },
+    },
+  });
+  const rows = $$(".r-todo .item");
+  for (const [i, id] of [A, B, C].entries()) {
+    notice.clear();
+    pressHandoff(rows[i]);
+    await vi.waitFor(() => expect(notice.text, `row ${i}`).toBe("依頼文をコピーしました"));
+    expect(calls.filter((c) => c.cmd === "copy_handoff").at(-1)?.args).toEqual({ id });
+  }
+  expect(calls.filter((c) => c.cmd === "copy_handoff").length).toBe(3);
+  // 英語の画面
+  prefs.lang = "en";
+  notice.clear();
+  pressHandoff(rows[0]);
+  await until(() => notice.text === "Request copied");
+  // 押し続けたときの繰り返しでは書き出さない
+  const n = calls.filter((c) => c.cmd === "copy_handoff").length;
+  pressHandoff(rows[0], { repeat: true });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(calls.filter((c) => c.cmd === "copy_handoff").length).toBe(n);
+});
+
+test("Mod+Shift+A：障害の行では書き出さず、TODO だけと知らせる", async () => {
+  const { calls, notice } = await start({
+    boards: { [TODAY]: { ...emptyBoard(TODAY), blockers: [bi(item(A, "権限待ち", { kind: "blocker" }))] } },
+  });
+  pressHandoff($(".r-blk .item")!);
+  expect(notice.text).toBe("依頼文にできるのは TODO です");
+  prefs.lang = "en";
+  notice.clear();
+  pressHandoff($(".r-blk .item")!);
+  expect(notice.text).toBe("Only a TODO can be copied as a request");
+  expect(calls.some((c) => c.cmd === "copy_handoff")).toBe(false);
+});
+
+test("Mod+Shift+A：書き出せなかったとき（クリップボードに書けない・項目が消えたなど）は失敗を知らせる", async () => {
+  for (const kind of ["clipboard_failed", "not_found"]) {
+    const { notice } = await start({
+      boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "調べる"))] } },
+      handoffError: { kind },
+    });
+    pressHandoff($(".r-todo .item")!);
+    await until(() => notice.text === "依頼文をコピーできませんでした");
+    unmount(app!);
+    app = undefined;
+    await session?.stop();
+  }
+});
+
+test("Mod+Shift+A は、設定で変えた割当に従う（元のキーでは書き出さない）", async () => {
+  prefs.shortcuts = { handoff: "Mod+Shift+E" };
+  const { calls, notice } = await start({
+    boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "調べる"))] } },
+  });
+  pressHandoff($(".r-todo .item")!);
+  expect(notice.text).toBeNull();
+  expect(calls.some((c) => c.cmd === "copy_handoff")).toBe(false);
+  pressHandoff($(".r-todo .item")!, { key: "E", code: "KeyE" });
+  await until(() => notice.text === "依頼文をコピーしました");
   prefs.shortcuts = {};
 });
 

@@ -310,6 +310,11 @@
         model.move(row.key, action === "moveUp" ? -1 : 1);
         onFocus({ key: row.key, field: "text", offset });
         return;
+      case "handoff":
+        e.preventDefault();
+        // 押し続けたときの繰り返しでは書き出さない（Mod+Shift+T・B と同じ）
+        if (!e.repeat) void model.handoff(row.key);
+        return;
       case "undo":
       case "redo":
         e.preventDefault();

@@ -246,6 +246,12 @@ export interface Messages {
   sendAlreadySent: string;
   /** 行送りに失敗したとき（本文はふだんの自動保存で送る）。 */
   sendFailed: string;
+  /** 依頼文の書き出し（Mod+Shift+A。操作仕様書 2章）：クリップボードに写した。 */
+  handoffCopied: string;
+  /** 依頼文の書き出しを、障害の行で押した（書き出せるのは TODO だけ）。 */
+  handoffNotTodo: string;
+  /** 依頼文の書き出しに失敗した（クリップボードに書けない・保存の失敗中・項目が消えたなど）。 */
+  handoffFailed: string;
   /** ノートの行の右クリックのメニュー（操作仕様書 5章）。 */
   lineMenu: { label: string; toTodo: string; toBlocker: string };
   /** 定期バックアップを作れなかったとき（`backup-failed`。画面設計書 3章「上部のバー」）。 */
@@ -569,6 +575,9 @@ const ja: Messages = {
   sendNothing: "送れる行がありません",
   sendAlreadySent: "送信済みの行です",
   sendFailed: "行を送れませんでした",
+  handoffCopied: "依頼文をコピーしました",
+  handoffNotTodo: "依頼文にできるのは TODO です",
+  handoffFailed: "依頼文をコピーできませんでした",
   lineMenu: { label: "行の操作", toTodo: "TODO へ送る", toBlocker: "障害へ送る" },
   backupFailed: "今日のバックアップを作れませんでした。自動で作り直します",
   startup: jaStartup,
@@ -670,6 +679,9 @@ const en: Messages = {
   sendNothing: "No lines to send",
   sendAlreadySent: "Already sent",
   sendFailed: "Couldn't send the lines",
+  handoffCopied: "Request copied",
+  handoffNotTodo: "Only a TODO can be copied as a request",
+  handoffFailed: "Couldn't copy the request",
   lineMenu: { label: "Line actions", toTodo: "Send to TODO", toBlocker: "Send to Blockers" },
   backupFailed: "Today's backup couldn't be made. It will be retried automatically",
   startup: enStartup,

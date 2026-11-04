@@ -59,6 +59,7 @@ test("初期割当は操作仕様書 2章のとおり。Vim モードの Windows
     moveDown: "Alt+ArrowDown",
     delete: "Mod+Backspace",
     template: "Mod+Shift+R",
+    handoff: "Mod+Shift+A",
     toTodo: "Mod+Shift+T",
     toBlocker: "Mod+Shift+B",
     timeHeading: "Mod+Shift+H",
@@ -129,11 +130,13 @@ test("割り当てられないキー", () => {
   expect(p("Alt+L", false, true)).toBe("mac_option_alone");
   expect(p("Alt+L")).toBeNull();
   expect(p("Alt+ArrowUp", false, true)).toBeNull();
-  for (const s of ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Shift+A"]) {
+  for (const s of ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A"]) {
     expect(p(s), s).toBe("reserved");
   }
-  // Mod+Shift+D は「Yunagi を前面に呼び出す」の初期割当になったので、予約ではない
+  // Mod+Shift+D は「Yunagi を前面に呼び出す」、Mod+Shift+A は「依頼文の書き出し」の初期割当になったので、
+  // 予約ではない
   expect(p("Mod+Shift+D")).toBeNull();
+  expect(p("Mod+Shift+A")).toBeNull();
   expect(p("Mod+Y")).toBe("reserved");
   expect(p("Mod+Y", false, true)).toBeNull();
   // Ctrl+[ は、Vim モードの Windows・Linux では Esc と重なる
