@@ -125,7 +125,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   5. `carried_over`：持ち越し済みの項目（3章）。
   6. `user_editing`：その操作が書く、利用者が入力する欄（`edit_todo`・`edit_blocker` は本文、`--note` 付きの `resolve_blocker` は解消メモ）を入力中のとき。状態だけを変える操作（`complete_todo`・`reopen_todo`、`--note` の無い `resolve_blocker`）は返さない。
   7. `note_exists`：`resolve_blocker` だけ（3章）。
-- 例外：ID の形の誤りと日付の指定（`date`）の形の誤りは、引数を読む段階で `invalid_argument` にするため、項目や権限を見る前に返る（ローカル API の層も CLI の引数の読み取りも同じ。`permission_denied` より先になる。2026-11-04 決定）。形の誤りは、スコープに関係なく、直してやり直さなければならないため。
+- 例外：CLI の標準入力の誤り（4.1）と、ID の形の誤りと日付の指定（`date`）の形の誤りは、引数を読む段階で `invalid_argument` にするため、項目や権限を見る前に返る（ローカル API の層も CLI の引数の読み取りも同じ。`permission_denied` より先になる。2026-11-04 決定）。形の誤りは、スコープに関係なく、直してやり直さなければならないため。
 - この順のため、今と同じ本文やすでに目的の状態でも、取りやめた TODO と種類の違う ID なら `invalid_argument`、保存の再試行中は `storage_unavailable`、持ち越し済みの項目なら `carried_over`、入力中なら `user_editing` になる。
 - 何も変えない成功：今の値と比べて、送られた欄（状態・完了時刻・本文・解消メモ）がすべて同じなら、エラーにせず、何も書かずに成功を返す。エージェントは応答が届かなかったときなどに、同じ操作をそのままやり直してよい。エラーにすると、やり直したエージェントが、1回目が届いていたのか失敗したのかを区別できないため。一部の欄だけが違えば、違う欄だけを書く。
 - 応答と記録：成功の応答には、実際に何かを変えたかを示す `updated`（`true` / `false`）を含める。CLI では、`--json` のときに同じ `updated` を含む JSON を出し、テキスト出力は各操作の節の文を表示する。終了コードはどれも 0。何も変えなかった場合（`updated: false`）は、change_log に記録せず（7章）、item の `updated_at` も変えない（データモデル設計書 3章）。記録するときは、実際に変えた欄だけを `before` / `after` に入れる。
@@ -141,6 +141,16 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - `note get`：全文は本文、見出し指定は区間の `text`（3章）。
   - `search`：項目は `日付 種類 ID  本文`、ノート・振り返りは一致した行ごとに `日付 種類:行番号  行の本文`。0 件は `No results.`。
   - `doctor`：`key: value` の行（3.1）。
+  - 書き込み（2026-11-04 決定。YUN-91）：成功は 1 行で、3章の文（`Resolved.`・`Note added.`・`Already resolved. Nothing changed.`・`Completed.`・`Already done. Nothing changed.`・`Reopened.`・`Already open. Nothing changed.`・`Edited.`・`Same text. Nothing changed.`）に次を足す。`add_todo`・`add_blocker` は `Added TODO ID (日付).`・`Added blocker ID (日付).`（あとで編集や完了に使う ID を出す）。`append_note`・`append_reflection` は `Appended.`、`edit_note` は `Edited.`、どちらも何も変えなかったとき（`updated: false`）は `Nothing changed.`。`resolve_blocker` が解消と解消メモの両方を行ったときは `Resolved. Note added.`。`--note` を付けずに解消した障害に前の解消メモが残っていたら、次の行に `Existing resolution note: 本文` を出す（3章。エージェントが利用者に伝えられるように）。
+  - 書き込みの失敗のテキスト（標準エラー）は、`message` の後ろに、次の動きを決める欄を `[...]` で添える（`--json` では欄がそのまま出るため、テキストだけの補い）：`carried_over` は `[carried to: ID (日付)]`、`note_exists` は `[existing resolution note: 本文]`、種類の違う ID の `invalid_argument` は `[use yunagi blocker edit]` のように使う CLI のコマンド（無ければ `[ask the user]`）。必要なスコープは従来どおり `[required scope: S]`。
+- 書き込みの引数の決まり（2026-11-04 決定。YUN-91）：
+  - `TEXT`（`todo add`・`todo edit` の本文、`blocker add`・`blocker edit`・`reflection append`・`note append` の本文）と `blocker resolve` の `--note` は、`-` を指定すると標準入力から読む（接続の前に読む）。`--expect` と `--replace` はノートの行そのものを渡すので、`-` も文字として渡し、標準入力からは読まない（`-` だけの行を扱えるように）。`-` を受けつける欄はどのコマンドでも 1 つだけなので、標準入力は 1 回しか読まない。標準入力の誤り（UTF-8 でない・大きすぎる）は、ID や日付の形の誤りと同じく接続の前に返るので、権限の誤りより先になる（3.2 の例外）。読んだ本文の複数行の可否はコアの決まりのままで、`reflection append`・`note append` は複数行を受けつけ（`git log` の出力など）、項目の本文と解消メモは 1 行だけ（途中の改行は `invalid_argument`。3章）。
+  - 同じオプションを 2 回以上書くと `invalid_argument`（前の指定の誤りを、後ろの指定で隠さないため。繰り返せるのは `search` の `--kind` だけ。読み取りの `--date` も同じ）。`note append` で `--heading` の直後に `TEXT` を置くと件名として読まれ、`TEXT` が無くなるので、誤りの文でそう伝える。
+  - `--delete` は値を取らない（`--delete=x` は `invalid_argument`）。`--move-to M`・`--line N` は 0 以上の整数（数でないものは `invalid_argument`。0 の意味はコアが決める）。`note edit` は `--line`・`--expect` と、`--replace`・`--delete`・`--move-to` のうちちょうど 1 つが要る（足りない・重なるは `invalid_argument`）。`--expect` の値は前後の空白を除かずにそのまま渡す。空の行は `--expect=` と書く。
+  - `note append` の `--heading` は値を省略できる：次の引数が `-` で始まらなければ件名として読み、そうでなければ（または末尾なら）件名なしの `## HH:MM` にする。`-` で始まる件名と、件名なしで `--heading` の直後に `TEXT` を置く場合は `=` で書く（`--heading=-x`、`--heading=`）。読み取りの `note get --heading` は値が要る。
+  - `--` で始まる値（例：`--expect ---`）は、読み取りの規則（下記）どおり `--name=VALUE` で書く。値が無いときの誤りの文にもそう書く。
+  - ID を指定する操作（`todo edit`・`todo complete`・`todo reopen`・`blocker edit`・`blocker resolve`）は `--date` を受けつけない（`unknown option`）。`todo done` は `todo complete`、`reflect append` は `reflection append` の別名。
+  - ID と日付の形の誤り、引数の過不足、標準入力の誤り（UTF-8 でない・約 0.7 MiB 超）は接続の前に `invalid_argument`。本文の誤り（空・途中の改行・`--line 0` など）は CLI で先に弾かず、コアの判定の順（3.2）に任せる（`permission_denied` と `not_found` が先になる）。
 - 引数の誤りは `invalid_argument`（終了コード 2）で、`--json` なら同じ形式で出す（誤りがあっても引数を最後まで読んで `--json` の指定を決める）。オプションの値は `--name 値` か `--name=値` で、`--name` の次が `--` で始まる引数なら値が無いものとする（`--date --json` の `--json` を日付として読まない。`--` で始まる値は `--name=--x` と書く）。UTF-8 でない引数も `invalid_argument`。標準入力から読む `TEXT` の大きさの上限は約 0.7 MiB（JSON にしたときに依頼の上限 4 MiB に必ず収まる大きさ）で、超えると `invalid_argument`。ID・日付の形の誤りは、接続する前に返す（3.2）。
 - CLI 自身の不具合（知らない操作を呼んだなど）は、コード `internal`（終了コード 1）で返す。エージェントが見分ける必要のある分類ではない（4.3 の表のコードは変えない）。
 - 終了コード（4.3 のエラーコードとの対応）：
