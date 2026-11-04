@@ -116,6 +116,9 @@ const SYMBOLS: Readonly<Record<string, string>> = {
   "`": "Backquote",
 };
 
+/** 記号のキーか（`toString` のような、オブジェクトが元から持つ名前は含めない）。 */
+const isSymbol = (s: string): boolean => Object.prototype.hasOwnProperty.call(SYMBOLS, s);
+
 /** JIS 配列の macOS で `\` のキーが打つ文字。 */
 const YEN = "¥";
 
@@ -149,7 +152,7 @@ export function parseBinding(text: string): Binding | null {
   if (/^[A-Z]$/.test(last)) key = { kind: "code", code: `Key${last}`, text: last };
   else if (/^[0-9]$/.test(last)) key = { kind: "code", code: `Digit${last}`, text: last };
   else if ((NAMED as readonly string[]).includes(last)) key = { kind: "named", name: last as (typeof NAMED)[number] };
-  else if (last in SYMBOLS) key = { kind: "symbol", text: last };
+  else if (isSymbol(last)) key = { kind: "symbol", text: last };
   else return null;
   return { mod: mods.has("Mod"), alt: mods.has("Alt"), shift: mods.has("Shift"), key };
 }
@@ -187,8 +190,8 @@ export type BindingProblem =
   | "no_modifier"
   /** macOS の Option だけ（文字や記号と）。Option は文字を打つキーなので、Mod と組み合わせる。 */
   | "mac_option_alone"
-  /** Alt だけと、上下の矢印以外の名前のキー（Backspace・左右の矢印など。文字の編集や戻る・進むに使う）。 */
-  | "alt_edit_key"
+  /** 名前のキーのうち、文字の編集や移動に使うもの（Mod は Enter・Backspace だけ、Alt だけは上下の矢印だけ）。 */
+  | "edit_key"
   /** Windows・Linux の Ctrl と Alt の組み合わせ（AltGr で文字を打つ配列があるため）。 */
   | "alt_gr"
   /** 記号のキーと Shift（配列で打つ文字が変わる）。 */
@@ -219,9 +222,13 @@ export function problemOf(b: Binding, vim: boolean, mac: boolean): BindingProble
     if (mac && b.alt) return "mac_option_symbol";
   }
   if (mac && !b.mod && b.alt && b.key.kind !== "named") return "mac_option_alone";
-  // Alt だけの名前のキーは、上下の矢印だけ（Option・Alt と Backspace・左右の矢印などは、文字の編集や戻る・進むに使う）
-  if (!b.mod && b.alt && b.key.kind === "named" && b.key.name !== "ArrowUp" && b.key.name !== "ArrowDown") {
-    return "alt_edit_key";
+  // 名前のキーで割り当てられるのは、Mod と Enter・Backspace、Alt だけと上下の矢印だけ。ほかは文字の編集や
+  // 移動（Mod+左右の矢印は行頭・行末や単語の移動、Option・Alt+Backspace は単語の削除、Alt+左右は戻る・進む、
+  // Mod+Space は Spotlight など）に使う
+  if (b.key.kind === "named") {
+    const n = b.key.name;
+    const ok = b.mod ? !b.alt && (n === "Enter" || n === "Backspace") : b.alt && (n === "ArrowUp" || n === "ArrowDown");
+    if (!ok) return "edit_key";
   }
   const f = format(b);
   if (RESERVED.includes(f)) return "reserved";
@@ -309,8 +316,12 @@ export function conflictOf(id: ActionId, binding: Binding, keymap: Keymap): Acti
   const key = format(binding);
   for (const a of ACTIONS) {
     if (a.id === id || !overlaps(a.scope, SCOPE_OF.get(id)!)) continue;
-    const b = keymap.get(a.id)?.binding;
-    if (b !== null && b !== undefined && format(b) === key) return a.id;
+    const r = keymap.get(a.id);
+    if (r === undefined) continue;
+    // 変えていない割当が、ほかの操作に取られて使えないときも、その初期割当のキーは譲らない
+    // （取っていた操作を変えたとき、黙って使えるようになるため、先に断る）
+    const held = r.binding !== null ? format(r.binding) : r.changed ? null : r.initial;
+    if (held === key) return a.id;
   }
   return null;
 }
@@ -356,10 +367,15 @@ export function matches(e: KeyLike, mac: boolean, b: Binding): boolean {
   // 記号のキー：macOS で記号を Option と打つ配列（ドイツ語の配列の Option+5 で [ など）でも動くよう、
   // 押した文字が合えば Option と Shift は問わない。Windows・Linux では Alt の有無を割当に合わせる
   if (!mac && e.altKey !== b.alt) return false;
-  if (e.key === k.text || (k.text === "\\" && e.key === YEN)) return true;
+  if (e.key === k.text || (k.text === "\\" && e.key === YEN)) {
+    // 押した文字が変わらない配列で、そのキー自身に Option・Shift を重ねたもの（⌘⌥[・⌘⇧[ など、ほかのアプリや
+    // OS が使う組み合わせ）は、割当の記号のキーとして受けない。別のキーで打つ記号（Option+5 で [）は受ける
+    if (e.code === SYMBOLS[k.text] && (e.shiftKey || (mac && e.altKey))) return false;
+    return true;
+  }
   // 記号を単独のキーで打てない配列（ドイツ語の配列など）でも動くよう、Option の無いときは、US 配列の
   // 記号のキーの位置でも受ける。ただし、押したキーがほかの割り当てられる記号を打つときは、その記号のキーなので受けない
-  if (e.key in SYMBOLS || e.key === YEN) return false;
+  if (isSymbol(e.key) || e.key === YEN) return false;
   return (mac ? !e.altKey : true) && !e.shiftKey && e.code === SYMBOLS[k.text];
 }
 
@@ -381,7 +397,7 @@ export function bindingFromEvent(e: KeyLike, mac: boolean): Binding | null {
     if ((NAMED as readonly string[]).includes(name)) key = { kind: "named", name: name as (typeof NAMED)[number] };
     else {
       const text = e.key === YEN ? "\\" : e.key;
-      if (text in SYMBOLS) key = { kind: "symbol", text };
+      if (isSymbol(text)) key = { kind: "symbol", text };
       else if (!/^[\x20-\x7e]$/.test(e.key)) {
         // 押した文字が ASCII でないとき（ドイツ語の配列の ü など）は、US 配列での位置から決める。ASCII の
         // 記号を打つキー（JIS 配列の @ など）は、位置では決めない（別のキーとして記録してしまうため）

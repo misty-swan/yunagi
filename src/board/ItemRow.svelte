@@ -118,6 +118,13 @@
     onFocus({ key: row.key, field: "text", offset: at });
   }
 
+  /** 完了・解消を切り替える。障害を解消して解消メモの欄が開くときは、Vim では挿入モードとして開く（入力欄のため）。 */
+  function toggleRow() {
+    const target = model.toggle(row.key);
+    if (target?.field === "memo" && prefs.vimMode) model.insert = true;
+    onFocus(target);
+  }
+
   /** ダブルクリックで編集する（Vim モードの項目のクリックは選ぶだけ。操作仕様書 5章）。 */
   function onDblClick(e: MouseEvent) {
     if (!vimNormal || (e.target as Element).closest(".chk, .memo, .carried-to, .from-note") !== null) return;
@@ -129,9 +136,7 @@
    * ノーマルモードのキー。操作に当たれば `true`。続きのキーを待つ `g`・`d` は `model.vimPending` に持つ
    * （続きでないキーが来たら捨てる）。Mod・Alt との組み合わせはここで扱わない（標準のショートカット）。
    */
-  function onVimKey(e: KeyboardEvent): boolean {
-    const pending = model.vimPending;
-    model.vimPending = null;
+  function onVimKey(e: KeyboardEvent, pending: "g" | "d" | null): boolean {
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     switch (e.key) {
       case "j":
@@ -168,7 +173,7 @@
         return true;
       case "x":
         if (model.refuseEdit(row.key)) return true;
-        onFocus(model.toggle(row.key));
+        toggleRow();
         return true;
       case "J":
       case "K":
@@ -250,6 +255,9 @@
       if (lock !== null) model.refuseEdit(row.key);
       return;
     }
+    // Vim：続きのキー待ち（g・d）は、次のキー（修飾キーだけの押下は除く）で必ず捨てる。ほかの操作を挟んだら続きにならない
+    const pending = model.vimPending;
+    if (!["Shift", "Control", "Alt", "Meta", "AltGraph"].includes(e.key)) model.vimPending = null;
     // 貼り付け・切り取りのキー（クリップボードのイベントが届かない WebView でも知らせる）
     if (lock !== null && (mac ? e.metaKey : e.ctrlKey) && !e.altKey && (e.code === "KeyV" || e.code === "KeyX")) {
       e.preventDefault();
@@ -280,7 +288,7 @@
         return;
       case "toggle":
         e.preventDefault();
-        onFocus(model.toggle(row.key));
+        toggleRow();
         return;
       case "delete":
         e.preventDefault();
@@ -301,7 +309,7 @@
     }
     // Vim のノーマルモード：文字のキーは Vim の操作（本文は入力欄でないので、文字は入らない）
     if (vimNormal) {
-      if (onVimKey(e)) {
+      if (onVimKey(e, pending)) {
         e.preventDefault();
         return;
       }
@@ -382,6 +390,8 @@
       e.preventDefault();
       e.stopPropagation();
       model.closeMemo();
+      // Vim では、解消メモを書き終えたらノーマルモードに戻る
+      if (prefs.vimMode) model.insert = false;
       onFocus({ key: row.key, field: "text", offset: "end" });
     }
   }

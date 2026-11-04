@@ -25,16 +25,18 @@ export function isMacPlatform(nav: Pick<Navigator, "userAgent"> = navigator): bo
   return /Mac|iPhone|iPad/.test(nav.userAgent);
 }
 
-let cache: { shortcuts: unknown; vim: boolean; mac: boolean; map: Keymap } | null = null;
+/** `mac` ごとの、求めた割当（呼び出し側が違う `mac` で呼んでも、互いに追い出さない）。 */
+const cache = new Map<boolean, { shortcuts: unknown; vim: boolean; map: Keymap }>();
 
 /** いまの割当（設定を当てたもの）。同じ設定と OS で続けて呼ぶ間は、求め直さない。 */
 export function currentKeymap(mac: boolean): Keymap {
   const shortcuts = prefs.shortcuts;
   const vim = prefs.vimMode;
-  if (cache === null || cache.shortcuts !== shortcuts || cache.vim !== vim || cache.mac !== mac) {
-    cache = { shortcuts, vim, mac, map: resolveKeymap(shortcuts, vim, mac) };
-  }
-  return cache.map;
+  const hit = cache.get(mac);
+  if (hit !== undefined && hit.shortcuts === shortcuts && hit.vim === vim) return hit.map;
+  const map = resolveKeymap(shortcuts, vim, mac);
+  cache.set(mac, { shortcuts, vim, map });
+  return map;
 }
 
 /** 操作の割当の表記（`Ctrl+Shift+L`・`⇧⌘L`）。使えない割当のときは空。 */

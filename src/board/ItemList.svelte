@@ -43,9 +43,10 @@
   const headingId = $props.id();
 
   function add() {
-    // Vim モードでは、足した行にそのまま書き始める（挿入モード）
-    if (prefs.vimMode) model.insert = true;
-    onFocus(model.add(kind, null));
+    const target = model.add(kind, null);
+    // Vim モードでは、足した行にそのまま書き始める（挿入モード）。足せなかったときは入らない
+    if (target !== null && prefs.vimMode) model.insert = true;
+    onFocus(target);
   }
 
   /** 領域の先頭（-1）・末尾（+1）の行へ移る（Vim の gg・G）。 */

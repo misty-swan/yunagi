@@ -140,7 +140,10 @@
   /** フォーカスが一覧の外（サイドバー・振り返りの欄など）へ移ったら、挿入モードを終える（戻ったとき、項目を選ぶだけにするため）。 */
   function onFocusOut(e: FocusEvent) {
     const next = e.relatedTarget;
-    if (next instanceof Element && next.closest(".r-todo, .r-blk") === null) {
+    // フォーカスの行き先が無いとき：窓が前面から外れた（Alt+Tab など）なら、挿入モードを続ける。窓の中の
+    // フォーカスできない所を押したのなら、終える
+    const outside = next instanceof Element ? next.closest(".r-todo, .r-blk") === null : next === null && document.hasFocus();
+    if (outside) {
       model.insert = false;
       model.vimPending = null;
     }

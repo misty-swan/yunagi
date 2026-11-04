@@ -527,6 +527,32 @@ test("Vim モードで、持ち越し済みの項目と取りやめた TODO で�
   expect(rowsOf(".r-todo")).toEqual(["持ち越した", "", "やめた"]);
 });
 
+test("Vim のノーマルモード：d と d の間に別の操作を挟むと、dd にならない。別の行へ移っても同じ", async () => {
+  prefs.vimMode = true;
+  await start({
+    boards: {
+      [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一", { sortKey: "a0" })), bi(item(B, "二", { sortKey: "a1" }))] },
+    },
+  });
+  const rows = () => $$(".r-todo .item");
+  rows()[0].focus();
+  // d のあとに Mod+Enter（完了の切替）を挟むと、次の d は続きにならない
+  vimKey(rows()[0], "d");
+  vimKey(rows()[0], "Enter", { ctrlKey: true });
+  vimKey(rows()[0], "d");
+  expect(rows().length).toBe(2);
+  // 別の行へ移ると、d は続きにならない
+  rows()[1].focus();
+  vimKey(rows()[1], "d");
+  expect(rows().length).toBe(2);
+  rows()[0].focus();
+  vimKey(rows()[0], "d");
+  expect(rows().length).toBe(2);
+  // 続けて押せば dd
+  vimKey(rows()[0], "d");
+  expect(rows().length).toBe(1);
+});
+
 test("Vim の挿入モードは、フォーカスが一覧の外へ移ると終わる。戻ったときは項目を選ぶだけ", async () => {
   prefs.vimMode = true;
   await start({ boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))] } } });

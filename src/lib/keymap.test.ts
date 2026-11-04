@@ -140,10 +140,19 @@ test("割り当てられないキー", () => {
 });
 
 test("Alt だけの名前のキーは上下の矢印だけ。位置の代わりの照合は、押したキーが別の記号を打つときは使わない", () => {
-  for (const s of ["Alt+Backspace", "Alt+ArrowLeft", "Alt+Enter"]) {
-    expect(problemOf(parse(s), false, false), s).toBe("alt_edit_key");
+  for (const s of ["Alt+Backspace", "Alt+ArrowLeft", "Alt+Enter", "Mod+ArrowLeft", "Mod+ArrowUp", "Mod+Delete", "Mod+Space", "Mod+Tab"]) {
+    expect(problemOf(parse(s), false, false), s).toBe("edit_key");
   }
   expect(problemOf(parse("Mod+Backspace"), false, false)).toBeNull();
+  expect(problemOf(parse("Mod+Enter"), false, false)).toBeNull();
+  // オブジェクトが元から持つ名前は、記号のキーでない
+  expect(parseBinding("Mod+toString")).toBeNull();
+  expect(parseBinding("Mod+constructor")).toBeNull();
+  // 押した文字が変わらない配列で、そのキー自身に Option・Shift を重ねたものは、記号の割当に当たらない
+  expect(matches(key({ code: "BracketLeft", key: "[", metaKey: true, altKey: true }), true, parse("Mod+["))).toBe(false);
+  expect(matches(key({ code: "BracketLeft", key: "[", metaKey: true, shiftKey: true }), true, parse("Mod+["))).toBe(false);
+  // 別のキーで打つ記号（ドイツ語の Option+5 で [）は動く
+  expect(matches(key({ code: "Digit5", key: "[", metaKey: true, altKey: true }), true, parse("Mod+["))).toBe(true);
   // フランス語の配列：US 配列の , の位置は ; を打つ。Mod+; はその割当に、Mod+, には当たらない
   const azerty = key({ code: "Comma", key: ";", ctrlKey: true });
   expect(matches(azerty, false, parse("Mod+;"))).toBe(true);

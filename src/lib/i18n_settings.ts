@@ -188,7 +188,7 @@ const ja: SettingsMessages = {
     problems: {
       no_modifier: "Mod か Alt と組み合わせたキーにしてください（文字の入力と区別できないため）。",
       mac_option_alone: "macOS の Option は文字を打つキーなので、⌘ と組み合わせてください。",
-      alt_edit_key: "Alt だけで使えるのは上下の矢印だけです（Backspace や左右の矢印は、文字の編集や戻る・進むに使うため）。",
+      edit_key: "このキーは文字の編集や移動に使うので割り当てられません（Mod と組み合わせられるのは Enter と Backspace、Alt だけで使えるのは上下の矢印だけです）。",
       alt_gr: "Windows・Linux では Ctrl と Alt を同時に使えません（AltGr で文字を打つ配列があるため）。",
       shifted_symbol: "記号のキーには Shift を付けられません（配列によって打つ文字が変わるため）。",
       mac_option_symbol: "記号のキーには Option を付けられません（配列によって打つ文字が変わるため）。",
@@ -344,7 +344,7 @@ const en: SettingsMessages = {
     problems: {
       no_modifier: "Use a key combined with Mod or Alt (otherwise it can't be told from typing).",
       mac_option_alone: "Option types characters on macOS. Combine the key with ⌘.",
-      alt_edit_key: "With Alt alone, only the up and down arrows are allowed (Backspace and left/right arrows are used for editing and back/forward).",
+      edit_key: "This key is used for editing and moving the caret, so it can't be assigned (with Mod only Enter and Backspace are allowed; with Alt alone only the up and down arrows).",
       alt_gr: "On Windows and Linux, Ctrl and Alt can't be used together (some layouts type characters with AltGr).",
       shifted_symbol: "A symbol key can't be combined with Shift (the character depends on the layout).",
       mac_option_symbol: "A symbol key can't be combined with Option (the character depends on the layout).",
