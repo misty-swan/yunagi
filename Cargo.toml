@@ -39,6 +39,10 @@ tauri-build = { version = "=2.7.4", features = [] }
 # フォルダを選ぶ OS のダイアログ（設定画面と起動時の画面。docs/design/03-ui-spec.md 7章・10.1）。
 # 画面側の @tauri-apps/plugin-dialog（package.json）と版をそろえる
 tauri-plugin-dialog = "=2.8.4"
+# OS 全体のショートカット（Yunagi を前面に呼び出す。docs/design/04-interaction-spec.md 1章・2章、
+# src-tauri/src/global_shortcut.rs）。登録は Rust 側だけで行い、画面側のパッケージは入れない。
+# 3.x は alpha なので 2.x の最新に固定する
+tauri-plugin-global-shortcut = "=2.4.1"
 # SQLite（docs/design/01-architecture.md 3章）。bundled で SQLite 本体（FTS5 を含む）を
 # 同梱してビルドし、OS ごとの SQLite の版の違いに左右されないようにする。
 # backup はマイグレーション前のバックアップと失敗時の復元に使う（SQLite のオンラインバックアップ）

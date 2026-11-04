@@ -1514,6 +1514,35 @@ pub struct ImeStatus {
     pub method: Option<ImeMethod>,
 }
 
+/// OS 全体のショートカット（Yunagi を前面に呼び出す）の、いまの登録の状態（`set_global_shortcut`）。
+/// 設定画面が、登録できなかった理由の表示に使う（操作仕様書 1章「割当の変更」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum GlobalShortcutState {
+    /// 登録していない（割当が使えない状態のとき）。
+    Off,
+    /// OS に登録した。
+    Registered,
+    /// ほかのアプリが同じキーを使っていて、登録できなかった。
+    Taken,
+    /// そのほかの理由で OS に登録できなかった（macOS は、ほかのアプリが使っている場合もここに入る）。
+    Failed,
+    /// この環境では OS 全体のショートカットの部品が使えない（部品を起動できなかった）。
+    Unavailable,
+}
+
+/// OS 全体のショートカットの登録の結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalShortcutStatus {
+    pub state: GlobalShortcutState,
+    /// Linux の Wayland のセッションか。Wayland では、登録できたように見えても効かないことがあり
+    /// （登録の成否を OS から知る手段が無い）、設定画面は常に案内を出す（アーキテクチャ設計書 7章）。
+    pub wayland: bool,
+}
+
 // ---- エラー ----
 
 /// コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める

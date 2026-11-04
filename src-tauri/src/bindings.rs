@@ -96,6 +96,8 @@ fn render() -> String {
         decl::<DataDirChanged>(&cfg),
         decl::<ImeMethod>(&cfg),
         decl::<ImeStatus>(&cfg),
+        decl::<GlobalShortcutState>(&cfg),
+        decl::<GlobalShortcutStatus>(&cfg),
         decl::<CommandError>(&cfg),
         decl::<InvalidReason>(&cfg),
         decl::<RejectReason>(&cfg),

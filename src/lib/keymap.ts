@@ -33,14 +33,21 @@ export type BoardAssigned =
   | "regionReflection"
   | "template";
 
+/**
+ * OS 全体の操作：Yunagi を前面に呼び出す。OS に登録して受ける（画面のキー処理では受けない。
+ * src-tauri/src/global_shortcut.rs、`src/lib/global_shortcut.svelte.ts`）。
+ */
+export type GlobalAction = "bringToFront";
+
 /** 割当を変えられる操作。 */
-export type ActionId = ShellAction | NoteAction | BoardAssigned;
+export type ActionId = GlobalAction | ShellAction | NoteAction | BoardAssigned;
 
 /**
- * 操作が効く範囲：`common` はアプリ内のすべての画面、`board` は整理モード（一覧と振り返り欄）、
- * `note` はノートモード。`common` はどれとも重なり、`board` と `note` は重ならない。
+ * 操作が効く範囲：`global` は OS 全体（アプリが前面になくても）、`common` はアプリ内のすべての画面、
+ * `board` は整理モード（一覧と振り返り欄）、`note` はノートモード。`global` と `common` はどれとも重なり
+ * （OS に登録したキーは、Yunagi が前面にあるときも OS が先に受けるため）、`board` と `note` は重ならない。
  */
-export type Scope = "common" | "board" | "note";
+export type Scope = "global" | "common" | "board" | "note";
 
 interface ActionDef {
   id: ActionId;
@@ -51,6 +58,7 @@ interface ActionDef {
 
 /** 割当を変えられる操作と初期割当（設定画面に出す順）。 */
 export const ACTIONS: readonly ActionDef[] = [
+  { id: "bringToFront", scope: "global", initial: "Mod+Shift+D" },
   { id: "toggleMode", scope: "common", initial: "Mod+J" },
   { id: "prevDay", scope: "common", initial: "Mod+[" },
   { id: "nextDay", scope: "common", initial: "Mod+]" },
@@ -81,7 +89,7 @@ export function idsOf<T extends ActionId>(scope: Scope): readonly T[] {
 
 /** 操作の効く範囲どうしが重なるか。 */
 function overlaps(a: Scope, b: Scope): boolean {
-  return a === "common" || b === "common" || a === b;
+  return a === "global" || b === "global" || a === "common" || b === "common" || a === b;
 }
 
 /**
@@ -199,16 +207,18 @@ export type BindingProblem =
   /** macOS の Option と記号のキー（打つ文字が配列で変わる）。 */
   | "mac_option_symbol"
   /** ほかの操作が使うキー（取り消し・コピーなど）。 */
-  | "reserved";
+  | "reserved"
+  /** OS 全体の操作に使えるのは、英字か数字のキーだけ（OS への登録はキーの位置で行うため、記号や名前のキーは配列や OS で扱いが違う）。 */
+  | "global_key";
 
 /**
  * 設定とは別に決まっている、割り当てられないキー（そろえた形）。
  * - Mod+Z・Shift・Y：取り消し・やり直し（エディタの履歴と整理モードのリストの履歴。割当を変えられない）
  * - Mod+C・V・X・A：コピー・貼り付け・切り取り・全選択
- * - Mod+Shift+D（Yunagi を前面に呼び出す）と Mod+Shift+A（依頼文の書き出し）：まだ作っていない操作。
- *   作るときに割当を変えられる操作（`ACTIONS`）へ移し、ここから外す
+ * - Mod+Shift+A（依頼文の書き出し）：まだ作っていない操作。作るときに割当を変えられる操作（`ACTIONS`）へ
+ *   移し、ここから外す
  */
-const RESERVED = ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Shift+D", "Mod+Shift+A"];
+const RESERVED = ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Shift+A"];
 
 /** Windows・Linux で、Vim モードの Esc と重なるキー（Ctrl+[）。 */
 const VIM_ESC = "Mod+[";
@@ -216,9 +226,13 @@ const VIM_ESC = "Mod+[";
 /** Windows・Linux で、Vim モードのやり直し（`<C-r>`。操作仕様書 4.2）と重なるキー（Ctrl+R）。 */
 const VIM_REDO = "Mod+R";
 
-/** 割り当てられないキーか。割り当てられれば `null`。 */
-export function problemOf(b: Binding, vim: boolean, mac: boolean): BindingProblem | null {
+/**
+ * 割り当てられないキーか。割り当てられれば `null`。`id` は割り当てる操作（OS 全体の操作だけ、使えるキーが
+ * 狭い。渡さなければ、画面内の操作として検査する）。
+ */
+export function problemOf(b: Binding, vim: boolean, mac: boolean, id?: ActionId): BindingProblem | null {
   if (!b.mod && !b.alt) return "no_modifier";
+  if (id !== undefined && SCOPE_OF.get(id) === "global" && b.key.kind !== "code") return "global_key";
   if (!mac && b.mod && b.alt) return "alt_gr";
   if (b.key.kind === "symbol") {
     if (b.shift) return "shifted_symbol";
@@ -283,7 +297,7 @@ export function resolveKeymap(shortcuts: Readonly<Record<string, string>>, vim: 
       rest.push(a);
       continue;
     }
-    if (parsed === null || problemOf(parsed, vim, mac) !== null) {
+    if (parsed === null || problemOf(parsed, vim, mac, a.id) !== null) {
       out.set(a.id, { binding: null, initial, changed: false, status: "ignored" });
       rest.push(a);
       continue;

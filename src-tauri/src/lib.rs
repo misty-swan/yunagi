@@ -12,6 +12,7 @@ pub mod app_core;
 #[cfg(test)]
 mod bindings;
 pub mod commands;
+pub mod global_shortcut;
 pub mod ime;
 mod screen;
 pub mod types;
@@ -67,6 +68,7 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::ime_status,
         commands::ime_leave_insert,
         commands::ime_enter_insert,
+        commands::set_global_shortcut,
         commands::export_markdown,
         commands::get_settings,
         commands::save_settings,
@@ -86,6 +88,9 @@ pub fn manage_core<R: Runtime>(app: &AppHandle<R>) -> Arc<AppCore> {
     app.manage(Arc::clone(&core));
     // IME の切替（操作仕様書 4.4）。データベースとは関係しないので、コアとは別に持つ
     app.manage(ime::ImeWorker::system(app.clone()));
+    // OS 全体のショートカットの登録（操作仕様書 1章）。プラグインは `run` で入れる（窓の無い試験では
+    // 入れず、登録は `Unavailable` を返す）
+    app.manage(Arc::new(global_shortcut::GlobalShortcutController::new()));
     core
 }
 
@@ -109,6 +114,8 @@ pub fn run() {
         .invoke_handler(invoke_handler())
         .setup(|app| {
             manage_core(app.handle()).start();
+            // 入れられなくても起動する。OS 全体のショートカットだけが使えなくなる
+            global_shortcut::install(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

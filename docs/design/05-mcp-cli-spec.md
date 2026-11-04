@@ -100,7 +100,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 
 | CLI | 内容 |
 | --- | --- |
-| `yunagi show [--note]` | アプリを前面に表示する（Wayland 環境でのショートカット割当にも使う） |
+| `yunagi show [--note]` | アプリを前面に表示する（Wayland 環境でのショートカット割当にも使う。操作仕様書 1章「OS 全体の操作」、ビルド・配布手順書 4.1 の案内がこのコマンドを前提にしている。まだ作っていない） |
 | `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない |
 | `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータも削除 |
 | `yunagi --version` | 版を表示する |

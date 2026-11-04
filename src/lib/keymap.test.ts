@@ -42,6 +42,7 @@ test("表記：macOS は ⌥⇧⌘ の記号、Windows・Linux は Ctrl+Alt+Shif
 test("初期割当は操作仕様書 2章のとおり。Vim モードの Windows・Linux だけ前日・翌日が Alt+[ / Alt+]", () => {
   const initial = Object.fromEntries(ACTIONS.map((a) => [a.id, a.initial]));
   expect(initial).toEqual({
+    bringToFront: "Mod+Shift+D",
     toggleMode: "Mod+J",
     prevDay: "Mod+[",
     nextDay: "Mod+]",
@@ -128,9 +129,11 @@ test("割り当てられないキー", () => {
   expect(p("Alt+L", false, true)).toBe("mac_option_alone");
   expect(p("Alt+L")).toBeNull();
   expect(p("Alt+ArrowUp", false, true)).toBeNull();
-  for (const s of ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Shift+D", "Mod+Shift+A"]) {
+  for (const s of ["Mod+Z", "Mod+Shift+Z", "Mod+C", "Mod+V", "Mod+X", "Mod+A", "Mod+Shift+A"]) {
     expect(p(s), s).toBe("reserved");
   }
+  // Mod+Shift+D は「Yunagi を前面に呼び出す」の初期割当になったので、予約ではない
+  expect(p("Mod+Shift+D")).toBeNull();
   expect(p("Mod+Y")).toBe("reserved");
   expect(p("Mod+Y", false, true)).toBeNull();
   // Ctrl+[ は、Vim モードの Windows・Linux では Esc と重なる
@@ -177,6 +180,41 @@ test("同じキーを割り当てた操作は、重なる範囲の中でだけ�
   expect(conflictOf("palette", parse("Mod+K"), map)).toBeNull();
   // 整理の中
   expect(conflictOf("delete", parse("Mod+Enter"), map)).toBe("toggle");
+});
+
+test("OS 全体の操作は、すべての範囲と重なる。使えるキーは、修飾キーの付いた英字・数字だけ", () => {
+  const map = resolveKeymap({}, false, false);
+  // 共通・整理・ノートのどの操作も、OS 全体のキーとは同じにできない（OS が先に受けるため）
+  expect(conflictOf("palette", parse("Mod+Shift+D"), map)).toBe("bringToFront");
+  expect(conflictOf("toTodo", parse("Mod+Shift+D"), map)).toBe("bringToFront");
+  expect(conflictOf("toggle", parse("Mod+Shift+D"), map)).toBe("bringToFront");
+  // 逆に、OS 全体の操作を、整理・ノートの操作が使うキーにはできない
+  expect(conflictOf("bringToFront", parse("Mod+Enter"), map)).toBe("toggle");
+  expect(conflictOf("bringToFront", parse("Mod+Shift+B"), map)).toBe("toBlocker");
+  expect(conflictOf("bringToFront", parse("Mod+Shift+D"), map)).toBeNull();
+
+  const g = (s: string, mac = false) => problemOf(parse(s), false, mac, "bringToFront");
+  expect(g("Mod+Shift+D")).toBeNull();
+  expect(g("Alt+7")).toBeNull();
+  expect(g("Mod+[")).toBe("global_key");
+  expect(g("Mod+Enter")).toBe("global_key");
+  expect(g("Alt+ArrowUp")).toBe("global_key");
+  expect(g("D")).toBe("no_modifier");
+  expect(g("Mod+Alt+D")).toBe("alt_gr");
+  expect(g("Mod+Shift+Z")).toBe("reserved");
+  // 画面内の操作には、同じキーが使える
+  expect(problemOf(parse("Alt+ArrowUp"), false, false, "moveUp")).toBeNull();
+  expect(problemOf(parse("Mod+["), false, false, "palette")).toBeNull();
+});
+
+test("OS 全体の操作の割当が OS 全体に使えないキーなら、初期割当にする", () => {
+  const map = resolveKeymap({ bringToFront: "Mod+[" }, false, false);
+  expect(map.get("bringToFront")).toMatchObject({ status: "ignored", changed: false });
+  expect(format(map.get("bringToFront")!.binding!)).toBe("Mod+Shift+D");
+  // 変えた割当は、初期割当と同じキーを使う画面内の操作に勝つ
+  const taken = resolveKeymap({ archive: "Mod+Shift+D" }, false, false);
+  expect(taken.get("archive")!.status).toBe("ok");
+  expect(taken.get("bringToFront")).toMatchObject({ status: "lost", takenBy: "archive", binding: null });
 });
 
 test("初期割当と同じ割当は持たない。持っていれば消す", () => {

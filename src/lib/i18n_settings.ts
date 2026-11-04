@@ -61,6 +61,8 @@ export interface SettingsMessages {
     lost: (action: string) => string;
     /** 設定の割当が使えないキーなので、初期割当にしている。 */
     ignored: string;
+    /** OS 全体のショートカット（Yunagi を前面に呼び出す）を OS に登録できなかった理由と、Wayland の案内。 */
+    global: { taken: string; failed: string; unavailable: string; wayland: string };
     vim: string;
     vimNote: string;
     /** Windows・Linux の Vim モードの割当の注意。 */
@@ -161,8 +163,9 @@ const ja: SettingsMessages = {
     shortcuts: "ショートカット割当",
     shortcutsNote:
       "「変更」を押してから、割り当てるキーを押します。Mod は macOS では ⌘、Windows・Linux では Ctrl です。取り消し・やり直し、コピー・貼り付けなどのキーは変えられません。",
-    scopes: { common: "共通", board: "整理モード", note: "ノートモード" },
+    scopes: { global: "OS 全体", common: "共通", board: "整理モード", note: "ノートモード" },
     actions: {
+      bringToFront: "Yunagi を前面に呼び出す",
       toggleMode: "ノートモード ⇄ 整理モード",
       prevDay: "前日へ移動（ふりかえりでは前の週）",
       nextDay: "翌日へ移動（ふりかえりでは次の週）",
@@ -195,11 +198,19 @@ const ja: SettingsMessages = {
       shifted_symbol: "記号のキーには Shift を付けられません（配列によって打つ文字が変わるため）。",
       mac_option_symbol: "記号のキーには Option を付けられません（配列によって打つ文字が変わるため）。",
       reserved: "このキーはほかの操作が使うので、割り当てられません。",
+      global_key: "OS 全体のショートカットには、英字か数字のキーだけ使えます（記号や Enter などは、配列や OS によって扱いが違うため）。",
       unsupported: "このキーは割り当てられません。",
     },
     conflict: (action) => `「${action}」と同じキーです。先にそちらを変えてください。`,
     lost: (action) => `「${action}」に割り当てたキーと重なっているため、いまは使えません。`,
     ignored: "設定の割当が使えないキーなので、初期割当にしています。",
+    global: {
+      taken: "ほかのアプリがこのキーを使っているため、OS に登録できていません。別のキーに変えるか、ほかのアプリのキーを変えてください。",
+      failed: "OS に登録できませんでした（ほかのアプリが使っているキーかもしれません）。別のキーに変えてみてください。",
+      unavailable: "この環境では、OS 全体のショートカットを使えません。",
+      wayland:
+        "Wayland では、このショートカットが効かないことがあります。効かないときは、デスクトップ環境のキーボード設定で、コマンド yunagi show を好きなキーに割り当ててください。",
+    },
     vim: "Vim モード",
     vimNote:
       "ノートと振り返りのエディタ、整理モードの一覧を Vim のキーで操作します。Mod を使う標準のショートカットは、そのまま使えます。",
@@ -319,8 +330,9 @@ const en: SettingsMessages = {
     shortcuts: "Keyboard shortcuts",
     shortcutsNote:
       "Press Change, then press the key to assign. Mod is ⌘ on macOS and Ctrl on Windows and Linux. Undo, redo, copy, paste and similar keys can't be changed.",
-    scopes: { common: "Everywhere", board: "Board mode", note: "Note mode" },
+    scopes: { global: "Whole OS", common: "Everywhere", board: "Board mode", note: "Note mode" },
     actions: {
+      bringToFront: "Bring Yunagi to the front",
       toggleMode: "Switch Note ⇄ Board mode",
       prevDay: "Previous day (previous week in Archive)",
       nextDay: "Next day (next week in Archive)",
@@ -353,11 +365,19 @@ const en: SettingsMessages = {
       shifted_symbol: "A symbol key can't be combined with Shift (the character depends on the layout).",
       mac_option_symbol: "A symbol key can't be combined with Option (the character depends on the layout).",
       reserved: "This key is used by another operation and can't be assigned.",
+      global_key: "A whole-OS shortcut can only use a letter or a digit key (symbol and named keys behave differently by layout and OS).",
       unsupported: "This key can't be assigned.",
     },
     conflict: (action) => `That key is already used by "${action}". Change that one first.`,
     lost: (action) => `Disabled for now: the key is assigned to "${action}".`,
     ignored: "The saved key can't be used, so the default is in effect.",
+    global: {
+      taken: "Another app is using this key, so it couldn't be registered with the OS. Choose another key, or change the key in the other app.",
+      failed: "Couldn't register the key with the OS (another app may be using it). Try another key.",
+      unavailable: "Whole-OS shortcuts aren't available in this environment.",
+      wayland:
+        "On Wayland this shortcut may not work. If it doesn't, assign the command yunagi show to a key of your choice in your desktop environment's keyboard settings.",
+    },
     vim: "Vim mode",
     vimNote:
       "Operate the Note and Reflection editors and the Board lists with Vim keys. The standard Mod shortcuts keep working.",

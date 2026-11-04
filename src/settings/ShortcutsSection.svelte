@@ -2,7 +2,8 @@
   // 設定の「操作」区分の、ショートカット割当（操作仕様書 1章・2章、画面設計書 7章）。
   // 操作を効く範囲ごとに並べ、割当のボタンを押してから、割り当てるキーを押す。割当を持たない操作（初期割当の
   // まま）も同じ並びに出す。変えたものには「初期値に戻す」を出す。
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { globalShortcut } from "../lib/global_shortcut.svelte";
   import { t } from "../lib/i18n";
   import { currentKeymap, keyLabel } from "../lib/keys";
   import { ACTIONS, type ActionId, type Scope } from "../lib/keymap";
@@ -12,9 +13,12 @@
   let { editor, mac }: { editor: ShortcutEditor; mac: boolean } = $props();
 
   const o = $derived(t().settings.operation);
-  const scopes: Scope[] = ["common", "board", "note"];
+  const scopes: Scope[] = ["global", "common", "board", "note"];
   const keymap = $derived(currentKeymap(mac));
   const changedAny = $derived(Object.keys(prefs.shortcuts).length > 0);
+
+  // 設定を開いたとき、OS への登録に失敗していたら頼み直す（同じ割当で成功済みなら何もしない）
+  onMount(() => void globalShortcut.sync(mac));
 
   async function start(id: ActionId) {
     editor.start(id);
@@ -34,13 +38,23 @@
     return "conflict" in msg ? o.conflict(o.actions[msg.conflict]) : o.problems[msg.problem];
   }
 
-  /** 保存してある割当が使えないとき・初期割当が使えないときの注意。 */
+  /** 保存してある割当が使えないとき・初期割当が使えないときの注意。OS 全体の操作は、OS への登録の状態も。 */
   function warning(id: ActionId): string | null {
     const r = keymap.get(id);
     if (r === undefined) return null;
     if (r.status === "lost" && r.takenBy !== undefined) return o.lost(o.actions[r.takenBy]);
-    if (r.status === "ignored") return o.ignored;
-    return null;
+    const own = r.status === "ignored" ? o.ignored : null;
+    return id === "bringToFront" ? [own, registration()].filter(Boolean).join(" ") || null : own;
+  }
+
+  /** OS 全体の操作を OS に登録できなかった理由と、Wayland の案内（登録できても、Wayland では出す）。 */
+  function registration(): string | null {
+    const s = globalShortcut.status;
+    // 登録していない（割当が使えない）ときは、案内も出さない
+    if (!s || s.state === "off") return null;
+    const reason =
+      s.state === "taken" ? o.global.taken : s.state === "failed" ? o.global.failed : s.state === "unavailable" ? o.global.unavailable : null;
+    return [reason, s.wayland ? o.global.wayland : null].filter(Boolean).join(" ") || null;
   }
 </script>
 
