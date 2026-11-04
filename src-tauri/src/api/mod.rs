@@ -359,7 +359,16 @@ fn serve(shared: &Shared, id: u64, stream: &Stream) {
     }
     let line = match wire::read_line(&mut reader, MAX_REQUEST_LINE) {
         Ok(Some(line)) => line,
-        Ok(None) | Err(LineError::Io(_) | LineError::Truncated) => return,
+        // 依頼が来る前の、時間切れ・止める合図・切断。クライアントが後から依頼を送って接続が切れた
+        // ように見えると `result_unknown`（反映されたか分からない）になってしまうので、何も反映して
+        // いないことを伝える `busy`（送り直してよい）を 1 行返して閉じる。相手が閉じていれば書けない
+        // だけ
+        Ok(None) | Err(LineError::Io(_) | LineError::Truncated) => {
+            return reply(
+                stream,
+                &wire::app_error_line(&Value::Null, &dispatch::busy_error()),
+            );
+        }
         Err(LineError::TooLong) => {
             return reply(
                 stream,

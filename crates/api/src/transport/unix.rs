@@ -210,9 +210,10 @@ impl Write for &Stream {
 pub struct Interrupter(UnixStream);
 
 impl Interrupter {
-    /// 接続を閉じる。読み待ちのスレッドは、読み終わり（EOF）で起きる。
+    /// 読み待ちを終わらせる。読み待ちのスレッドは、読み終わり（EOF）で起きる。読む側だけを閉じる
+    /// ので、起きたスレッドは、依頼を受け取れなかったことを伝える応答を書ける。
     pub fn interrupt(&self) {
-        let _ = self.0.shutdown(Shutdown::Both);
+        let _ = self.0.shutdown(Shutdown::Read);
     }
 }
 

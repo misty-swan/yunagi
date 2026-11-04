@@ -81,7 +81,19 @@ fn run(core: &AppCore, client: Option<&str>, request: &Request) -> Result<Value,
     let call = Call::parse(&request.method, params)?;
     // 呼び出し元のクライアントを求める（初めての識別子は `read` だけで登録し、最後の接続の時刻を更新する）
     let client_id = core
-        .api_read(|conn| agent::client_for(conn, client, now()))?
+        .api_read(|conn| {
+            let id = agent::client_for(conn, client, now())?;
+            // 時刻の更新は、できたらやる（ディスクがいっぱいなどで書けなくても、読み取りは断らない）
+            if let Some(id) = id
+                && let Err(e) = agent::touch_client(conn, id, now())
+            {
+                eprintln!(
+                    "yunagi: could not record the last connection of a client: {}",
+                    ErrorChain(&e)
+                );
+            }
+            Ok::<_, StorageError>(id)
+        })?
         .map_err(storage_failure)?
         .ok_or_else(|| Failure::Params("client is not a valid identifier".into()))?;
     call.execute(core, client_id)

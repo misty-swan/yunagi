@@ -800,6 +800,11 @@ impl AppCore {
         if matches!(*slot, ApiSlot::Running(_)) {
             return;
         }
+        // 開き終えてから始めるまでの間に閉じられていたら（アプリの終了）、始めない。ロックを離した
+        // 後で待ち受けが始まらないようにする（`close` は、待ち受けを止めてからデータベースを閉じる）
+        if !matches!(*lock(&self.db), Slot::Open(_)) {
+            return;
+        }
         *slot = match data_dir::default_dir()
             .map_err(|e| ApiUnavailable::other(&e))
             .and_then(|dir| ApiServer::start(self, &dir))
