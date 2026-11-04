@@ -2,7 +2,8 @@
 //!
 //! ドメイン層の書き込みの関数は、エージェント・CLI から呼ばれるとき [`Agent`] を受け取り、
 //! はじめに [`require_scope`] で権限を確かめる（アーキテクチャ設計書 4章 5。どの経路でも
-//! 同じ判定を通す）。画面の状態（保存の失敗中か、利用者が入力中か。アーキテクチャ設計書 4.1）は
+//! 同じ判定を通す）。読み取り（`get_board`・`open_board`・`get_note`）も同じく、呼び出し元の
+//! クライアントを受け取り、はじめに `read` を確かめる（[`ReadError`]。MCP・CLI 仕様書 2章）。画面の状態（保存の失敗中か、利用者が入力中か。アーキテクチャ設計書 4.1）は
 //! [`UiState`] で受け取る。
 
 use rusqlite::Connection;
@@ -146,6 +147,53 @@ where
             required_scope: scope,
         }
         .into())
+    }
+}
+
+/// エージェント・CLI の読み取りが失敗した理由（引数の誤りや対象なしの無い読み取り用）。
+/// 読み取りは画面の保存の失敗中でも受け付けるので、`storage_unavailable` は無い
+/// （MCP・CLI 仕様書 4.3）。
+#[derive(Debug)]
+pub enum ReadError {
+    /// `read` スコープが許可されていない（`permission_denied`）。何も読んでいない。
+    PermissionDenied(PermissionDenied),
+    /// 読み取りに失敗した。
+    Storage(StorageError),
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionDenied(e) => e.fmt(f),
+            Self::Storage(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PermissionDenied(_) => None,
+            Self::Storage(e) => Some(e),
+        }
+    }
+}
+
+impl From<PermissionDenied> for ReadError {
+    fn from(e: PermissionDenied) -> Self {
+        Self::PermissionDenied(e)
+    }
+}
+
+impl From<StorageError> for ReadError {
+    fn from(e: StorageError) -> Self {
+        Self::Storage(e)
+    }
+}
+
+impl From<rusqlite::Error> for ReadError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Storage(e.into())
     }
 }
 

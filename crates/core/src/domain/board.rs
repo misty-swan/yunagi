@@ -14,14 +14,16 @@ use std::ops::{Add, AddAssign};
 
 use rusqlite::Connection;
 
+use super::agent::{self, ReadError};
 use super::day;
 use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
 use super::note_send;
+use crate::storage::table::agent_client::{self, Scope};
+use crate::storage::table::change_log;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
-use crate::storage::table::{agent_client, change_log};
 use crate::storage::{StorageError, Ulid, in_read_transaction};
 
 // ---- 件数 ----
@@ -210,8 +212,18 @@ pub struct OpenBoard {
 /// その日のボード。項目の無い日は、項目が空で、振り返りが空、ノートは見出しが無く長さ 0。
 ///
 /// 項目・持ち越し先・振り返り・ノートは、同じ時点の内容を読む（途中でほかの接続が書いても食い違わない）。
-pub fn get_board(conn: &Connection, date: LogicalDate) -> Result<Board, StorageError> {
-    in_read_transaction(conn, || read_board(conn, date).map(|(b, _)| b))
+///
+/// エージェント・CLI 用（画面は [`get_screen_board`]）。`client_id` に `read` スコープが要る
+/// （MCP・CLI 仕様書 2章。権限はコアが確かめる）。
+pub fn get_board(
+    conn: &Connection,
+    client_id: Ulid,
+    date: LogicalDate,
+) -> Result<Board, ReadError> {
+    in_read_transaction(conn, || {
+        agent::require_scope::<ReadError>(conn, client_id, Scope::Read)?;
+        Ok(read_board(conn, date).map(|(b, _)| b)?)
+    })
 }
 
 /// ボードと、振り返り・ノートの版（[`TextDocRevs`]）を読む。
@@ -297,9 +309,16 @@ pub fn get_screen_board(conn: &Connection, date: LogicalDate) -> Result<ScreenBo
 /// その日の未完了の TODO と未解消の障害（`status = open`）。過去の日の項目は持ち越しても `status` を
 /// 変えないので、持ち越し済みの項目も入る（件数の「残り」と同じく、その日の終わりの状態を表す）。
 /// 項目と持ち越し先は、同じ時点の内容を読む。
-pub fn open_board(conn: &Connection, date: LogicalDate) -> Result<OpenBoard, StorageError> {
+///
+/// エージェント・CLI 用。`client_id` に `read` スコープが要る（[`get_board`] と同じ）。
+pub fn open_board(
+    conn: &Connection,
+    client_id: Ulid,
+    date: LogicalDate,
+) -> Result<OpenBoard, ReadError> {
     let (todos, blockers) = in_read_transaction(conn, || {
-        board_items(conn, date, |i| i.status == ItemStatus::Open)
+        agent::require_scope::<ReadError>(conn, client_id, Scope::Read)?;
+        Ok::<_, ReadError>(board_items(conn, date, |i| i.status == ItemStatus::Open)?)
     })?;
     Ok(OpenBoard {
         date,
@@ -418,10 +437,12 @@ mod tests {
     use jiff::tz::TimeZone;
 
     use super::*;
+    use crate::domain::agent::{PermissionDenied, test_support::grant};
     use crate::domain::carryover::{self, Decision, Selection};
     use crate::domain::day;
     use crate::domain::item::{self, CloseReason, Position, delete};
     use crate::storage::Database;
+    use crate::storage::table::agent_client::CLI_ID;
     use crate::storage::table::item::ItemChanges;
     use crate::storage::table::test_support::{at, date, open};
 
@@ -647,7 +668,7 @@ mod tests {
         fill_day(&db);
         carry_all(conn, "2026-11-02", "2026-11-03");
 
-        let board = get_board(conn, date("2026-11-02")).unwrap();
+        let board = get_board(conn, CLI_ID, date("2026-11-02")).unwrap();
         assert_eq!(board.date, date("2026-11-02"));
         // 取りやめた TODO も入り、削除した項目は入らない
         assert_eq!(
@@ -669,7 +690,7 @@ mod tests {
         assert_eq!(carried, [to(0), to(1), None, None, to(2), None]);
 
         // 持ち越してきた日の項目は、持ち越し済みでない
-        let today = get_board(conn, date("2026-11-03")).unwrap();
+        let today = get_board(conn, CLI_ID, date("2026-11-03")).unwrap();
         assert!(today.todos.iter().all(|i| i.carried_to.is_none()));
         assert_eq!(today.todos[0].item.carry_count, 1);
     }
@@ -681,7 +702,7 @@ mod tests {
         fill_day(&db);
         carry_all(conn, "2026-11-02", "2026-11-03");
 
-        let open = open_board(conn, date("2026-11-02")).unwrap();
+        let open = open_board(conn, CLI_ID, date("2026-11-02")).unwrap();
         assert_eq!(texts(&open.todos), ["未完了1", "未完了2"]);
         assert_eq!(texts(&open.blockers), ["未解消"]);
         assert!(
@@ -690,7 +711,7 @@ mod tests {
                 .chain(&open.blockers)
                 .all(|i| i.carried_to.is_some())
         );
-        let board = get_board(conn, date("2026-11-02")).unwrap();
+        let board = get_board(conn, CLI_ID, date("2026-11-02")).unwrap();
         let open_in_board: Vec<_> = board
             .todos
             .iter()
@@ -698,6 +719,37 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(open.todos, open_in_board);
+    }
+
+    #[test]
+    fn board_reads_need_the_read_scope() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        fill_day(&db);
+        let denied = |r: Result<(), ReadError>| {
+            assert!(
+                matches!(
+                    r,
+                    Err(ReadError::PermissionDenied(PermissionDenied {
+                        required_scope: Scope::Read
+                    }))
+                ),
+                "{r:?}"
+            );
+        };
+        let d = date("2026-11-02");
+        // 登録されていないエージェントには何も許可しない
+        let unknown_id = Ulid::from_u128(99);
+        denied(get_board(conn, unknown_id, d).map(drop));
+        denied(open_board(conn, unknown_id, d).map(drop));
+        // スコープを空にしたクライアント
+        assert!(agent_client::update_scopes(conn, CLI_ID, &[]).unwrap());
+        denied(get_board(conn, CLI_ID, d).map(drop));
+        denied(open_board(conn, CLI_ID, d).map(drop));
+        // read があれば、ほかのスコープが無くても読める
+        grant(conn, CLI_ID, &[]);
+        assert!(get_board(conn, CLI_ID, d).is_ok());
+        assert!(open_board(conn, CLI_ID, d).is_ok());
     }
 
     #[test]
@@ -714,7 +766,7 @@ mod tests {
             "## 良かったこと\n早く終わった",
         );
 
-        let board = get_board(conn, date(d)).unwrap();
+        let board = get_board(conn, CLI_ID, date(d)).unwrap();
         assert!(board.todos.is_empty() && board.blockers.is_empty());
         assert_eq!(board.reflection, "## 良かったこと\n早く終わった");
         let headings: Vec<_> = board
@@ -733,7 +785,7 @@ mod tests {
     fn board_of_an_unwritten_day_is_empty_and_writes_nothing() {
         let (db, _dir) = open();
         let conn = db.connection();
-        let board = get_board(conn, date("2026-11-03")).unwrap();
+        let board = get_board(conn, CLI_ID, date("2026-11-03")).unwrap();
         assert_eq!(
             board,
             Board {
@@ -744,7 +796,7 @@ mod tests {
                 note: NoteOutline::default(),
             }
         );
-        let open = open_board(conn, date("2026-11-03")).unwrap();
+        let open = open_board(conn, CLI_ID, date("2026-11-03")).unwrap();
         assert!(open.todos.is_empty() && open.blockers.is_empty());
         let days: i64 = conn
             .query_row("SELECT count(*) FROM day", [], |r| r.get(0))
@@ -857,7 +909,10 @@ mod tests {
         item::add_todo(conn, &cli, date("2026-11-04"), "次の日", &tokyo(), now()).unwrap();
 
         let b = get_screen_board(conn, date("2026-11-03")).unwrap();
-        assert_eq!(b.board, get_board(conn, date("2026-11-03")).unwrap());
+        assert_eq!(
+            b.board,
+            get_board(conn, CLI_ID, date("2026-11-03")).unwrap()
+        );
         assert_eq!(
             b.agent_names,
             HashMap::from([(by_agent.id, "cli".to_string())])
