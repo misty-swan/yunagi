@@ -14,9 +14,8 @@ use std::path::PathBuf;
 
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
-use super::{Change, Prepared, SERVER_NAME, SetupEnv, files};
+use super::{Change, PATH_NOTE, Prepared, SERVER_COMMAND, SERVER_NAME, SetupEnv, files};
 
-const SERVER_COMMAND: &str = "yunagi";
 const SERVER_ARGS: [&str; 3] = ["mcp", "--client", "codex"];
 
 /// Codex を使っていると見てよいか：`codex` コマンドがあるか、設定のフォルダがある。
@@ -241,6 +240,7 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
     }
     let new_text = render(&doc, original.as_deref());
     Prepared::Change(Plan {
+        disabled: is_disabled(&doc),
         path,
         names: names.iter().map(|s| (*s).to_owned()).collect(),
         old,
@@ -253,6 +253,8 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
 
 #[derive(Debug)]
 pub struct Plan {
+    /// 利用者が `enabled = false` にしている（書き換えても Codex は起動しない）。
+    disabled: bool,
     path: PathBuf,
     names: Vec<String>,
     /// 今の登録の `command`・`args`・`env_vars`（無ければ `None`）。
@@ -301,11 +303,14 @@ impl Change for Plan {
                 self.stamp
             ));
         }
-        if !self.yunagi_on_path {
+        if self.disabled {
             lines.push(
-                "note: `yunagi` is not on PATH in this terminal; the agent needs it on its PATH to start the server."
+                "note: this table has enabled = false, which is kept, so Codex will not start the server; remove that line to use it."
                     .to_owned(),
             );
+        }
+        if !self.yunagi_on_path {
+            lines.push(PATH_NOTE.to_owned());
         }
         lines
     }

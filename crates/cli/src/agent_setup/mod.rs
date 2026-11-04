@@ -27,6 +27,10 @@ use crate::{Env, Io};
 
 /// 登録する MCP サーバーの名前（両方のエージェントで同じ）。
 const SERVER_NAME: &str = "yunagi";
+/// 登録するサーバーのコマンド（`PATH` で探される名前。両方のエージェントで同じ）。
+const SERVER_COMMAND: &str = "yunagi";
+/// `yunagi` が `PATH` に無いときの注意（変更内容の表示）。
+const PATH_NOTE: &str = "note: `yunagi` is not on PATH in this terminal; the agent needs it on its PATH to start the server.";
 
 /// 動く環境のうち、`agent setup` が見るもの（試験が差し替える）。
 #[derive(Debug, Clone)]
@@ -67,7 +71,9 @@ impl SetupEnv {
             claude_config_dir: var("CLAUDE_CONFIG_DIR"),
             codex_home: var("CODEX_HOME"),
             path: std::env::var_os("PATH"),
-            interactive: std::io::stdin().is_terminal(),
+            // 質問と変更内容は標準出力に出るので、入力と出力の両方が端末のときだけ確認を得る
+            // （`> log.txt` や `| tee` で質問が見えないまま、答えを待たないため）
+            interactive: std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
             xdg_data_home_set: var("XDG_DATA_HOME").is_some(),
             stamp: None,
         }
@@ -123,11 +129,14 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
     }
 
     let mut failed = false;
+    // 名前を指定されたのに、自動では登録できなかった（`claude` が無い）
+    let mut not_registered = false;
     let mut changes: Vec<(&'static str, Box<dyn Change>)> = Vec::new();
     if claude_on {
         match claude::prepare(setup) {
             Prepared::Unchanged(line) => out(io, &format!("Claude Code: {line}")),
             Prepared::Manual(lines) => {
+                not_registered = explicit;
                 for (i, line) in lines.iter().enumerate() {
                     out(
                         io,
@@ -149,6 +158,7 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
         match codex::prepare(setup) {
             Prepared::Unchanged(line) => out(io, &format!("Codex: {line}")),
             Prepared::Manual(lines) => {
+                not_registered = explicit;
                 for line in lines {
                     out(io, &format!("Codex: {line}"));
                 }
@@ -163,8 +173,19 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
             }
         }
     }
+    // 終了コード：失敗は 1。名前を指定されたのに登録できなかったときは 4（`not_found`。スクリプトが
+    // 登録済みと取り違えないため）。登録済み・取りやめは 0
+    let exit_code = |failed: bool| {
+        if failed {
+            1
+        } else if not_registered {
+            4
+        } else {
+            0
+        }
+    };
     if changes.is_empty() {
-        return i32::from(failed);
+        return exit_code(failed);
     }
 
     // 変更内容の表示（書き込む前）。環境変数の値は出さない
@@ -213,7 +234,7 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
             }
         }
     }
-    i32::from(failed)
+    exit_code(failed)
 }
 
 /// 1 つのエージェントへの変更。
@@ -250,7 +271,7 @@ fn directory_warnings(env: &Env) -> Vec<String> {
     let candidate = match &env.alt_home {
         AltHome::Os => dir_mismatch::alternative(&own),
         AltHome::Fixed(home) => {
-            dir_mismatch::alternative_from_home(&own, Platform::current(), home.clone())
+            dir_mismatch::alternative_from_home(&own, env.setup.platform, home.clone())
         }
     }
     .map(|c| c.probe());

@@ -104,10 +104,26 @@ pub fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?
         .to_string_lossy()
         .into_owned();
-    let tmp = dir.join(format!(".{name}.yunagi-tmp-{}", std::process::id()));
+    // 前の実行が途中で終わって残した一時ファイル（プロセスの番号が使い回されると同じ名前になる）は、
+    // 消さずに避けて、別の名前で作る
+    let (tmp, file) = (0..100)
+        .find_map(|n| {
+            let tmp = dir.join(format!(".{name}.yunagi-tmp-{}-{n}", std::process::id()));
+            match create_private(&tmp) {
+                Ok(file) => Some(Ok((tmp, file))),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "too many leftover temporary files",
+            ))
+        })?;
     let permissions = fs::metadata(&real).ok().map(|m| m.permissions());
     let result = (|| {
-        let mut file = create_private(&tmp)?;
+        let mut file = file;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -252,6 +268,20 @@ mod tests {
         let fresh = dir.path().join("new/config.toml");
         write_atomic(&fresh, b"x").unwrap();
         assert_eq!(mode(&fresh), 0o600);
+    }
+
+    #[test]
+    fn a_leftover_temporary_file_does_not_block_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        let stale = dir
+            .path()
+            .join(format!(".config.toml.yunagi-tmp-{}-0", std::process::id()));
+        fs::write(&stale, "stale").unwrap();
+        write_atomic(&file, b"new").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"new");
+        // 前の実行が残したものは消さない
+        assert_eq!(fs::read(&stale).unwrap(), b"stale");
     }
 
     #[test]

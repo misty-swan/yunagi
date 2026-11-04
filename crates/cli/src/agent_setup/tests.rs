@@ -244,6 +244,63 @@ fn old_environment_values_are_never_put_on_a_command_line() {
 }
 
 #[test]
+fn an_old_registration_with_secrets_outside_env_is_not_put_on_a_command_line() {
+    let f = Fixture::new();
+    f.fake_claude();
+    fs::write(f.path("bin/fail-add"), "").unwrap();
+    // http のサーバーで、ヘッダーにトークンがある（`env` ではないが秘密）
+    f.claude_json(
+        &serde_json::json!({"yunagi": {"type": "http", "url": "https://example.invalid/mcp",
+        "headers": {"Authorization": "Bearer top-secret"}}}),
+    );
+    let r = go(f.setup(true), true, false, "y\n");
+    assert_eq!(r.code, 1);
+    for text in [&r.stdout, &r.stderr, &f.calls().join("\n")] {
+        assert!(!text.contains("top-secret"), "{text}");
+    }
+    assert_eq!(f.calls().len(), 2, "{:?}", f.calls());
+    // 利用者が自分で戻せるよう、元の登録の要約とコピーの場所を伝える
+    assert!(r.stderr.contains("reference copy"), "{}", r.stderr);
+}
+
+#[test]
+fn an_unreadable_settings_file_stops_before_any_change() {
+    let f = Fixture::new();
+    f.fake_claude();
+    f.claude_json(&serde_json::json!({}));
+    let config = f.path("claude-config/.claude.json");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o000)).unwrap();
+    // 権限を無視して読める環境（root）では、この試験は意味がない
+    if fs::read(&config).is_ok() {
+        return;
+    }
+    let r = go(f.setup(true), true, false, "y\n");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(r.code, 1, "{}{}", r.stdout, r.stderr);
+    assert!(r.stderr.contains("nothing was changed"), "{}", r.stderr);
+    assert!(f.calls().is_empty());
+}
+
+#[test]
+fn a_disabled_codex_registration_is_reported_when_it_is_rewritten() {
+    let f = Fixture::new();
+    fs::write(
+        f.path("codex/config.toml"),
+        "[mcp_servers.yunagi]\ncommand = \"/old/yunagi\"\nenabled = false\n",
+    )
+    .unwrap();
+    let r = go(f.setup(true), false, true, "y\n");
+    assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout.contains("enabled = false, which is kept"),
+        "{}",
+        r.stdout
+    );
+    let written = fs::read_to_string(f.path("codex/config.toml")).unwrap();
+    assert!(written.contains("enabled = false"), "{written}");
+}
+
+#[test]
 fn a_failed_add_for_an_unreadable_file_is_reported_as_it_is() {
     let f = Fixture::new();
     f.fake_claude();
@@ -269,8 +326,14 @@ fn a_failed_add_for_an_unreadable_file_is_reported_as_it_is() {
 #[test]
 fn without_the_claude_command_the_command_to_run_is_shown() {
     let f = Fixture::new();
+    // 名前を指定したのに登録できなかったので、0 ではなく 4（スクリプトが登録済みと取り違えない）
     let r = go(f.setup(true), true, false, "");
-    assert_eq!(r.code, 0);
+    assert_eq!(r.code, 4);
+    // 検出で選ばれただけ（設定ファイルはあるが `claude` が無い）のときは、案内だけで 0
+    f.claude_json(&serde_json::json!({}));
+    let auto = go(f.setup(true), false, false, "");
+    assert_eq!(auto.code, 0, "{}{}", auto.stdout, auto.stderr);
+    assert!(auto.stdout.contains("`claude` command was not found"));
     assert!(
         r.stdout.contains("`claude` command was not found"),
         "{}",

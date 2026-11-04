@@ -16,10 +16,11 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-use super::{Change, Prepared, SERVER_NAME, SetupEnv, files};
+use yunagi_core::storage::data_dir::Platform;
 
-/// サーバーとして起動するコマンドと引数（登録する中身）。
-const SERVER_COMMAND: &str = "yunagi";
+use super::{Change, PATH_NOTE, Prepared, SERVER_COMMAND, SERVER_NAME, SetupEnv, files};
+
+/// サーバーとして起動する引数（登録する中身）。
 const SERVER_ARGS: [&str; 3] = ["mcp", "--client", "claude-code"];
 
 /// 利用者に案内する、登録のコマンド。
@@ -131,7 +132,11 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
             format!("  {ADD_COMMAND}"),
         ]);
     };
-    let action = match registration(config.as_deref()) {
+    // 設定ファイルは 1 回だけ読む（読んだ結果から、動きと「読めなかった」の両方を決める）
+    let found = registration(config.as_deref());
+    let unreadable =
+        found == Registration::Unknown && config.as_deref().is_some_and(|c| c.is_file());
+    let action = match found {
         Registration::Same => {
             return Prepared::Unchanged(
                 "already registered (user scope, same command). Nothing to change.".to_owned(),
@@ -142,15 +147,12 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
     };
     Prepared::Change(Plan {
         exe,
-        unreadable: config
-            .as_deref()
-            .is_some_and(|c| c.is_file() && registration(Some(c)) == Registration::Unknown),
+        unreadable,
         config,
         action,
         stamp: setup.stamp(),
         yunagi_on_path: setup.find(SERVER_COMMAND).is_some(),
-        allowlist_note: setup.xdg_data_home_set
-            && setup.platform == yunagi_core::storage::data_dir::Platform::Linux,
+        allowlist_note: setup.xdg_data_home_set && setup.platform == Platform::Linux,
     })
 }
 
@@ -205,10 +207,7 @@ impl Change for Plan {
             ));
         }
         if !self.yunagi_on_path {
-            lines.push(
-                "note: `yunagi` is not on PATH in this terminal; the agent needs it on its PATH to start the server."
-                    .to_owned(),
-            );
+            lines.push(PATH_NOTE.to_owned());
         }
         if self.allowlist_note {
             lines.push(
@@ -223,12 +222,27 @@ impl Change for Plan {
 
     fn apply(&self) -> Result<Vec<String>, String> {
         let mut done = Vec::new();
-        if let Some(config) = &self.config
-            && let Ok(bytes) = fs::read(config)
-        {
-            let backup = files::create_backup(config, &bytes, &self.stamp)
-                .map_err(|e| format!("Could not make the backup, so nothing was changed: {e}"))?;
-            done.push(format!("reference copy: {}", backup.display()));
+        let mut copy: Option<PathBuf> = None;
+        if let Some(config) = &self.config {
+            match fs::read(config) {
+                Ok(bytes) => {
+                    let backup =
+                        files::create_backup(config, &bytes, &self.stamp).map_err(|e| {
+                            format!("Could not make the backup, so nothing was changed: {e}")
+                        })?;
+                    done.push(format!("reference copy: {}", backup.display()));
+                    copy = Some(backup);
+                }
+                // 設定ファイルが無ければ、コピーするものも無い。あるのに読めないなら、確認で約束した
+                // コピーを作れないので、何も変えずに止める
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(format!(
+                        "Could not read {} for the reference copy, so nothing was changed: {e}",
+                        config.display()
+                    ));
+                }
+            }
         }
         let add = [
             "mcp",
@@ -255,7 +269,7 @@ impl Change for Plan {
                 format!("Could not remove the old registration, so nothing was changed. {e}")
             })?;
             if let Err(e) = run(&self.exe, &add) {
-                return Err(self.restore(old, &e));
+                return Err(self.restore(old, &e, copy.as_deref()));
             }
             done.push("replaced the old registration".to_owned());
         } else {
@@ -269,17 +283,23 @@ impl Change for Plan {
 
 impl Plan {
     /// 付け直しに失敗したとき、元の登録を戻す。伝える文を返す。
-    fn restore(&self, old: &Value, cause: &str) -> String {
-        let has_env_values = old
-            .get("env")
-            .and_then(Value::as_object)
-            .is_some_and(|env| !env.is_empty());
-        if has_env_values {
-            // 環境変数の値を、コマンドの引数（プロセスの一覧から見える）に載せない
+    fn restore(&self, old: &Value, cause: &str, copy: Option<&Path>) -> String {
+        // 元の登録を、利用者が自分で戻せるように伝える（値は出さない）
+        let recover = format!(
+            "The old registration was: {}.{}",
+            summarize(old),
+            copy.map(|c| format!(
+                " Its full settings are in the reference copy {}.",
+                c.display()
+            ))
+            .unwrap_or_default()
+        );
+        if !is_plain_command(old) {
+            // 環境変数の値や、ヘッダーのトークンなどを、コマンドの引数（プロセスの一覧から見える）に載せない
             return format!(
                 "The new registration failed ({cause}) after the old one was removed. The old \
-                 one has environment variables, so it was not restored automatically: add it \
-                 again yourself (the reference copy of the settings file is next to it)."
+                 one has settings that may hold secrets (environment variables, headers, ...), \
+                 so it was not restored automatically. {recover}"
             );
         }
         match run(
@@ -296,10 +316,26 @@ impl Plan {
             Ok(()) => format!("The new registration failed ({cause}). The old one was restored."),
             Err(e) => format!(
                 "The new registration failed ({cause}), and restoring the old one failed too \
-                 ({e}). Run: {ADD_COMMAND}"
+                 ({e}). {recover} To register Yunagi's standard command instead, run: {ADD_COMMAND}"
             ),
         }
     }
+}
+
+/// 元の登録が、コマンドと引数だけの単純なものか（`type` は無いか `stdio`、`env` は無いか空、そのほかの
+/// 欄が無い）。そうでなければ、中身に秘密が入りうるので、コマンドの引数に載せて戻さない。
+fn is_plain_command(entry: &Value) -> bool {
+    let Some(map) = entry.as_object() else {
+        return false;
+    };
+    let keys_ok = map
+        .keys()
+        .all(|k| matches!(k.as_str(), "type" | "command" | "args" | "env"));
+    let type_ok = map.get("type").is_none_or(|t| t.as_str() == Some("stdio"));
+    let env_ok = map
+        .get("env")
+        .is_none_or(|e| e.as_object().is_some_and(|env| env.is_empty()));
+    keys_ok && type_ok && env_ok
 }
 
 /// `claude` を、標準入力なしで実行する。失敗は、`claude` が出した文をそのまま返す。
