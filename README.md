@@ -63,7 +63,7 @@ GitHub Actions の開発用 CI（`.github/workflows/ci.yml`）は、PR と main 
 ### エラーの表示（Rust）
 
 - エラーの型の Display（`to_string()` で得る文）には、その層で何が失敗したか（何をしようとしたか・どのファイルか）だけを書き、原因のエラーの文は含めない。原因は `source()` で返す。両方に書くと、原因をたどって表示したときに同じ文が二重に出るため（2026-11-03 決定）。
-- 別のエラーを包むだけの種類（`StorageError::Lock`・`BackupError::Storage` など）は、Display も `source()` も中身のものをそのまま返す（透過）。そのため包んだ型は `source()` をたどっても出てこない。失敗の種類で振る舞いを変えるとき（ロックが取れないときにローカル API を使うなど）は、`source()` をたどらず、エラーの種類を `match` で見分ける。
+- 別のエラーを包むだけの種類（`StorageError::Lock`・`BackupError::Storage` など）は、Display も `source()` も中身のものをそのまま返す（透過）。そのため包んだ型は `source()` をたどっても出てこない。失敗の種類で振る舞いを変えるとき（ローカル API の接続の失敗の種類で、直接モードに切り替えるかを決めるなど）は、`source()` をたどらず、エラーの種類を `match` で見分ける。
 - 原因が2つある種類（`StorageError::RestoreFailed` など）は、主な原因を `source()` で返し、もう一方は原因まで含めて Display に書く。主な原因が後ろにつながったとき、どの失敗の原因かが分かるよう、主な失敗を文の最後に書く。
 - 利用者やログに1行で出すときは、`yunagi_core::error::ErrorChain` で原因まで `: ` でつなぐ。rusqlite など外部のエラーには Display と `source()` の両方に同じ文を出すものがあるので、`ErrorChain` は、前の文と同じ原因の文や、前の文の先頭・末尾に区切って付いている原因の文を省く。
 - MCP・CLI のエラーの `message` と画面のエラー表示の文は、Display をそのまま使わない（`docs/design/05-mcp-cli-spec.md` 4.3、`docs/design/03-ui-spec.md` 3章の保存の失敗の表示）。

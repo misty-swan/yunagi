@@ -7,7 +7,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 - CLI：コンソール用バイナリ `yunagi`（Windows は `yunagi.exe`）のサブコマンド群。
 - MCP サーバー：`yunagi mcp` で起動する stdio 方式の MCP サーバー。
 
-両者は同じ操作を同じ名前で持ち（3章の命名規則）、同じ権限モデルに従う。いずれもアプリ起動中はローカル API 経由でコアに依頼し、停止中は操作ごとにロックを取ってデータベースを直接開く（アーキテクチャ設計書 4章）。Yunagi の接続口自体は端末の外へデータを送らない。ただし、読み取りを許可されたエージェントは、読み取った内容をそのエージェントの仕組みに従って AI サービスへ送ることがある。AIの利用料は各AIサービスとの利用者の契約に含まれ、Yunagi の接続口は無料で提供する。
+両者は同じ操作を同じ名前で持ち（3章の命名規則）、同じ権限モデルに従う。いずれもアプリ起動中はローカル API 経由でコアに依頼し、停止中は操作ごとにロックを取ってデータベースを直接開く（アーキテクチャ設計書 4章）。どちらで処理するかは、操作ごとに、まずローカル API に接続を試み、無いときだけ直接モードにして決める。ロックを取れなかったときは `busy` を返す（アーキテクチャ設計書 4.4、本書 4.3）。Yunagi の接続口自体は端末の外へデータを送らない。ただし、読み取りを許可されたエージェントは、読み取った内容をそのエージェントの仕組みに従って AI サービスへ送ることがある。AIの利用料は各AIサービスとの利用者の契約に含まれ、Yunagi の接続口は無料で提供する。
 
 例外として、A-07（導入）と A-08（権限・履歴）は利用者が行う管理操作のため、CLI とアプリにだけ置き、MCP には出さない（エージェントが自分の権限を変えられないようにするため）。
 
@@ -101,7 +101,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | CLI | 内容 |
 | --- | --- |
 | `yunagi show [--note]` | アプリを前面に表示する（Wayland 環境でのショートカット割当にも使う。操作仕様書 1章「OS 全体の操作」、ビルド・配布手順書 4.1 の案内がこのコマンドを前提にしている。まだ作っていない） |
-| `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない |
+| `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない。ローカル API の状態は、アーキテクチャ設計書 4.4 の接続の試し方で1回だけ調べて（待たない）、次のどれかで示す：`connected`（つながり認証も通った）、`no_listener`（待ち受けが無く、ロックも取れた。アプリが動いていない場合のほか、動いていてもデータベースを開いていない「見つからない」「開けなかった」の状態を含む。ここからは区別できないので、「動いていない」とは言わない）、`starting_or_unresponsive`（待ち受けが無く、ロックを別のプロセスが持っている。アプリの起動中、または待ち受けが動いていない。直接モードの操作が長引いているだけのこともある）、`listener_busy`（待ち受けはあるが一時的につながらない。パイプが全部ふさがっている・待ち行列が満杯など。4.4 の試し直しの対象で、`doctor` は1秒だけ試し直してからこれを示す。ロックは取らない）、`auth_failed`・`version_mismatch`・`denied`（4.3 の `api_error` の `reason` と同じ）。取ったロックはすぐ離す |
 | `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータも削除 |
 | `yunagi --version` | 版を表示する |
 
@@ -138,7 +138,10 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | 4 | 対象なし | `not_found` |
 | 5 | 競合 | `conflict` |
 | 6 | 保存先を利用できない | `storage_unavailable` |
+| 7 | データを使えない（ロックが取れない） | `busy` |
+| 8 | ローカル API を使えない | `api_error` |
 
+- 終了コード 7（`busy`）は、何も反映していないので、そのまま送り直してよい。終了コード 8（`api_error`）は、`reason`（4.3）で送り直してよいかが変わる（`result_unknown` の書き込みは反映されたか分からないので送り直さない）。テキスト出力でも `reason` を表示するので、`--json` なしで見分けられる。終了コードで再試行する道具は、7 だけを再試行の対象にする。
 - `TEXT` に `-` を指定すると標準入力から読む（例：`git log -1 --format=%s | yunagi reflection append -`）。
 
 ### 4.2 MCP ツールの返り値（例）
@@ -175,7 +178,22 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {"error": {"code": "conflict", "reason": "user_editing", "message": "The user is editing this item. Try again later."}}
 ```
 
-エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。`permission_denied`・`not_found`・`invalid_argument` は先に返す。3.2 の判定の順、アーキテクチャ設計書 4.1）。直接モードで保存先にデータベースが見つからないときも `storage_unavailable` を返す（読み取りを含むすべての操作。アーキテクチャ設計書 6.3）。
+エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`、`busy`、`api_error`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。`permission_denied`・`not_found`・`invalid_argument` は先に返す。3.2 の判定の順、アーキテクチャ設計書 4.1）。直接モードで保存先にデータベースが見つからないときも `storage_unavailable` を返す（読み取りを含むすべての操作。アーキテクチャ設計書 6.3）。
+
+**接続の失敗（2026-11-04 決定。アーキテクチャ設計書 4.4）**：操作がコアに届く前、または届いたか分からないときに、CLI・MCP が返すエラー。どちらも項目の判定（3.2）には入らず、読み取りを含むすべての操作に返す。
+
+```json
+{"error": {"code": "busy", "message": "Yunagi is using its data and did not respond within 5 seconds. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi."}}
+{"error": {"code": "api_error", "reason": "result_unknown", "message": "The connection to Yunagi was lost after the request was sent. It may or may not have been applied. Read the data again before retrying."}}
+```
+
+- `busy`（終了コード 7）：ローカル API にもつながらず、ロックも 5 秒の間に取れなかった。または、アプリがデータベースを開き直している間（保存先の変更・復元）に届いた依頼を、5 秒で始められず、アプリが断った（アーキテクチャ設計書 4.4）。どちらも操作を何も反映していない。エージェントは同じ操作をそのままやり直してよい（追加の操作を含む）。続くときは、アプリの再起動を利用者に頼む。`storage_unavailable` と分けるのは、原因と次の動きが違うため（`storage_unavailable` は保存先の問題で、時間をおいても直らないことがある）。MCP では、ツールのエラーとして返すだけで、サーバーは終了せず、次の操作も受け付ける。
+- `api_error`（終了コード 8。`reason` で分ける）：ローカル API の待ち受けはあるが、使えない。
+  - `auth_failed`：トークンが合わない（トークンのファイルが古いなど）。`message` で、アプリを再起動するよう伝える。
+  - `version_mismatch`：アプリと CLI・MCP のプロトコルの版が合わない。`message` で、アプリと CLI の版をそろえるよう伝える。
+  - `denied`：ソケット・パイプを開く権限が無い（`EACCES`）。別の利用者のアプリが同じ場所を使っているときなど。
+  - `result_unknown`：依頼を送った後、応答の前に接続が切れた。書き込みは送り直さず、すぐこのエラーを返す。読み取りは、接続の手順（アーキテクチャ設計書 4.4）から1回だけ自動でやり直し（必ず1回）、やり直しでも切れたら同じエラーを返す。エージェントは、読み取りで反映されたかを確かめてから、必要なら利用者に伝える。
+  - どれも何も反映していない（`result_unknown` を除く）。直接モードへは切り替えない。
 
 `conflict` には、エージェントが次の動きを決められるよう、理由を `reason` 欄で付ける。CLI の終了コードはどの理由でも 5 で、`--json` のときは同じ JSON を出し、テキスト出力では `message` を表示する。
 
