@@ -2,7 +2,7 @@
   // 設定の「操作」区分の、ショートカット割当（操作仕様書 1章・2章、画面設計書 7章）。
   // 操作を効く範囲ごとに並べ、割当のボタンを押してから、割り当てるキーを押す。割当を持たない操作（初期割当の
   // まま）も同じ並びに出す。変えたものには「初期値に戻す」を出す。
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { globalShortcut } from "../lib/global_shortcut.svelte";
   import { t } from "../lib/i18n";
   import { currentKeymap, keyLabel } from "../lib/keys";
@@ -16,6 +16,9 @@
   const scopes: Scope[] = ["global", "common", "board", "note"];
   const keymap = $derived(currentKeymap(mac));
   const changedAny = $derived(Object.keys(prefs.shortcuts).length > 0);
+
+  // 設定を開いたとき、OS への登録に失敗していたら頼み直す（同じ割当で成功済みなら何もしない）
+  onMount(() => void globalShortcut.sync(mac));
 
   async function start(id: ActionId) {
     editor.start(id);

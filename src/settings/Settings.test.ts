@@ -540,6 +540,31 @@ test("OS 全体のショートカット：登録できなかった理由と、Wa
   await until(() => $('[data-action="bringToFront"] .bad') === null);
 });
 
+test("OS 全体のショートカット：登録に失敗したら、設定を開き直したときに頼み直す。使用中のときは頼み直さない", async () => {
+  const core = await start();
+  await until(() => registered(core).length === 1);
+  await open("operation");
+  core.answer.set_global_shortcut = { state: "failed", wayland: false };
+  keyButton("bringToFront").click();
+  flushSync();
+  press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true }, keyButton("bringToFront"));
+  await until(() => registered(core).length === 2);
+  await until(() => $('[data-action="bringToFront"] .bad') !== null);
+  press({ key: "Escape", code: "Escape" }, $("[data-settings]")!);
+  await until(() => dialog() === null);
+  core.answer.set_global_shortcut = { state: "taken", wayland: false };
+  await open("operation");
+  await until(() => registered(core).length === 3);
+  expect(registered(core).at(-1)).toBe("Mod+Shift+E");
+  // 使用中は、開き直しても頼み直さない
+  await until(() => $('[data-action="bringToFront"] .bad') !== null);
+  press({ key: "Escape", code: "Escape" }, $("[data-settings]")!);
+  await until(() => dialog() === null);
+  await open("operation");
+  flushSync();
+  expect(registered(core).length).toBe(3);
+});
+
 test("OS 全体のショートカット：保存に失敗して割当が元に戻ったら、元のキーで登録し直す", async () => {
   const core = await start();
   await until(() => registered(core).length === 1);

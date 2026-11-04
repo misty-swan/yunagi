@@ -35,12 +35,17 @@ class GlobalShortcutRegistry {
     const binding = b === null ? null : format(b);
     if (binding === this.#requested) return this.#queue;
     this.#requested = binding;
+    // 新しい割当の結果が出るまで、前の割当の結果（理由の表示）は出さない
+    this.status = null;
     const epoch = this.#epoch;
     this.#queue = this.#queue.then(async () => {
       try {
         const s = await core.setGlobalShortcut(binding);
         // 待つ間に `forget` された（設定を読み込み直す）なら、古い結果は捨てる
-        if (epoch === this.#epoch) this.status = s;
+        if (epoch !== this.#epoch) return;
+        this.status = s;
+        // 前の登録を外せなかったなど（`failed`）は、次に呼ばれたとき頼み直す（設定の操作区分を開いたとき）
+        if (s.state === "failed" && this.#requested === binding) this.#requested = undefined;
       } catch {
         if (epoch !== this.#epoch) return;
         this.status = null;
@@ -51,7 +56,10 @@ class GlobalShortcutRegistry {
     return this.#queue;
   }
 
-  /** 登録を外した状態に戻す（データベースを開き直す前など。次の `sync` で必ず頼み直す）。 */
+  /**
+   * 状態を忘れる（データベースを開き直す前など）。OS の登録そのものは外さない（コア側が持ったまま）。
+   * 次の `sync` で必ず頼み直し、待っている呼び出しの結果は捨てる。
+   */
   forget() {
     this.#epoch++;
     this.#requested = undefined;

@@ -34,7 +34,8 @@ core-foundation.workspace = true
 tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
 # 登録の失敗の文の見分けを、部品が実際に返す文で確かめる（src/global_shortcut.rs のテスト）。
-# プラグインが使っている版（Cargo.lock）にそろえる
+# プラグインが使っている版（Cargo.lock）にそろえる。プラグインの版を上げるときは、この版も同じに上げる
+# （ずれると、別の版の文を確かめることになる）
 global-hotkey = "=0.8.0"
 # 画面と共有する型の TypeScript の定義を作る（src/bindings.rs のテスト。配るアプリには含めない）
 ts-rs.workspace = true

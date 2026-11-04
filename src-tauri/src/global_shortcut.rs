@@ -76,13 +76,14 @@ pub fn parse(text: &str, mac: bool) -> Option<Shortcut> {
     Some(Shortcut::new(Some(mods), code))
 }
 
-/// Wayland のセッションか（Linux の環境変数）。`XDG_SESSION_TYPE` があればそれに従う（`wayland` だけが
-/// Wayland。SSH や sudo で引き継いだ古い `WAYLAND_DISPLAY` が残っていても、`x11` なら X11）。無いときだけ、
-/// `WAYLAND_DISPLAY` があるかで決める。
+/// Wayland のセッションか（Linux の環境変数）。`XDG_SESSION_TYPE` が `wayland` なら Wayland、`x11` なら
+/// X11（SSH や sudo で引き継いだ古い `WAYLAND_DISPLAY` が残っていても X11）。それ以外（無い・`tty`・
+/// `unspecified`。TTY から直接起動した Hyprland・Sway など）は、`WAYLAND_DISPLAY` があるかで決める。
 pub fn is_wayland(session_type: Option<&str>, wayland_display: Option<&str>) -> bool {
-    match session_type.filter(|s| !s.is_empty()) {
-        Some(s) => s.eq_ignore_ascii_case("wayland"),
-        None => wayland_display.is_some_and(|d| !d.is_empty()),
+    match session_type {
+        Some(s) if s.eq_ignore_ascii_case("wayland") => true,
+        Some(s) if s.eq_ignore_ascii_case("x11") => false,
+        _ => wayland_display.is_some_and(|d| !d.is_empty()),
     }
 }
 
@@ -293,7 +294,10 @@ mod tests {
         assert!(is_wayland(None, Some("wayland-1")));
         // XDG_SESSION_TYPE があればそれに従う（古い WAYLAND_DISPLAY が残っていても X11）
         assert!(!is_wayland(Some("x11"), Some("wayland-0")));
-        assert!(!is_wayland(Some("tty"), Some("wayland-0")));
+        // TTY から直接起動した Wayland のコンポジターは、XDG_SESSION_TYPE が tty になる
+        assert!(is_wayland(Some("tty"), Some("wayland-0")));
+        assert!(is_wayland(Some("unspecified"), Some("wayland-0")));
+        assert!(!is_wayland(Some("tty"), None));
         assert!(is_wayland(Some(""), Some("wayland-0")));
         assert!(!is_wayland(Some("x11"), None));
         assert!(!is_wayland(None, Some("")));
