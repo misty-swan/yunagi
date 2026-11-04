@@ -20,10 +20,9 @@ use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
 use super::note_send;
-use crate::storage::table::agent_client;
-use crate::storage::table::change_log;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
+use crate::storage::table::{agent_client, change_log};
 use crate::storage::{StorageError, Ulid, in_read_transaction};
 
 // ---- 件数 ----

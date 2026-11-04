@@ -590,7 +590,7 @@ mod tests {
     use crate::domain::agent::test_support::{FakeUi, grant};
     use crate::domain::note_body::LineOp;
     use crate::storage::Database;
-    use crate::storage::table::agent_client::{CLI_ID, UNKNOWN_ID};
+    use crate::storage::table::agent_client::{self, CLI_ID, UNKNOWN_ID};
     use crate::storage::table::test_support::{at, date, fail_change_log_inserts};
     use crate::storage::table::{day as day_table, text_doc as text_doc_table};
 
@@ -1255,15 +1255,12 @@ mod tests {
         denied(get_note(conn, nobody, date(D), None));
         denied(get_note(conn, nobody, date(D), Some("10:00 定例")));
         // スコープを空にしたクライアントは、権限の誤りが引数の誤りや not_found より先に返る
-        assert!(crate::storage::table::agent_client::update_scopes(conn, CLI_ID, &[]).unwrap());
+        assert!(agent_client::update_scopes(conn, CLI_ID, &[]).unwrap());
         denied(get_note(conn, CLI_ID, date(D), None));
         denied(get_note(conn, CLI_ID, date(D), Some("")));
         denied(get_note(conn, CLI_ID, date(D), Some("no such")));
         // 書き込みのスコープだけでは読めない
-        assert!(
-            crate::storage::table::agent_client::update_scopes(conn, CLI_ID, &[Scope::Append])
-                .unwrap()
-        );
+        assert!(agent_client::update_scopes(conn, CLI_ID, &[Scope::Append]).unwrap());
         denied(get_note(conn, CLI_ID, date(D), None));
         grant(conn, CLI_ID, &[]);
         assert!(get_note(conn, CLI_ID, date(D), None).is_ok());
