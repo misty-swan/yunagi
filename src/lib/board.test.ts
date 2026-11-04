@@ -139,7 +139,9 @@ test("持ち越しの確定で今日のボードが読み直されても、確�
   // 戻るのは確定の前に足した項目だけで、持ち越した項目は残る
   expect(calls.at(-1)).toEqual({ cmd: "delete_item", args: { id: NEW } });
   expect(texts(model)).toEqual(["持ち越し", "子", "a"]);
-  // 戻せる操作はもう無い
+  // 戻せる操作はもう無い（確定そのものは履歴に入っていない）。持ち越しの画面を出している間に
+  // Mod+Z を渡さないことは CarryoverPanel.test.ts で確かめる
+  expect(model.canUndo).toBe(false);
   const n = calls.length;
   await model.undo();
   expect(calls.length).toBe(n);
