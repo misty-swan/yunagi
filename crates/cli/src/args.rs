@@ -220,7 +220,7 @@ fn command(
                 let mut params = Map::new();
                 opts.take_into(&mut params, "date", "date")?;
                 // 読み取りの `--heading` は、見出しの文字が要る
-                match opts.take_optional("heading") {
+                match opts.take_optional("heading")? {
                     None => {}
                     Some(Some(heading)) => {
                         params.insert("heading".into(), json!(heading));
@@ -237,11 +237,23 @@ fn command(
             ["append", text] => {
                 let mut params = text_date_params(&mut opts, text)?;
                 // `--heading` は値を省略できる（省略は件名なしの `## HH:MM`）
-                if let Some(title) = opts.take_optional("heading") {
+                if let Some(title) = opts.take_optional("heading")? {
                     params.insert("heading".into(), json!(title.unwrap_or_default()));
                 }
                 opts.finish()?;
                 Command::Operation(Operation::new("append_note", params).with_stdin("text"))
+            }
+            // TEXT が無い。`--heading` の直後に置いた TEXT は件名として読まれているので、そう伝える
+            ["append"] => {
+                let taken = match opts.take_optional("heading") {
+                    Ok(Some(Some(title))) => format!(
+                        " (\"{title}\" was read as the --heading title; write --heading= for a heading with just the time, or put TEXT before --heading)"
+                    ),
+                    _ => String::new(),
+                };
+                return Err(error::invalid_argument(format!(
+                    "note append needs TEXT{taken}"
+                )));
             }
             ["edit"] => {
                 let mut params = Map::new();
@@ -407,24 +419,29 @@ fn item_id(opts: &mut Options, method: &'static str, id: &str) -> Result<Command
 struct Options(Vec<(String, Option<String>)>);
 
 impl Options {
-    /// 名前 `name` の指定を取り出す（同じ名前を繰り返したら、最後のもの）。無ければ `None`、値を
-    /// 書かなかったなら `Some(None)`。
-    fn take_optional(&mut self, name: &str) -> Option<Option<String>> {
-        let mut found = None;
+    /// 名前 `name` の指定を取り出す。無ければ `None`、値を書かなかったなら `Some(None)`。同じ名前を
+    /// 繰り返したら誤り（前の指定の誤りを、後ろの指定で黙って隠さないため。繰り返せるのは `--kind` だけ）。
+    fn take_optional(&mut self, name: &str) -> Result<Option<Option<String>>, ErrorObject> {
+        let mut found = Vec::new();
         self.0.retain(|(n, v)| {
             if n == name {
-                found = Some(v.clone());
+                found.push(v.clone());
                 false
             } else {
                 true
             }
         });
-        found
+        if found.len() > 1 {
+            return Err(error::invalid_argument(format!(
+                "option --{name} is given more than once"
+            )));
+        }
+        Ok(found.pop())
     }
 
     /// 値を取るオプション `name` の値を 1 つ取り出す。
     fn take_value(&mut self, name: &str) -> Result<Option<String>, ErrorObject> {
-        match self.take_optional(name) {
+        match self.take_optional(name)? {
             None => Ok(None),
             Some(Some(value)) => Ok(Some(value)),
             Some(None) => Err(error::invalid_argument(format!(
@@ -435,7 +452,7 @@ impl Options {
 
     /// 値を取らないオプション `name`。あれば `true`（`--delete=x` のように値を付けたら誤り）。
     fn take_flag(&mut self, name: &str) -> Result<bool, ErrorObject> {
-        match self.take_optional(name) {
+        match self.take_optional(name)? {
             None => Ok(false),
             Some(None) => Ok(true),
             Some(Some(_)) => Err(error::invalid_argument(format!(
@@ -842,6 +859,47 @@ mod tests {
             let e = parse_args(args).unwrap_err();
             assert_eq!(error::code(&e), "invalid_argument", "{args:?}");
         }
+    }
+
+    #[test]
+    fn a_heading_before_the_text_is_named_in_the_error_and_repeats_are_refused() {
+        // `--heading` の直後の引数は件名として読まれる。TEXT が無くなったら、そのことを伝える
+        let e = parse_args(&["note", "append", "--heading", "fixed the bug"]).unwrap_err();
+        let message = error::message(&e);
+        assert!(message.contains("note append needs TEXT"), "{message}");
+        assert!(message.contains("\"fixed the bug\" was read as the --heading title"));
+        assert!(!error::message(&parse_args(&["note", "append"]).unwrap_err()).contains("title"));
+        // 同じオプションの繰り返しは、前の誤りを隠さないよう誤りにする（`--kind` だけは繰り返せる）
+        for args in [
+            &[
+                "note",
+                "edit",
+                "--line",
+                "2",
+                "--expect",
+                "x",
+                "--delete=oops",
+                "--delete",
+            ][..],
+            &[
+                "note",
+                "edit",
+                "--line",
+                "2",
+                "--expect",
+                "x",
+                "--replace",
+                "A",
+                "--replace",
+                "B",
+            ],
+            &["todo", "add", "x", "--date", "today", "--date", "yesterday"],
+            &["note", "append", "x", "--heading", "--heading"],
+        ] {
+            let e = parse_args(args).unwrap_err();
+            assert!(error::message(&e).contains("more than once"), "{args:?}");
+        }
+        assert!(parse_args(&["search", "x", "--kind", "todo", "--kind", "note"]).is_ok());
     }
 
     #[test]

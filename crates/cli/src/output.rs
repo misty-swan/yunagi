@@ -35,12 +35,13 @@ fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
 
 /// 書き込みの成功の文。実際に変えたとき（`updated` が真）は `done`、何も変えなかったときは
 /// `unchanged` を、改行をつけて返す（05 3.2・4.1）。
+/// 応答に `updated` が無いときは、書き込みが行われたかを偽って伝えないよう、JSON のまま出す。
 fn changed(value: &Value, done: &str, unchanged: &'static str) -> String {
-    let updated = value
-        .get("updated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    format!("{}\n", if updated { done } else { unchanged })
+    match value.get("updated").and_then(Value::as_bool) {
+        Some(true) => format!("{done}\n"),
+        Some(false) => format!("{unchanged}\n"),
+        None => format!("{value}\n"),
+    }
 }
 
 /// `add_todo`・`add_blocker`：追加した項目の ID が分かるようにする（あとで編集や完了に使う）。
@@ -272,17 +273,13 @@ pub fn render_error(error: &ErrorObject) -> String {
     out
 }
 
-/// 操作の名前（MCP のツール名）に当たる CLI のコマンド。
+/// 操作の名前（MCP のツール名 `<動詞>_<名詞>`）に当たる CLI のコマンド `yunagi <名詞> <動詞>`
+/// （05 3章の命名規則。`complete_todo` なら `yunagi todo complete`）。
 fn cli_command(operation: &str) -> String {
-    match operation {
-        "edit_todo" => "yunagi todo edit",
-        "complete_todo" => "yunagi todo complete",
-        "reopen_todo" => "yunagi todo reopen",
-        "edit_blocker" => "yunagi blocker edit",
-        "resolve_blocker" => "yunagi blocker resolve",
-        other => other,
+    match operation.split_once('_') {
+        Some((verb, noun)) => format!("yunagi {noun} {verb}"),
+        None => operation.to_owned(),
     }
-    .to_owned()
 }
 
 #[cfg(test)]
@@ -364,6 +361,8 @@ mod tests {
     #[test]
     fn write_results_use_the_texts_of_the_spec() {
         let done = |method, v: Value| render(method, &v);
+        // `updated` の無い応答は、書き込みが行われたかを偽らず、JSON のまま出す
+        assert_eq!(done("append_note", json!({"rev": 3})), "{\"rev\":3}\n");
         assert_eq!(
             done(
                 "add_todo",
