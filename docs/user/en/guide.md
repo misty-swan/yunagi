@@ -70,13 +70,13 @@ To look back at past days, press **Mod+Shift+L** to open Archive. It shows each 
 | Archive | Mod+Shift+L |
 | Settings | Mod+, |
 
-All shortcuts can be viewed and changed in Settings → Input.
+The shortcuts listed here can be viewed and changed in Settings → Input → Keyboard shortcuts. A key can't be shared by two operations that work in the same place, and the keys for undo, redo, copy and paste can't be changed.
 
 ## 5. Vim mode
 
 Enable it in Settings → Input → Vim mode. Notes and reflections support Normal, Insert, and Visual modes. In notes, `<Space>t` sends a line to TODOs and `<Space>b` to Blockers. In Board mode, use j / k to move, o to add, i to edit, x to toggle done/resolved, dd to delete, and u to undo. When you leave Insert mode, your Japanese (or other) input method switches back to direct input automatically.
 
-On Windows and Linux, enabling Vim mode changes previous/next day to **Alt+[ / Alt+]**, because Ctrl+[ acts as Esc in Vim.
+On Windows and Linux, enabling Vim mode changes previous/next day (and previous/next week in Archive) to **Alt+[ / Alt+]**, because Ctrl+[ acts as Esc in Vim. Keys you have changed yourself stay as they are when you switch Vim mode on or off.
 
 ## 6. Working with Claude Code and Codex
 
