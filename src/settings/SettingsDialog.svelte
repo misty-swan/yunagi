@@ -10,6 +10,7 @@
   // 受け付けない。区分の一覧は ↑/↓ で移る。
   import { tick } from "svelte";
   import { t } from "../lib/i18n";
+  import { imeSupport } from "../lib/ime.svelte";
   import { shellActionOf } from "../lib/keys";
   import {
     FONT_SIZE_MAX,
@@ -71,6 +72,11 @@
     panel.returnFocus = null;
     const a = document.activeElement;
     if (back instanceof HTMLElement && back.isConnected && (a === null || a === document.body)) back.focus();
+  });
+
+  // 操作区分を開いたとき（Vimモードが有効なら）、IME の切替ができる環境かを調べる（制約の表示。操作仕様書 4.4 の 4）
+  $effect(() => {
+    if (panel.open && panel.section === "operation" && prefs.vimMode) void imeSupport.refresh();
   });
 
   // データ区分を開いたら、保存先とバックアップの一覧を読む
@@ -306,8 +312,19 @@
             />
           {/snippet}
           {@render row(o.vim, "set-vim", vim, o.vimNote)}
-          <!-- 「挿入モードで入力状態を戻す」（vim_ime_restore）の欄は、働きを作る課題（YUN-85）で足す -->
           {#if prefs.vimMode && !mac}<p class="note vim-alt">{o.vimAltNote}</p>{/if}
+          {#if prefs.vimMode}
+            {#snippet imeRestore()}
+              <input
+                id="set-vim-ime-restore"
+                type="checkbox"
+                checked={prefs.vimImeRestore}
+                onchange={(e) => void store.save({ vimImeRestore: e.currentTarget.checked })}
+              />
+            {/snippet}
+            {@render row(o.vimImeRestore, "set-vim-ime-restore", imeRestore, o.vimImeRestoreNote)}
+            {#if imeSupport.unavailable}<p class="note ime-unavailable">{o.imeUnavailable}</p>{/if}
+          {/if}
           <h3 class="label sub">{o.shortcuts}</h3>
           <ShortcutsSection {editor} {mac} />
         {:else if panel.section === "data"}

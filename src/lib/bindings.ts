@@ -732,6 +732,17 @@ export type DataDirChanged = {
 leftovers: Array<string>, };
 
 /**
+ * IME の切替に使う仕組み（操作仕様書 4.4。`src-tauri/src/ime.rs`）。
+ */
+export type ImeMethod = "fcitx5" | "ibus" | "macos_input_source" | "windows_imm";
+
+/**
+ * この環境で IME の切替ができるか（`ime_status`）。できないとき（Linux で fcitx5 も IBus も動いていない
+ * など）、設定画面が制約を表示する（画面設計書 7章「操作」）。
+ */
+export type ImeStatus = { available: boolean, method: ImeMethod | null, };
+
+/**
  * コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
  * （Display の文をそのまま使わない。README「エラーの表示」）。
  */

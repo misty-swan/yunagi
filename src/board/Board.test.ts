@@ -575,6 +575,93 @@ test("Vim の挿入モードは、フォーカスが一覧の外へ移ると終�
   expect($$(".r-todo [contenteditable]").length).toBe(0);
 });
 
+test("Vim モードの整理モードのリスト：挿入モードを抜けると IME を英数にし、入ると戻す。設定が無効なら戻さない。窓が前面になければ触らない", async () => {
+  const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  prefs.vimMode = true;
+  prefs.vimImeRestore = true;
+  const { calls } = await start({ boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))] } } });
+  const ime = () => calls.map((c) => c.cmd).filter((c) => c.startsWith("ime_"));
+  const row = $$(".r-todo .item")[0];
+  row.focus();
+  const esc = () => {
+    document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    flushSync();
+  };
+  expect(ime()).toEqual([]);
+  // 挿入モードに入る（戻す）→ 抜ける（英数にする）
+  vimKey(row, "i");
+  await until(() => $(".r-todo [contenteditable]") !== null);
+  await until(() => ime().length === 1);
+  esc();
+  await until(() => $$(".r-todo [contenteditable]").length === 0);
+  await until(() => ime().length === 2);
+  expect(ime()).toEqual(["ime_enter_insert", "ime_leave_insert"]);
+  // 設定が無効：入るときは戻さず、抜けるときは英数にする
+  prefs.vimImeRestore = false;
+  vimKey(row, "i");
+  await until(() => $(".r-todo [contenteditable]") !== null);
+  esc();
+  await until(() => ime().length === 3);
+  expect(ime()).toEqual(["ime_enter_insert", "ime_leave_insert", "ime_leave_insert"]);
+  // 窓が前面にないとき（日が替わるなどで挿入モードが終わっても）は触らない
+  prefs.vimImeRestore = true;
+  vimKey(row, "i");
+  await until(() => $(".r-todo [contenteditable]") !== null);
+  await until(() => ime().length === 4);
+  focus.mockReturnValue(false);
+  esc();
+  await until(() => $$(".r-todo [contenteditable]").length === 0);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ime().length).toBe(4);
+  // Vimモードを無効にしたことで挿入モードが終わったときも、切り替えない
+  focus.mockReturnValue(true);
+  prefs.vimMode = true;
+  vimKey(row, "i");
+  await until(() => $(".r-todo [contenteditable]") !== null);
+  await until(() => ime().length === 5);
+  prefs.vimMode = false;
+  flushSync();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(ime().length).toBe(5);
+  focus.mockRestore();
+});
+
+test("Vim モードの整理モードのリスト：ノーマルモードで IME が先に受けたキー（keyCode 229）も、押した物理キーで Vim の操作になる", async () => {
+  prefs.vimMode = true;
+  await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [bi(item(A, "一", { sortKey: "a0" })), bi(item(B, "二", { sortKey: "a1" })), bi(item(C, "三", { sortKey: "a2" }))],
+      },
+    },
+  });
+  const rows = () => $$(".r-todo .item");
+  const active = () => document.activeElement as HTMLElement;
+  rows()[0].focus();
+  // 「Process」で届く（Chromium 系）：j で下へ
+  const ime = (code: string, shiftKey = false, init: KeyboardEventInit = {}) =>
+    vimKey(active(), "Process", { code, keyCode: 229, shiftKey, ...init });
+  expect(ime("KeyJ").defaultPrevented).toBe(true);
+  await until(() => active() === rows()[1]);
+  // 変換中の印（isComposing）が付いて届く（WebKit 系）：Shift+G で末尾へ
+  ime("KeyG", true, { key: "G", isComposing: true });
+  await until(() => active() === rows()[2]);
+  // k で上へ、g g で先頭へ
+  ime("KeyK");
+  await until(() => active() === rows()[1]);
+  ime("KeyG");
+  ime("KeyG");
+  await until(() => active() === rows()[0]);
+  // 読めないキー（物理キーが英字・数字でない）は何も起こさない
+  vimKey(active(), "Process", { code: "Space", keyCode: 229 });
+  expect(active()).toBe(rows()[0]);
+  // かなに変わる母音のキーも、a で編集（行末）に入れる
+  ime("KeyA");
+  await until(() => $(".r-todo [contenteditable]") !== null);
+  expect(rowsOf(".r-todo")).toEqual(["一", "二", "三"]);
+});
+
 test("振り返りテンプレートの挿入は、設定で変えた割当に従う（元のキーでは入らない）", async () => {
   prefs.shortcuts = { template: "Mod+Shift+E" };
   await start();

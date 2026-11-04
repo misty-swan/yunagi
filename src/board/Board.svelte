@@ -14,6 +14,7 @@
   import { boardActionOf } from "../lib/board_keys";
   import { shortDate } from "../lib/dates";
   import { t } from "../lib/i18n";
+  import { imeEnterInsert, imeLeaveInsert } from "../lib/ime.svelte";
   import type { Notice } from "../lib/notice.svelte";
   import { prefs, type Layout } from "../lib/prefs.svelte";
   import type { Session } from "../lib/session.svelte";
@@ -134,6 +135,19 @@
     untrack(() => {
       model.insert = false;
       model.vimPending = null;
+    });
+  });
+
+  // Vim の挿入モードの出入りに合わせて、IME を切り替える（操作仕様書 4.4。挿入モードを抜ける経路は
+  // Esc・フォーカスの移動・日の移動などいくつもあるので、出入りの変化で見る）。Vimモードを無効にしたことで
+  // 挿入モードが終わったときは、切り替えない（`imeLeaveInsert` が Vimモードの有効を確かめる）
+  let wasInsert = false;
+  $effect(() => {
+    const insert = model.insert;
+    untrack(() => {
+      if (insert && !wasInsert) imeEnterInsert();
+      else if (!insert && wasInsert) imeLeaveInsert();
+      wasInsert = insert;
     });
   });
 

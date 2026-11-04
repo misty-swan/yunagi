@@ -2,8 +2,17 @@ import { history, historyKeymap, standardKeymap } from "@codemirror/commands";
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { getCM, Vim } from "@replit/codemirror-vim";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { leavesToApp, onVimMode, setVimHost, vimExtension, vimModeOf, type VimHost, type VimMode } from "./editor_vim";
+import { imeEnterInsert, imeLeaveInsert } from "./ime.svelte";
+
+// IME の切替そのものは試さない（呼ばれることだけを見る。ime.test.ts）
+vi.mock("./ime.svelte", () => ({ imeEnterInsert: vi.fn(), imeLeaveInsert: vi.fn() }));
+
+beforeEach(() => {
+  vi.mocked(imeEnterInsert).mockClear();
+  vi.mocked(imeLeaveInsert).mockClear();
+});
 
 // jsdom には Range の位置が無い（CodeMirror が測るときに使う）
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
@@ -327,4 +336,71 @@ test("振り返り（ホストなし）では <Space>t <Space>b <Space>h は何�
   expect(v.state.doc.toString()).toBe("one\ntwo");
   expect(v.state.selection.main.head).toBe(0);
   expect(vimModeOf(v)).toBe("normal");
+});
+
+test("IME の切替（操作仕様書 4.4）：挿入モードを抜けると英数にし、入ると戻す。ビジュアルとの行き来・最初の通知では呼ばない", () => {
+  const v = make("one two");
+  expect([vi.mocked(imeLeaveInsert).mock.calls.length, vi.mocked(imeEnterInsert).mock.calls.length]).toEqual([0, 0]);
+  keys(v, "v", "<Esc>", "v", "<Esc>");
+  expect([vi.mocked(imeLeaveInsert).mock.calls.length, vi.mocked(imeEnterInsert).mock.calls.length]).toEqual([0, 0]);
+  keys(v, "i");
+  expect([vi.mocked(imeLeaveInsert).mock.calls.length, vi.mocked(imeEnterInsert).mock.calls.length]).toEqual([0, 1]);
+  keys(v, "<Esc>");
+  expect([vi.mocked(imeLeaveInsert).mock.calls.length, vi.mocked(imeEnterInsert).mock.calls.length]).toEqual([1, 1]);
+  // Ctrl+[ でも抜ける。ビジュアルから c で入る場合も入る
+  keys(v, "a", "<C-[>");
+  expect([vi.mocked(imeLeaveInsert).mock.calls.length, vi.mocked(imeEnterInsert).mock.calls.length]).toEqual([2, 2]);
+  keys(v, "v", "l", "c");
+  expect(vimModeOf(v)).toBe("insert");
+  expect([vi.mocked(imeLeaveInsert).mock.calls.length, vi.mocked(imeEnterInsert).mock.calls.length]).toEqual([2, 3]);
+});
+
+/** IME が入れようとした文字 `text` を、入力の処理に渡す（Vim 拡張と、押下から作ったキーの置き換え）。 */
+function typed(v: EditorView, text: string): boolean {
+  return v.state.facet(EditorView.inputHandler).some((h) => h(v, 0, 0, text, () => v.state.update({})));
+}
+
+// Vim 拡張は入力の処理の最後に、変換を終わらせるために DOM を付け替える（forceEndComposition）。jsdom には
+// 実際の選択範囲が無く、その後の選択範囲が先頭に戻るので、1つの試験で押すのは1回だけにする。
+test("ノーマルモードで IME が先に受けたキー（key が Process）は、押した物理キーで Vim の操作になる（かなになる母音も）", () => {
+  // 日本語入力がオンで a を押すと、IME は「あ」を入れようとする。押した物理キーは a
+  const a = make("one two three");
+  press(a, { key: "Process", code: "KeyA", keyCode: 229 });
+  expect(typed(a, "あ")).toBe(true);
+  expect(vimModeOf(a)).toBe("insert");
+  expect(a.state.doc.toString()).toBe("one two three");
+  a.destroy();
+  // w（「ｗ」になる）で単語の移動
+  const w = make("one two three");
+  press(w, { key: "Process", code: "KeyW", keyCode: 229 });
+  expect(typed(w, "ｗ")).toBe(true);
+  expect(w.state.selection.main.head).toBe(4);
+  w.destroy();
+  // Shift+A で行末に入る
+  const big = make("one two three");
+  press(big, { key: "Process", code: "KeyA", keyCode: 229, shiftKey: true });
+  expect(typed(big, "Ａ")).toBe(true);
+  expect(big.state.selection.main.head).toBe(13);
+  expect(vimModeOf(big)).toBe("insert");
+  expect(big.state.doc.toString()).toBe("one two three");
+});
+
+test("IME が先に受けたキーでも、回数指定の数字は Vim に渡る。読めないキー・挿入モードでは置き換えない", () => {
+  const n = make("a b c d e");
+  press(n, { key: "Process", code: "Digit2", keyCode: 229 });
+  typed(n, "２");
+  keys(n, "w");
+  expect(n.state.selection.main.head).toBe(4);
+  n.destroy();
+  // 物理キーが英字・数字でない：置き換えず、Vim 拡張が文字を受けて変換を終わらせる（Vim のキーにならない
+  // 文字は何も起こさず、本文にも入らない）
+  const v = make("a b c d e");
+  press(v, { key: "Process", code: "Space", keyCode: 229 });
+  expect(typed(v, "　")).toBe(true);
+  expect(v.state.doc.toString()).toBe("a b c d e");
+  // 挿入モードでは IME の入力を邪魔しない
+  keys(v, "i");
+  press(v, { key: "Process", code: "KeyA", keyCode: 229 });
+  expect(typed(v, "あ")).toBe(false);
+  expect(vimModeOf(v)).toBe("insert");
 });

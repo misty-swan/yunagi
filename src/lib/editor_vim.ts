@@ -17,7 +17,8 @@ import { Facet, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import { getCM, Vim, vim } from "@replit/codemirror-vim";
 import type { ItemKind } from "./bindings";
-import { composing, isMacPlatform } from "./keys";
+import { imeEnterInsert, imeLeaveInsert } from "./ime.svelte";
+import { composing, isMacPlatform, vimKeyOfCode } from "./keys";
 
 /** Vim のモード（操作仕様書 4.1 の表示）。 */
 export type VimMode = "normal" | "insert" | "visual";
@@ -68,8 +69,8 @@ function setup() {
   Vim.vimKeyFromEvent = (e, state) => {
     if (leavesToApp(e, mac)) return undefined;
     // 挿入モードの変換中の Esc は変換の取り消しなので、Vim の Esc として扱わない（操作仕様書 3章）。除くのは
-    // 挿入モードだけ（ノーマルモード中の日本語入力の扱いは 4.4 の 2。YUN-85 が作る）。Vim が自分で作る、
-    // 押下の情報を持たない擬似の押下は、どちらの項目も無いので除かれない
+    // 挿入モードだけ（ノーマルモード中は、IME の状態にかかわらずキーを Vim の操作として扱う。4.4 の 2。
+    // `imeKeydown`）。Vim が自分で作る、押下の情報を持たない擬似の押下は、どちらの項目も無いので除かれない
     if (state?.insertMode === true && composing(e)) return undefined;
     // Caps Lock が入っていると Ctrl+R の `key` は "R" で届き、Vim の `<C-R>`（割当なし）になってしまう
     if (e.ctrlKey && !e.shiftKey && e.key.length === 1 && e.key !== e.key.toLowerCase()) {
@@ -138,7 +139,11 @@ const modeListener = ViewPlugin.fromClass(
       // ビジュアルモードを抜けるときなどに同じモードを続けて知らせてくるので、変わったときだけ伝える
       const tell = (mode: VimMode) => {
         if (mode === last) return;
+        const before = last;
         last = mode;
+        // 挿入モードの出入りに合わせて IME を切り替える（操作仕様書 4.4。最初の通知は出入りでない）
+        if (before === "insert" && mode !== "insert") imeLeaveInsert();
+        else if (before !== null && before !== "insert" && mode === "insert") imeEnterInsert();
         v.state.facet(onVimMode).forEach((f) => f(mode));
       };
       if (cm === null) {
@@ -167,9 +172,47 @@ const keepSpaceOut = EditorView.domEventHandlers({
   keydown: (e, v) => e.key === " " && !composing(e) && !e.ctrlKey && !e.metaKey && !e.altKey && vimModeOf(v) !== "insert",
 });
 
+/**
+ * ノーマル・ビジュアルモード中に、IME が先に受けたキー（`key` が "Process" など）の、押した物理キーから
+ * 作った Vim のキー。IME の状態にかかわらずキーを Vim の操作として扱うため（操作仕様書 4.4 の 2）。
+ *
+ * Vim 拡張は、このキーの押下では何もせず、IME が入れようとした文字（変換が始まったときの1文字）を
+ * Vim のキーとして扱って、変換を終わらせる。この文字は、かなの入力ではローマ字の母音が「あ」「い」に
+ * なる（`a` `i` `o` が Vim のキーにならない）。そこで、押下のときに物理キーから Vim のキーを作って
+ * 覚え、入力の文字を、その Vim のキーに置き換えて Vim 拡張に渡す。
+ */
+const imeKeys = new WeakMap<EditorView, string>();
+
+/** IME が先に受けたキーの押下か（`key` が実際のキーでない）。実際のキーで届くときは、Vim 拡張が自分で扱う。 */
+function processKey(e: KeyboardEvent): boolean {
+  return e.key === "Process" || e.key === "Unidentified";
+}
+
+const imeKeydown = EditorView.domEventHandlers({
+  keydown: (e, v) => {
+    imeKeys.delete(v);
+    const mode = vimModeOf(v);
+    if (mode !== null && mode !== "insert" && processKey(e)) {
+      const key = vimKeyOfCode(e);
+      if (key !== null) imeKeys.set(v, key);
+    }
+    return false;
+  },
+});
+
+const imeInput: Parameters<typeof EditorView.inputHandler.of>[0] = (v, from, to, text, insert) => {
+  const key = imeKeys.get(v);
+  if (key === undefined) return false;
+  imeKeys.delete(v);
+  if (vimModeOf(v) === "insert" || text === key) return false;
+  // ほかの入力の処理（Vim 拡張）に、置き換えたキーを渡す
+  return v.state.facet(EditorView.inputHandler).some((h) => h !== imeInput && h(v, from, to, key, insert));
+};
+
 /** Vim のキーを足す拡張（エディタの標準のキーより先に試す位置に置く）。 */
 export function vimExtension(): Extension {
   setup();
-  // `keepSpaceOut` は、Vim が受けなかったキーだけを見るよう、Vim の後に置く
-  return [vim({ status: false }), keepSpaceOut, modeListener];
+  // `keepSpaceOut` は、Vim が受けなかったキーだけを見るよう、Vim の後に置く。IME のキーの置き換えは、
+  // Vim 拡張の入力の処理より先に試す
+  return [imeKeydown, EditorView.inputHandler.of(imeInput), vim({ status: false }), keepSpaceOut, modeListener];
 }

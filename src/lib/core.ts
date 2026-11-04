@@ -20,6 +20,7 @@ import {
   type DataDirChanged,
   type Deleted,
   type Id,
+  type ImeStatus,
   type Item,
   type ItemFields,
   type ItemKind,
@@ -167,6 +168,12 @@ export const core = {
    */
   reportUiState: (state: Omit<UiReport, "session" | "seq">) =>
     call<null>("report_ui_state", { state: { ...state, session: PAGE_SESSION, seq: ++reportSeq } }),
+  /** この環境で IME（日本語入力）の切替ができるか（設定画面の制約の表示。操作仕様書 4.4 の 4）。 */
+  imeStatus: () => call<ImeStatus>("ime_status"),
+  /** Vim の挿入モードを抜けた：IME を英数入力に切り替える。切替は待たずに返る（失敗しても失敗にならない）。 */
+  imeLeaveInsert: () => call<null>("ime_leave_insert"),
+  /** Vim の挿入モードに入った：抜けた時点の入力状態に戻す。 */
+  imeEnterInsert: () => call<null>("ime_enter_insert"),
 };
 
 /** イベントを聞き始められなかったとき、やり直すまでの時間。 */
