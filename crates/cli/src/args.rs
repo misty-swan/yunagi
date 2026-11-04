@@ -31,6 +31,9 @@ pub enum Command {
     /// `mcp [--client ID]`：MCP サーバー（stdio）を動かす（05 4.5）。`client` は識別子で、無ければ
     /// `unknown` クライアントになる。形は読む段階で確かめてある。
     Mcp { client: Option<String> },
+    /// `agent setup [--claude-code] [--codex]`：エージェントの設定に MCP サーバーを登録する（05 6章）。
+    /// どちらの指定も無ければ、検出したエージェントすべて。
+    AgentSetup { claude_code: bool, codex: bool },
 }
 
 /// ローカル API の操作の名前（05 3章のツール名）と引数。
@@ -95,6 +98,9 @@ Commands:
   doctor                            Show diagnostic information (no work data)
   mcp [--client ID]                 Run the MCP server on standard input and output
                                     (for AI agents; ID is for example claude-code)
+  agent setup [--claude-code] [--codex]
+                                    Register the MCP server with Claude Code and Codex
+                                    (shows the changes and asks first; needs a terminal)
 
 Options:
   --json       Print JSON instead of text
@@ -154,7 +160,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
                         options.push((name.to_owned(), Some(value.to_owned())));
                     }
                     // 値を取らない指定
-                    None if rest == "delete" => options.push((rest.to_owned(), None)),
+                    None if matches!(rest, "delete" | "claude-code" | "codex") => {
+                        options.push((rest.to_owned(), None));
+                    }
                     // 値を省略できる指定。次の引数が `-` で始まらなければ件名として読む
                     // （`-` や `--` で始まる件名は `--heading=TITLE` と書く）
                     None if rest == "heading" => {
@@ -195,6 +203,13 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
         return Err(fail(error));
     }
     let command = command(&positionals, &options).map_err(fail)?;
+    // `agent setup` は人が読む文だけを出す（確認の質問を含むため）。`--json` は断る
+    if json && matches!(command, Command::AgentSetup { .. }) {
+        return Err(ParseError {
+            error: error::invalid_argument("agent setup prints text only; --json is not supported"),
+            json: false,
+        });
+    }
     Ok(Parsed { json, command })
 }
 
@@ -391,6 +406,15 @@ fn command(
             }
             Command::Mcp { client }
         }
+        "agent" => match rest {
+            ["setup"] => {
+                let claude_code = opts.take_flag("claude-code")?;
+                let codex = opts.take_flag("codex")?;
+                opts.finish()?;
+                Command::AgentSetup { claude_code, codex }
+            }
+            _ => return Err(unknown_or_usage(positionals, rest)),
+        },
         _ => return Err(unknown(positionals)),
     };
     Ok(command)
@@ -682,6 +706,44 @@ mod tests {
         assert_eq!(search.params["from"], "2026-11-01");
         assert_eq!(search.params["kinds"], json!(["todo", "note"]));
         assert_eq!(search.params["limit"], 10);
+    }
+
+    #[test]
+    fn agent_setup_takes_the_two_target_flags() {
+        let setup = |claude_code, codex| Command::AgentSetup { claude_code, codex };
+        assert_eq!(
+            parse_args(&["agent", "setup"]).unwrap().command,
+            setup(false, false)
+        );
+        assert_eq!(
+            parse_args(&["agent", "setup", "--codex"]).unwrap().command,
+            setup(false, true)
+        );
+        // 値を取らない指定なので、次の位置引数を値として飲み込まない
+        assert_eq!(
+            parse_args(&["agent", "--claude-code", "setup", "--codex"])
+                .unwrap()
+                .command,
+            setup(true, true)
+        );
+        for bad in [
+            &["agent"][..],
+            &["agent", "setup", "extra"],
+            &["agent", "setup", "--codex=1"],
+            &["agent", "setup", "--client", "x"],
+            &["agent", "revert"],
+            &["board", "--codex"],
+        ] {
+            assert!(parse_args(bad).is_err(), "{bad:?}");
+        }
+        // 確認の質問があるので `--json` は断り、テキストで伝える
+        let args: Vec<String> = ["--json", "agent", "setup"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let e = parse(&args).unwrap_err();
+        assert!(!e.json);
+        assert_eq!(error::code(&e.error), "invalid_argument");
     }
 
     #[test]

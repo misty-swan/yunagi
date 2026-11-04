@@ -46,6 +46,17 @@ pub fn invalid_argument(message: impl Into<String>) -> ErrorObject {
     json!({"code": "invalid_argument", "message": message.into()})
 }
 
+/// 対象が見つからない（終了コード 4。`agent setup` が、登録できるエージェントを見つけられなかったとき）。
+pub fn not_found(message: impl Into<String>) -> ErrorObject {
+    json!({"code": "not_found", "message": message.into()})
+}
+
+/// 確認の端末が無いなどで、利用者の確認を得る操作を確定できない（終了コード 3）。スコープの不足ではない
+/// ので `required_scope` は付けない（`agent setup`。05 2章・6章）。
+pub fn permission_denied(message: impl Into<String>) -> ErrorObject {
+    json!({"code": "permission_denied", "message": message.into()})
+}
+
 /// どの分類にも当たらない失敗（終了コード 1）。
 pub fn internal(message: impl Into<String>) -> ErrorObject {
     json!({"code": "internal", "message": message.into()})

@@ -65,6 +65,11 @@ getrandom = "=0.4.3"
 # そろえ、新しく取り込むコードを増やさない
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
+# Codex の設定ファイル（config.toml）の書き換え（crates/cli/src/agent_setup/codex.rs）。コメントと並びを
+# 保ったまま、`[mcp_servers.yunagi]` だけを足す・直すために使う。Tauri がすでに使っている版にそろえ、
+# 新しく取り込むコードを増やさない（2026-11-04 に確かめた最新の安定版は 0.25.18 だが、公開した当日なので
+# 使わない。0.25.17 は 2026-10-09 公開。どちらも Rust 1.85 以上）。必要な機能は構文の読み取りと書き出しだけ
+toml_edit = { version = "=0.25.17", default-features = false, features = ["parse", "display"] }
 # 画面（TypeScript）と共有する型の定義を Rust の型から作る（src-tauri/src/bindings.rs）。
 # 安定版があり、Tauri に縛られない。serde の名前の付け方（rename_all など）を読んでそろえる
 ts-rs = { version = "=12.0.1", default-features = false, features = ["serde-compat"] }

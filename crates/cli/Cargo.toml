@@ -21,9 +21,11 @@ path = "src/main.rs"
 yunagi-core.workspace = true
 yunagi-api.workspace = true
 serde_json.workspace = true
+# `agent setup`：Codex の設定ファイルの書き換えと、バックアップの名前の日時
+toml_edit.workspace = true
+jiff.workspace = true
 
 [dev-dependencies]
-jiff.workspace = true
 tempfile.workspace = true
 
 # 結合テスト（テスト計画書 4.5「CLI」）。既定ディレクトリを一時フォルダにするため、環境変数を設定してから
