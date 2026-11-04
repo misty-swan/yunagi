@@ -470,7 +470,7 @@ test("OS 全体のショートカット：設定を読んだら登録し、割�
   expect(registered(core)).toEqual(["Mod+Shift+D", "Mod+Shift+E"]);
   expect(core.settings.shortcuts).toEqual({ bringToFront: "Mod+Shift+E" });
 
-  // 関係のない設定を変えても、登録し直さない
+  // すべて初期値に戻すと、初期割当で登録し直す
   button("すべて初期値に戻す").click();
   await until(() => registered(core).length === 3);
   expect(registered(core).at(-1)).toBe("Mod+Shift+D");

@@ -36,7 +36,7 @@ On Linux, the tar.gz and .deb packages do not update themselves from within the 
 
 Open Yunagi from your applications. After that, press **Mod+Shift+D** (⌘ on macOS, Ctrl on Windows and Linux) to bring it up from anywhere.
 
-You can change this key in Settings → Operation → Keyboard shortcuts (a letter or digit key combined with Mod or Alt). If another app is already using the key and it can't be registered with the OS, the reason appears under that row in Settings. Choose a different key.
+You can change this key in the Operation section of Settings, under Keyboard shortcuts (a letter or digit key combined with Mod or Alt). If another app is already using the key and it can't be registered with the OS, the reason appears under that row in Settings. Choose a different key.
 
 On Linux with Wayland, this shortcut may not work (Settings says so too). If so, assign the command `yunagi show` to a key of your choice in your desktop environment's keyboard settings.
 

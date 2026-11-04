@@ -24,13 +24,13 @@ class GlobalShortcutRegistry {
   #queue: Promise<void> = Promise.resolve();
 
   /**
-   * いまの割当を OS に登録する。前に頼んだ割当と同じなら何もしない（`force` なら、同じでも頼み直す）。
+   * いまの割当を OS に登録する。前に頼んだ割当と同じなら何もしない。
    * 呼び出しに失敗したときは、登録できたか分からないので、次に呼ばれたとき同じ割当でも頼み直す。
    */
-  sync(mac: boolean, force = false): Promise<void> {
+  sync(mac: boolean): Promise<void> {
     const b = currentKeymap(mac).get("bringToFront")?.binding ?? null;
     const binding = b === null ? null : format(b);
-    if (!force && binding === this.#requested) return this.#queue;
+    if (binding === this.#requested) return this.#queue;
     this.#requested = binding;
     this.#queue = this.#queue.then(async () => {
       try {
