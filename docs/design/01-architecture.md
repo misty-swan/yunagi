@@ -87,6 +87,18 @@ Vim モードで挿入モードを抜けたとき IME を英数入力に切り�
 - **新しい依存**（Rust）：Windows 向けに `windows`、macOS 向けに `core-foundation` を、`src-tauri` の直接の依存に足した（そのターゲットでだけ。直下の `Cargo.toml` の `[workspace.dependencies]`）。どちらも Tauri がすでに使っていて `Cargo.lock` に載っている版（`windows` 0.62.2・`core-foundation` 0.10.1）なので、新しく取り込むコードは増えない。必要な理由：Windows は IMM の関数と窓の API（`ImmGetDefaultIMEWnd`・`SendMessageW` など）を安全な型で呼ぶため、macOS は入力ソース API が返す文字列・配列・辞書の参照の管理（解放漏れを避ける）のため。入力ソース API そのものの宣言（`extern`）は、Rust の部品が無いので `ime.rs` に書く。macOS の `objc2-app-kit` には入力ソース API が無いので使えない。コマンドを呼ぶ方式（`im-select` などの外部ツール）は、利用者に追加の導入を求めるので採らない。
 - **確かめられた範囲**：開発は Linux でしか行えない。Linux の fcitx5 は、切替の手順（`Session`・`linux::detect`・`SystemRunner`）を実機の fcitx5 に対して動かし、英数への切替（状態 2 → 1）と復元（1 → 2）を確かめた（アプリの窓を通したものではなく、WebKitGTK の入力との組み合わせは未確認）。Windows・macOS の部分は、`cargo check --target`（x86_64-pc-windows-gnu・x86_64-apple-darwin）で型の検査だけを通し、実機では動かしていない。IBus は動かしていない。実機の確認項目はテスト計画書 4.2 にある。
 
+### 3.5 OS 全体のショートカットの方式（2026-11-04 決定）
+
+アプリが前面になくても、割当のキー（初期割当は Mod+Shift+D）で Yunagi の窓を前面に出す（操作仕様書 1章「OS 全体の操作」）。OS への登録は OS の機能なので、デスクトップアプリ（`src-tauri/src/global_shortcut.rs`）に置く。コア（`yunagi-core`）には入れない。
+
+- **部品**：Tauri のプラグイン `tauri-plugin-global-shortcut` の 2.4.1（直下の `Cargo.toml` で `=` で固定。3.x は alpha なので使わない）。内部は `global-hotkey` で、Windows は `RegisterHotKey`、macOS は `RegisterEventHotKey`、Linux の X11 は `XGrabKey` を使う。
+- **登録は Rust 側だけで行う**。プラグインの画面側のパッケージ（`@tauri-apps/plugin-global-shortcut`）は入れず、`capabilities/default.json` に `global-shortcut:*` も窓の操作の権限も足さない。画面には、割当を渡す Tauri コマンド `set_global_shortcut(binding)` 1つだけを見せる。画面から任意のキーを OS に登録したり、窓を操作したりできないようにするため。窓を前面に出す処理（最小化を解く・表示・フォーカス）も Rust 側に閉じる。押したときだけ働かせる（プラグインは離したときにも処理を呼ぶ）。
+- **割当は画面が持つ**（設定の `shortcuts`。keymap.ts の `bringToFront`）。画面は、設定の読み込みが終わった後、いまの割当の値が変わるたびにコマンドを呼ぶ（`src/lib/global_shortcut.svelte.ts`）。呼び出しは順に1つずつ。コマンドは、前の登録を外してから、新しい登録をする。割当が `null`（使えない状態）なら外すだけ。割当の文字列 → OS のキーの変換は、`Mod` を macOS では ⌘（`SUPER`）、それ以外では Ctrl にし、英字は `Key<文字>`、数字は `Digit<数字>`（キーの位置）にする。英字・数字以外は変換しない（画面側の検査と同じ）。
+- **失敗しても起動を止めない**。プラグインは `run()` の `setup` の中で実行時に入れ（`AppHandle::plugin`）、入れられなければログに出して続ける（以後の登録は `Unavailable`）。窓を開かない結合テスト（`tests/bridge.rs`・`tests/crash.rs`）と `manage_core` にはプラグインを入れない。登録の結果は、コマンドの返り値 `GlobalShortcutStatus`（`off`・`registered`・`taken`・`failed`・`unavailable` と、Wayland かどうかの印）で返し、設定画面が理由の表示に使う。
+- **登録の失敗の見分け方**：ほかのアプリが使っているキーは、Windows が `ERROR_HOTKEY_ALREADY_REGISTERED`、X11 が `BadAccess` で返し、プラグインはどちらも「HotKey already registered」の文で返すので、`taken` にする。macOS は `RegisterEventHotKey` の失敗を一般の失敗として返すので `failed` になる（ほかのアプリが使っているときに失敗を返すかは未確認）。
+- **Wayland**：`global-hotkey` は X11 だけに対応する。Wayland では XWayland の窓にフォーカスがあるときだけ効く。X の画面に接続できないと、プラグインは接続の失敗を黙って捨て、登録の呼び出しは成功を返す（部品のソースで確かめた）。そのため成否を知る手段が無く、Wayland のセッションでは、登録できても設定に案内を出す（操作仕様書 1章）。代わりの手段は、デスクトップ環境のキーボード設定からコマンド `yunagi show` を呼ぶ方式（`yunagi show` はまだ無い。CLI 仕様書 3.1）。Wayland のポータル（`org.freedesktop.portal.GlobalShortcuts`）を使う方式は、デスクトップ環境ごとの対応がまだそろっていないので採らない。
+- **確かめられた範囲**：開発は Linux でしか行えない。割当 → OS のキーの変換、登録・外す・登録し直す・失敗の分類（部品を偽物に差し替えたもの）、画面側の登録のし直し（割当を変える・保存に失敗して戻る・使えなくなる）と理由の表示は、自動テストで確かめた。実際に OS に登録して窓が前面に出るかは、どの OS でも実機で確かめていない（テスト計画書 4.8）。`src-tauri/src/global_shortcut.rs` は OS ごとの分岐を持たない（`Mod` の読み替えだけ `cfg!(target_os = "macos")`）。登録の部品 `global-hotkey` は、Windows 向け（`x86_64-pc-windows-gnu`）の型検査を通した。macOS 向けは、この環境では Objective-C の部品のビルドで止まり（`cc` が `objc2-exception-helper` をビルドできない）、アプリごとも部品だけも型検査を通せていない。アプリごとの Windows 向けの型検査も、C の道具（mingw）が無く通せていない。
+
 ## 4. 書き込み経路と同時実行
 
 1. アプリ起動中は、コアがデータベースへの唯一の書き込み主体となる。CLI と MCP サーバーはローカル API 経由でコアに依頼する。
@@ -332,7 +344,7 @@ change_log の項目の記録には、その操作が変えた欄だけを `befo
 
 | 機能 | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| グローバルショートカット | 対応 | 対応 | X11 は対応。Wayland は環境依存のため、デスクトップ環境のショートカット設定から `yunagi show` を呼ぶ方式を案内する |
+| グローバルショートカット（3.5） | 対応 | 対応 | X11 は対応。Wayland は環境依存のため、効かないことがある旨を設定に出し、デスクトップ環境のショートカット設定から `yunagi show` を呼ぶ方式を案内する |
 | IME の英数切替（Vimモード。3.4） | 入力ソース API | IMM による IME オフ | fcitx5 / IBus の切替（コマンド `fcitx5-remote`・`ibus engine` が D-Bus で常駐プロセスに頼む。ベストエフォート） |
 | 常駐 | メニューバー | タスクトレイ | トレイ（環境依存） |
 
@@ -342,7 +354,6 @@ change_log の項目の記録には、その操作が変えた欄だけを `befo
 
 ## 9. 未決事項
 
-- Wayland でのグローバルショートカットの案内方法
 - ローカル API のプロトコル（JSON-RPC を想定）
 - WebView が識別子の名前で作るフォルダの OS ごとの場所と、`uninstall --purge` で消すかどうか（6.1）
 - Linux のデスクトップ連携：.deb・AppImage に Tauri が入れるデスクトップエントリの名前と、X11 で窓とエントリを結び付ける `StartupWMClass` の値（6.1）

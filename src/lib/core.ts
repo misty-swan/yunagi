@@ -20,6 +20,7 @@ import {
   type DataDirChanged,
   type Deleted,
   type Id,
+  type GlobalShortcutStatus,
   type ImeStatus,
   type Item,
   type ItemFields,
@@ -174,6 +175,11 @@ export const core = {
   imeLeaveInsert: () => call<null>("ime_leave_insert"),
   /** Vim の挿入モードに入った：`restore` なら抜けた時点の入力状態に戻す（どちらでも、覚えていた状態は捨てる）。 */
   imeEnterInsert: (restore: boolean) => call<null>("ime_enter_insert", { restore }),
+  /**
+   * OS 全体のショートカット（Yunagi を前面に呼び出す）の割当を `binding` にして登録し直す（`null` は外す）。
+   * 登録できなかった理由は、失敗にせず、返す状態で知らせる。
+   */
+  setGlobalShortcut: (binding: string | null) => call<GlobalShortcutStatus>("set_global_shortcut", { binding }),
 };
 
 /** イベントを聞き始められなかったとき、やり直すまでの時間。 */

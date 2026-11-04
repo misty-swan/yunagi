@@ -41,6 +41,7 @@
   import { Carryover } from "./lib/carryover.svelte";
   import CarryoverPanel from "./carryover/CarryoverPanel.svelte";
   import { reloadPage } from "./lib/page";
+  import { globalShortcut } from "./lib/global_shortcut.svelte";
   import { SettingsStore } from "./lib/settings.svelte";
   import { SettingsPanel } from "./lib/settings_panel.svelte";
   import { DataSettings } from "./lib/settings_data.svelte";
@@ -96,6 +97,18 @@
     });
   });
   const shown = $derived(ready && settingsStore.loaded);
+
+  // OS 全体のショートカット（Yunagi を前面に呼び出す）：設定を読み込んだら登録し、割当が変わるたびに登録し直す
+  // （割当の値を見るので、保存に失敗して値が戻ったときも、元のキーに戻る。操作仕様書 1章）。設定を読み込み直す間
+  // （データベースを開き直すとき）は外れたものとして扱い、読み込み直したら頼み直す
+  $effect(() => {
+    if (!settingsStore.loaded) {
+      untrack(() => globalShortcut.forget());
+      return;
+    }
+    // 依存を持つのは割当の値（`prefs.shortcuts`・`prefs.vimMode`）だけにする
+    void globalShortcut.sync(mac);
+  });
 
   // 定期バックアップを作れなかった（1日に1回だけ届く。コアは自動で作り直す。画面設計書 3章「上部のバー」）
   let stopped = false;

@@ -124,6 +124,8 @@ function mockCore(settings: Partial<Settings> = {}): Mock {
         case "report_ui_state":
         case "carryover_status":
           return null;
+        case "set_global_shortcut":
+          return { state: a.binding === null ? "off" : "registered", wayland: false };
         case "get_overview":
           return { counts, recent: [{ date: TODAY, counts }], unseenChanges: 0 };
         case "get_settings":
@@ -447,6 +449,118 @@ test("ショートカット割当：初期値に戻す。保存した割当が�
   button("すべて初期値に戻す").click();
   await until(() => Object.keys(core.settings.shortcuts).length === 0);
   expect(keyButton("today").textContent?.trim()).toBe("Ctrl+T");
+});
+
+/** OS 全体のショートカットを OS に頼んだ割当の履歴。 */
+const registered = (core: Mock) => core.calls.filter((c) => c.cmd === "set_global_shortcut").map((c) => c.args.binding);
+
+test("OS 全体のショートカット：設定を読んだら登録し、割当を変えるたびに登録し直す。初期値に戻すと初期割当で登録する", async () => {
+  const core = await start();
+  await until(() => registered(core).length === 1);
+  expect(registered(core)).toEqual(["Mod+Shift+D"]);
+  await open("operation");
+  expect(keyButton("bringToFront").textContent?.trim()).toBe("Ctrl+Shift+D");
+  // 登録できていれば、理由は出ない（Wayland でもない）
+  expect($('[data-action="bringToFront"] .bad')).toBeNull();
+
+  keyButton("bringToFront").click();
+  flushSync();
+  press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true }, keyButton("bringToFront"));
+  await until(() => registered(core).length === 2);
+  expect(registered(core)).toEqual(["Mod+Shift+D", "Mod+Shift+E"]);
+  expect(core.settings.shortcuts).toEqual({ bringToFront: "Mod+Shift+E" });
+
+  // 関係のない設定を変えても、登録し直さない
+  button("すべて初期値に戻す").click();
+  await until(() => registered(core).length === 3);
+  expect(registered(core).at(-1)).toBe("Mod+Shift+D");
+  expect(core.settings.shortcuts).toEqual({});
+});
+
+test("OS 全体のショートカット：ほかの操作と同じキー・英字と数字以外のキーは断り、登録し直さない。同じキーを使う操作があれば登録を外す", async () => {
+  const core = await start();
+  await until(() => registered(core).length === 1);
+  await open("operation");
+  const tryKey = (id: string, init: KeyboardEventInit) => {
+    keyButton(id).click();
+    flushSync();
+    press(init, keyButton(id));
+  };
+  // 共通の操作のキー（OS 全体のキーは、すべての範囲と重なる）
+  tryKey("bringToFront", { key: "k", code: "KeyK", ctrlKey: true });
+  expect(text('[data-action="bringToFront"] .bad')).toContain("「検索パレット」");
+  // 記号のキーと名前のキー
+  tryKey("bringToFront", { key: "[", code: "BracketLeft", ctrlKey: true });
+  expect(text('[data-action="bringToFront"] .bad')).toContain("英字か数字");
+  tryKey("bringToFront", { key: "Enter", code: "Enter", ctrlKey: true });
+  expect(text('[data-action="bringToFront"] .bad')).toContain("英字か数字");
+  // 整理・ノートの操作も、OS 全体のキー（Mod+Shift+D）は使えない
+  tryKey("toTodo", { key: "D", code: "KeyD", ctrlKey: true, shiftKey: true });
+  expect(text('[data-action="toTodo"] .bad')).toContain("「Yunagi を前面に呼び出す」");
+  expect(core.count("save_settings")).toBe(0);
+  expect(registered(core)).toEqual(["Mod+Shift+D"]);
+});
+
+test("OS 全体のショートカット：登録できなかった理由と、Wayland の案内を設定に出す。登録できなくても保存は断らない", async () => {
+  const core = await start();
+  await until(() => registered(core).length === 1);
+  await open("operation");
+  const change = (init: KeyboardEventInit) => {
+    keyButton("bringToFront").click();
+    flushSync();
+    press(init, keyButton("bringToFront"));
+  };
+
+  // ほかのアプリが使っている
+  core.answer.set_global_shortcut = { state: "taken", wayland: false };
+  change({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true });
+  await until(() => $('[data-action="bringToFront"] .bad') !== null);
+  expect(text('[data-action="bringToFront"] .bad')).toContain("ほかのアプリがこのキーを使っている");
+  expect(core.settings.shortcuts).toEqual({ bringToFront: "Mod+Shift+E" });
+
+  // そのほかの理由で登録できない
+  core.answer.set_global_shortcut = { state: "failed", wayland: false };
+  change({ key: "F", code: "KeyF", ctrlKey: true, shiftKey: true });
+  await until(() => text('[data-action="bringToFront"] .bad').includes("OS に登録できませんでした"));
+
+  // 部品が使えない
+  core.answer.set_global_shortcut = { state: "unavailable", wayland: false };
+  change({ key: "G", code: "KeyG", ctrlKey: true, shiftKey: true });
+  await until(() => text('[data-action="bringToFront"] .bad').includes("使えません"));
+
+  // Wayland：登録できても案内を出す
+  core.answer.set_global_shortcut = { state: "registered", wayland: true };
+  change({ key: "Y", code: "KeyY", ctrlKey: true, shiftKey: true });
+  await until(() => text('[data-action="bringToFront"] .bad').includes("Wayland"));
+  expect(text('[data-action="bringToFront"] .bad')).toContain("yunagi show");
+  expect(text('[data-action="bringToFront"] .bad')).not.toContain("ほかのアプリ");
+  // 登録できて Wayland でもなければ、出さない
+  core.answer.set_global_shortcut = { state: "registered", wayland: false };
+  change({ key: "J", code: "KeyJ", ctrlKey: true, shiftKey: true });
+  await until(() => $('[data-action="bringToFront"] .bad') === null);
+});
+
+test("OS 全体のショートカット：保存に失敗して割当が元に戻ったら、元のキーで登録し直す", async () => {
+  const core = await start();
+  await until(() => registered(core).length === 1);
+  await open("operation");
+  core.rejectSave = { kind: "internal", detail: "x" };
+  keyButton("bringToFront").click();
+  flushSync();
+  press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true }, keyButton("bringToFront"));
+  // 画面には新しい割当をすぐ当てて登録し、保存に失敗して戻ったら、元の割当で登録し直す
+  await until(() => registered(core).length === 3);
+  expect(registered(core)).toEqual(["Mod+Shift+D", "Mod+Shift+E", "Mod+Shift+D"]);
+  expect(core.settings.shortcuts).toEqual({});
+});
+
+test("OS 全体のショートカット：同じキーを使う操作に取られたときは登録を外す", async () => {
+  const core = await start({ shortcuts: { palette: "Mod+Shift+D" } });
+  // 変えた割当が初期割当に勝ち、「前面に呼び出す」は使えなくなる
+  await until(() => registered(core).length === 1);
+  expect(registered(core)).toEqual([null]);
+  await open("operation");
+  expect(text('[data-action="bringToFront"] .bad')).toContain("「検索パレット」に割り当てたキーと重なっている");
 });
 
 test("Vim モードの Windows・Linux は、前日・翌日の移動の初期割当が Alt+[ / Alt+] になる。変えた割当は残る", async () => {

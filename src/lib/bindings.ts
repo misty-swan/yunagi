@@ -743,6 +743,22 @@ export type ImeMethod = "fcitx5" | "ibus" | "macos_input_source" | "windows_imm"
 export type ImeStatus = { available: boolean, method: ImeMethod | null, };
 
 /**
+ * OS 全体のショートカット（Yunagi を前面に呼び出す）の、いまの登録の状態（`set_global_shortcut`）。
+ * 設定画面が、登録できなかった理由の表示に使う（操作仕様書 1章「割当の変更」）。
+ */
+export type GlobalShortcutState = "off" | "registered" | "taken" | "failed" | "unavailable";
+
+/**
+ * OS 全体のショートカットの登録の結果。
+ */
+export type GlobalShortcutStatus = { state: GlobalShortcutState, 
+/**
+ * Linux の Wayland のセッションか。Wayland では、登録できたように見えても効かないことがあり
+ * （登録の成否を OS から知る手段が無い）、設定画面は常に案内を出す（アーキテクチャ設計書 7章）。
+ */
+wayland: boolean, };
+
+/**
  * コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
  * （Display の文をそのまま使わない。README「エラーの表示」）。
  */

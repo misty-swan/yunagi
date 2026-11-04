@@ -56,7 +56,7 @@ export class ShortcutEditor {
       this.capturing = null;
       return true;
     }
-    const problem = problemOf(b, prefs.vimMode, this.mac);
+    const problem = problemOf(b, prefs.vimMode, this.mac, id);
     if (problem !== null) {
       this.message = { id, problem };
       this.capturing = null;

@@ -17,12 +17,14 @@ use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
+use crate::global_shortcut::GlobalShortcutController;
 use crate::ime::ImeWorker;
 use crate::types::{
     Archive, BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList,
-    CarryoverStatus, CloudService, CommandError, DataDirChanged, Date, Deleted, Id, ImeStatus,
-    Item, ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, SearchHit, SendResult,
-    Settings, SettingsPatch, Snapshot, SplitResult, Startup, TextDoc, TextSave, UiReport,
+    CarryoverStatus, CloudService, CommandError, DataDirChanged, Date, Deleted,
+    GlobalShortcutStatus, Id, ImeStatus, Item, ItemFields, ItemKind, ItemOutcome, NoteMark,
+    Overview, Position, SearchHit, SendResult, Settings, SettingsPatch, Snapshot, SplitResult,
+    Startup, TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -606,6 +608,25 @@ pub async fn ime_status() -> Result<ImeStatus, CommandError> {
         .map_err(|e| CommandError::Internal {
             detail: e.to_string(),
         })
+}
+
+/// OS 全体のショートカット（Yunagi を前面に呼び出す）の割当を `binding` に変えて OS に登録し直す。
+/// `None` は登録を外す（割当が使えないとき）。登録できなかった理由は、返す状態で知らせる（失敗にしない。
+/// 操作仕様書 1章「割当の変更」）。プラグインの呼び出しはメインスレッドの完了を待つので、止めてよい
+/// スレッドで行う。
+#[tauri::command]
+pub async fn set_global_shortcut(
+    shortcut: State<'_, Arc<GlobalShortcutController>>,
+    binding: Option<String>,
+) -> Result<GlobalShortcutStatus, CommandError> {
+    let shortcut = Arc::clone(&shortcut);
+    tauri::async_runtime::spawn_blocking(move || {
+        shortcut.set(binding.as_deref(), cfg!(target_os = "macos"))
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        detail: e.to_string(),
+    })
 }
 
 /// Vim の挿入モードを抜けた：IME を英数入力に切り替える（操作仕様書 4.4 の 1）。切替は専用のスレッドが
