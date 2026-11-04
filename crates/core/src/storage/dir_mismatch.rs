@@ -274,15 +274,12 @@ mod os {
     use std::path::PathBuf;
 
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{
-        FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
-    };
+    use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 
     pub fn home_dir() -> Option<PathBuf> {
         // SAFETY: SHGetKnownFolderPath が返す、NUL で終わる文字列を、解放する前に写し取る。
         unsafe {
-            let path =
-                SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None).ok()?;
+            let path = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None).ok()?;
             let os = OsString::from_wide(path.as_wide());
             CoTaskMemFree(Some(path.as_ptr().cast()));
             Some(PathBuf::from(os))

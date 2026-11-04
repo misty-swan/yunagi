@@ -290,7 +290,10 @@ mod tests {
         let open = op(&["board", "open", "--date", "yesterday"]);
         assert_eq!(open.method, "open_board");
         assert_eq!(open.params["date"], "yesterday");
-        assert_eq!(op(&["board", "--date=2026-11-02"]).params["date"], "2026-11-02");
+        assert_eq!(
+            op(&["board", "--date=2026-11-02"]).params["date"],
+            "2026-11-02"
+        );
     }
 
     #[test]
@@ -306,8 +309,18 @@ mod tests {
     #[test]
     fn search_takes_a_query_a_range_and_repeated_kinds() {
         let search = op(&[
-            "search", "rate limit", "--from", "2026-11-01", "--to", "today", "--kind", "todo",
-            "--kind", "note", "--limit", "10",
+            "search",
+            "rate limit",
+            "--from",
+            "2026-11-01",
+            "--to",
+            "today",
+            "--kind",
+            "todo",
+            "--kind",
+            "note",
+            "--limit",
+            "10",
         ]);
         assert_eq!(search.method, "search");
         assert_eq!(search.params["query"], "rate limit");
@@ -325,7 +338,10 @@ mod tests {
 
     #[test]
     fn version_and_help_win_over_the_rest() {
-        assert_eq!(parse_args(&["--version"]).unwrap().command, Command::Version);
+        assert_eq!(
+            parse_args(&["--version"]).unwrap().command,
+            Command::Version
+        );
         assert_eq!(parse_args(&["board", "-h"]).unwrap().command, Command::Help);
     }
 

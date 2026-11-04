@@ -152,8 +152,16 @@ mod tests {
         );
         let d = date("2026-11-02");
         item::add_todo(conn, &cli, d, "rate limit survey", &tz, now).unwrap();
-        text_doc::append_note(conn, d, "intro\nthe rate LIMIT is 600", None, &cli, &tz, now)
-            .unwrap();
+        text_doc::append_note(
+            conn,
+            d,
+            "intro\nthe rate LIMIT is 600",
+            None,
+            &cli,
+            &tz,
+            now,
+        )
+        .unwrap();
         let found = search(
             conn,
             agent_client::CLI_ID,

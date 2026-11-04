@@ -44,7 +44,11 @@ pub fn main() {
     }
     let dir = data_dir::default_dir().unwrap();
     assert!(dir.path().starts_with(&home));
-    let tests: [(&str, Test); 9] = [
+    let tests: [(&str, Test); 10] = [
+        (
+            "the_cli_goes_through_the_app_and_follows_its_permissions",
+            the_cli_goes_through_the_app_and_follows_its_permissions,
+        ),
         (
             "listens_only_while_open_and_cleans_up",
             listens_only_while_open_and_cleans_up,
@@ -935,4 +939,122 @@ fn request_form_errors_use_the_standard_codes(dir: &DefaultDir) {
         wire::INVALID_REQUEST
     );
     let _ = Ulid::generate();
+}
+
+/// `yunagi`（CLI）を、同じプロセスの中で動かす。アプリが `yunagi.lock` を持っているので、直接モードでは
+/// 5 秒待って `busy` になる。成功すれば、ローカル API を通った証拠になる。
+fn yunagi(args: &[&str]) -> (i32, String, String) {
+    let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+    let (mut stdin, mut stdout, mut stderr) = (&b""[..], Vec::new(), Vec::new());
+    let code = yunagi_cli::run(
+        &args,
+        &yunagi_cli::Env {
+            // 本物のホームを調べない
+            alt_home: yunagi_cli::connect::AltHome::Fixed(None),
+            ..yunagi_cli::Env::default()
+        },
+        &mut yunagi_cli::Io {
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+    (
+        code,
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap(),
+    )
+}
+
+fn the_cli_goes_through_the_app_and_follows_its_permissions(dir: &DefaultDir) {
+    let h = Harness::opened(dir);
+    h.grant("cli", &[Scope::Todo, Scope::Append]);
+    h.ok("cli", "add_todo", json!({"text": "cli via app"}));
+    h.ok(
+        "cli",
+        "append_note",
+        json!({"text": "alpha beta\nsecond", "heading": "sync"}),
+    );
+    h.drain();
+
+    // 読み取り：アプリ経由で成功し、画面への `changed` は出さない（`cli` は登録済みで最後の接続の更新だけ）
+    let started = std::time::Instant::now();
+    let (code, out, err) = yunagi(&["--json", "board"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let board: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(board["todos"][0]["text"], "cli via app");
+    assert_eq!(board["todos"][0]["origin"], "agent");
+    let heading = board["note"]["headings"][0].as_str().unwrap().to_owned();
+    let (code, out, _) = yunagi(&["board", "open"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("cli via app"));
+    let (code, out, _) = yunagi(&["note", "get", "--heading", &heading]);
+    assert_eq!(code, 0);
+    assert!(out.contains("alpha beta"));
+    let (code, _, err) = yunagi(&["note", "get", "--heading", "no such heading"]);
+    assert_eq!(code, 4, "{err}");
+    let (code, out, _) = yunagi(&["search", "alpha", "--json"]);
+    assert_eq!(code, 0);
+    let hits: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(hits["hits"][0]["kind"], "note");
+    assert_eq!(hits["hits"][0]["matches"][0]["line"], 2);
+    let (code, out, _) = yunagi(&["search", "cli via", "--kind", "todo"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("todo"));
+    let (code, _, err) = yunagi(&["board", "--date", "bogus"]);
+    assert_eq!(code, 2, "{err}");
+    h.assert_no_changed();
+
+    // doctor は connected を示す
+    let (code, out, _) = yunagi(&["doctor", "--json"]);
+    assert_eq!(code, 0);
+    let report: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(report["local_api"]["status"], "connected");
+    assert_eq!(report["local_api"]["app_version"], yunagi_core::VERSION);
+
+    // 権限はアプリ（コア）が確かめる：read を外すと、読み取りも search も exit 3
+    h.core
+        .read(|conn| agent_client::update_scopes(conn, agent_client::CLI_ID, &[]))
+        .unwrap();
+    for args in [
+        &["board"][..],
+        &["board", "open"],
+        &["note", "get"],
+        &["note", "get", "--heading", "no such heading"],
+        &["search", "alpha"],
+    ] {
+        let (code, _, err) = yunagi(args);
+        assert_eq!(code, 3, "{args:?}: {err}");
+        assert!(err.contains("permission_denied") && err.contains("read"));
+    }
+    h.core
+        .read(|conn| agent_client::update_scopes(conn, agent_client::CLI_ID, &[Scope::Read]))
+        .unwrap();
+    assert_eq!(yunagi(&["board"]).0, 0);
+
+    // `search` の引数の誤りは、アプリでも同じ（-32602 または invalid_argument）
+    let e = h.err("claude-code", "search", json!({"query": "x", "bogus": 1}));
+    assert_eq!(e["rpc_code"], wire::INVALID_PARAMS);
+    let e = h.err(
+        "claude-code",
+        "search",
+        json!({"query": "x", "kinds": ["nope"]}),
+    );
+    assert_eq!(e["code"], "invalid_argument");
+    let e = h.err("claude-code", "search", json!({"query": "x", "limit": 0}));
+    assert_eq!(e["code"], "invalid_argument");
+    let e = h.err(
+        "claude-code",
+        "search",
+        json!({"query": "x", "from": "nope"}),
+    );
+    assert_eq!(e["code"], "invalid_argument");
+    let ok = h.ok(
+        "claude-code",
+        "search",
+        json!({"query": "  alpha  ", "from": "yesterday", "to": "today"}),
+    );
+    assert_eq!(ok["query"], "alpha");
+    assert_eq!(ok["hits"].as_array().unwrap().len(), 1);
 }

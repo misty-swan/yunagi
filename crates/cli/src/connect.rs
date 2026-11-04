@@ -209,7 +209,10 @@ impl Connector {
                     return Attempt::Done(Err(error::version_mismatch()));
                 }
                 Err(HelloError::Io(e)) => {
-                    eprintln!("yunagi: could not talk to the local API: {}", ErrorChain(&e));
+                    eprintln!(
+                        "yunagi: could not talk to the local API: {}",
+                        ErrorChain(&e)
+                    );
                     return Attempt::Done(Err(error::api_error(
                         "unexpected",
                         "Could not talk to Yunagi's local API. Nothing was changed. Ask the user to restart Yunagi.",
@@ -260,7 +263,10 @@ impl Connector {
             (_, Some(info), Judgement::Mismatch { .. }) => {
                 error::default_dir_mismatch(self.dir.path(), &info.dir)
             }
-            _ => error::default_dir_missing(&self.dir, dir_mismatch::default_dir_vars(Platform::current())),
+            _ => error::default_dir_missing(
+                &self.dir,
+                dir_mismatch::default_dir_vars(Platform::current()),
+            ),
         }
     }
 
@@ -281,14 +287,13 @@ impl Connector {
                 drop(lock);
                 return Err(error::default_dir_mismatch(self.dir.path(), &info.dir));
             }
-            (Judgement::Separate, Some(info)) => {
-                if !self.warned.swap(true, Ordering::SeqCst) {
-                    (self.warn)(&format!(
-                        "yunagi: Yunagi is also running with another data folder ({}); this command uses {}",
-                        info.dir.display(),
-                        self.dir.path().display()
-                    ));
-                }
+            // 環境を分けている形：止めず、プロセスごとに 1 回だけ警告する
+            (Judgement::Separate, Some(info)) if !self.warned.swap(true, Ordering::SeqCst) => {
+                (self.warn)(&format!(
+                    "yunagi: Yunagi is also running with another data folder ({}); this command uses {}",
+                    info.dir.display(),
+                    self.dir.path().display()
+                ));
             }
             _ => {}
         }
@@ -297,7 +302,9 @@ impl Connector {
             && !own.has_database
         {
             drop(lock);
-            return Err(error::database_not_found(&data_dir::database_path(data_dir)));
+            return Err(error::database_not_found(&data_dir::database_path(
+                data_dir,
+            )));
         }
         let db = match Database::open(lock) {
             Ok(db) => db,

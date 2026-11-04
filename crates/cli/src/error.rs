@@ -176,7 +176,10 @@ mod tests {
         assert_eq!(reason(&auth_failed()), Some("auth_failed"));
         assert_eq!(reason(&version_mismatch()), Some("version_mismatch"));
         assert_eq!(reason(&denied()), Some("denied"));
-        assert_eq!(reason(&socket_path_too_long()), Some("socket_path_too_long"));
+        assert_eq!(
+            reason(&socket_path_too_long()),
+            Some("socket_path_too_long")
+        );
         let e = default_dir_mismatch(Path::new("/a/yunagi"), Path::new("/b/yunagi"));
         assert_eq!(reason(&e), Some("default_dir_mismatch"));
         assert!(message(&e).contains("/a/yunagi") && message(&e).contains("/b/yunagi"));

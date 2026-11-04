@@ -480,9 +480,7 @@ impl<'a> Params<'a> {
         let limit = match self.number("limit")? {
             None => search::DEFAULT_LIMIT,
             Some(0) => {
-                return Err(Failure::App(invalid_argument(
-                    "limit must be 1 or more.",
-                )));
+                return Err(Failure::App(invalid_argument("limit must be 1 or more.")));
             }
             Some(n) => n,
         };

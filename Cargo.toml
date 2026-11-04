@@ -28,6 +28,7 @@ redundant_explicit_links = "deny"
 [workspace.dependencies]
 yunagi-core = { path = "crates/core" }
 yunagi-api = { path = "crates/api" }
+yunagi-cli = { path = "crates/cli" }
 # IME の英数入力への切替（Vim モード。docs/design/01-architecture.md 3.4、src-tauri/src/ime.rs）。
 # どちらも Tauri がすでに使っている版にそろえ、新しく取り込むコードを増やさない（Cargo.lock の版）。
 # Windows：IMM の呼び出し。macOS：入力ソース API が返す文字列・配列の扱い

@@ -39,7 +39,13 @@ fn board(value: &Value, full: bool) -> String {
             "dropped" => "[-]",
             _ => "[ ]",
         };
-        let _ = writeln!(out, "{mark} {}  {}{}", str_of(todo, "id"), str_of(todo, "text"), item_notes(todo));
+        let _ = writeln!(
+            out,
+            "{mark} {}  {}{}",
+            str_of(todo, "id"),
+            str_of(todo, "text"),
+            item_notes(todo)
+        );
     }
     let _ = writeln!(out, "\n## Blockers");
     let blockers = value["blockers"].as_array().map_or(&[][..], Vec::as_slice);
@@ -275,7 +281,10 @@ mod tests {
     #[test]
     fn errors_show_the_reason_and_the_scope() {
         let e = json!({"code": "api_error", "reason": "result_unknown", "message": "lost"});
-        assert_eq!(render_error(&e), "yunagi: api_error (result_unknown): lost\n");
+        assert_eq!(
+            render_error(&e),
+            "yunagi: api_error (result_unknown): lost\n"
+        );
         let e = json!({"code": "permission_denied", "required_scope": "read", "message": "no"});
         assert_eq!(
             render_error(&e),

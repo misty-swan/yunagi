@@ -69,7 +69,7 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
             0
         }
         Command::Operation(op) => operation(&op, json, env, io),
-        Command::Doctor => doctor(json, env, io),
+        Command::Doctor => run_doctor(json, env, io),
     }
 }
 
@@ -107,7 +107,9 @@ fn operation(op: &Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
             if json {
                 let _ = writeln!(io.stdout, "{value}");
             } else {
-                let _ = io.stdout.write_all(output::render(op.method, &value).as_bytes());
+                let _ = io
+                    .stdout
+                    .write_all(output::render(op.method, &value).as_bytes());
             }
             0
         }
@@ -115,7 +117,7 @@ fn operation(op: &Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     }
 }
 
-fn doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
+fn run_doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     let warnings = Warnings::default();
     let report = match connector(env, &warnings) {
         Ok(c) => doctor::diagnose(&c),

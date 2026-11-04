@@ -4642,6 +4642,7 @@ dependencies = [
  "ts-rs",
  "windows",
  "yunagi-api",
+ "yunagi-cli",
  "yunagi-core",
 ]
 
@@ -4649,6 +4650,7 @@ dependencies = [
 name = "yunagi-cli"
 version = "0.0.0"
 dependencies = [
+ "jiff",
  "serde_json",
  "tempfile",
  "yunagi-api",
