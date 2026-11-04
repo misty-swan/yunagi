@@ -52,6 +52,8 @@ pub enum ScopeError {
     /// 登録しない）。
     NotFound,
     InvalidArgument(ScopeArgument),
+    /// 確認の画面を見せた後に、そのクライアントのスコープが変わった。
+    Changed,
     Storage(StorageError),
 }
 
@@ -59,6 +61,7 @@ impl std::fmt::Display for ScopeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound => f.write_str("the client was not found"),
+            Self::Changed => f.write_str("the scopes changed after they were shown"),
             Self::InvalidArgument(e) => e.fmt(f),
             Self::Storage(e) => e.fmt(f),
         }
@@ -70,7 +73,7 @@ impl std::error::Error for ScopeError {
         match self {
             Self::InvalidArgument(e) => Some(e),
             Self::Storage(e) => Some(e),
-            Self::NotFound => None,
+            Self::NotFound | Self::Changed => None,
         }
     }
 }
@@ -103,11 +106,15 @@ pub struct ScopeChange {
 ///
 /// `read` も外せる（外すと、そのクライアントは何も読めない。MCP・CLI 仕様書 2章の既定は `read` のみで、
 /// 利用者が決める）。`unknown` に足せるのは `read` だけ（[`ScopeArgument::UnknownWrite`]）。
+///
+/// `expect` は、確認の画面で見せた変更前のスコープ。いまのスコープと違えば（確認を待つ間に別の
+/// ところで変わった）、書かずに [`ScopeError::Changed`]。
 pub fn change_scopes(
     conn: &Connection,
     name: &str,
     allow: &[Scope],
     deny: &[Scope],
+    expect: Option<&[Scope]>,
 ) -> Result<ScopeChange, ScopeError> {
     if allow.is_empty() && deny.is_empty() {
         return Err(ScopeError::InvalidArgument(ScopeArgument::Nothing));
@@ -120,13 +127,16 @@ pub fn change_scopes(
             return Err(ScopeError::NotFound);
         };
         if client.id == agent_client::UNKNOWN_ID
-            && let Some(scope) = forbidden_scope("unknown", allow)
+            && let Some(scope) = forbidden_scope(&client.name, allow)
         {
             return Err(ScopeError::InvalidArgument(ScopeArgument::UnknownWrite(
                 scope,
             )));
         }
         let before = ordered(&client.scopes);
+        if expect.is_some_and(|e| ordered(e) != before) {
+            return Err(ScopeError::Changed);
+        }
         let after = apply_scopes(&before, allow, deny);
         let updated = after != before;
         if updated {
@@ -153,7 +163,7 @@ pub fn apply_scopes(before: &[Scope], allow: &[Scope], deny: &[Scope]) -> Vec<Sc
 /// 識別子 `name` のクライアントに、`allow` の中で足せないスコープ（`unknown` に `read` 以外）があれば、
 /// それ。確認の前に断るために公開している（[`change_scopes`] も同じ判定）。
 pub fn forbidden_scope(name: &str, allow: &[Scope]) -> Option<Scope> {
-    (name == "unknown")
+    (name == agent_client::UNKNOWN_NAME)
         .then(|| allow.iter().copied().find(|s| *s != Scope::Read))
         .flatten()
 }
@@ -179,7 +189,25 @@ mod tests {
         allow: &[Scope],
         deny: &[Scope],
     ) -> Result<ScopeChange, ScopeError> {
-        change_scopes(conn, name, allow, deny)
+        change_scopes(conn, name, allow, deny, None)
+    }
+
+    #[test]
+    fn a_change_is_refused_when_the_scopes_moved_after_they_were_shown() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let shown = [Scope::Read];
+        change_scopes(conn, "cli", &[Scope::Blocker], &[], None).unwrap();
+        assert!(matches!(
+            change_scopes(conn, "cli", &[Scope::Todo], &[], Some(&shown)),
+            Err(ScopeError::Changed)
+        ));
+        assert_eq!(
+            agent_client::get(conn, CLI_ID).unwrap().unwrap().scopes,
+            [Scope::Read, Scope::Blocker]
+        );
+        let now = [Scope::Blocker, Scope::Read];
+        assert!(change_scopes(conn, "cli", &[Scope::Todo], &[], Some(&now)).is_ok());
     }
 
     #[test]

@@ -168,7 +168,7 @@ pub fn list_changes(conn: &Connection, filter: &ChangeFilter) -> Result<Vec<Entr
                     .ok_or(HistoryError::ClientNotFound)?,
             ),
         };
-        let logs = change_log::list_recent(
+        let rows = change_log::list_recent(
             conn,
             &RecentFilter {
                 client,
@@ -177,29 +177,32 @@ pub fn list_changes(conn: &Connection, filter: &ChangeFilter) -> Result<Vec<Entr
             },
             limit,
         )?;
-        let item_ids: Vec<Ulid> = logs
+        let item_ids: Vec<Ulid> = rows
             .iter()
-            .filter_map(|l| match l.target {
+            .filter_map(|r| match r.log.target {
                 Target::Item(id) => Some(id),
                 _ => None,
             })
             .collect();
         let items = item_table::get_many(conn, &item_ids)?;
-        Ok(logs
+        Ok(rows
             .into_iter()
-            .map(|log| Entry {
-                client_name: log.agent_client_id.and_then(|id| clients.get(&id).cloned()),
-                item: match log.target {
-                    Target::Item(id) => items.get(&id).map(|i| ItemRef {
-                        date: i.date,
-                        kind: i.kind,
-                        text: i.text.clone(),
-                        deleted: i.deleted_at.is_some(),
-                    }),
-                    _ => None,
-                },
-                summary: summarize(&log),
-                log,
+            .map(|row| {
+                let log = row.log;
+                Entry {
+                    client_name: log.agent_client_id.and_then(|id| clients.get(&id).cloned()),
+                    item: match log.target {
+                        Target::Item(id) => items.get(&id).map(|i| ItemRef {
+                            date: i.date,
+                            kind: i.kind,
+                            text: i.text.clone(),
+                            deleted: i.deleted_at.is_some(),
+                        }),
+                        _ => None,
+                    },
+                    summary: summarize(&log, row.before_chars, row.after_chars),
+                    log,
+                }
             })
             .collect())
     })
@@ -219,7 +222,9 @@ fn body_of(s: &Option<String>) -> Option<String> {
     }
 }
 
-fn summarize(log: &ChangeLog) -> Summary {
+/// 記録の内容の要約。ノート・振り返りは本文を読まず、SQLite が数えた文字数（`before_chars`・
+/// `after_chars`）を使う。
+fn summarize(log: &ChangeLog, before_chars: Option<i64>, after_chars: Option<i64>) -> Summary {
     match log.target {
         Target::Item(_) => {
             let Some(after) = object(&log.after) else {
@@ -247,15 +252,13 @@ fn summarize(log: &ChangeLog) -> Summary {
                 ),
             }
         }
-        Target::Note(_) | Target::Reflection(_) => {
-            match (body_of(&log.before), body_of(&log.after)) {
-                (Some(before), Some(after)) => Summary::Text {
-                    before_chars: before.chars().count(),
-                    after_chars: after.chars().count(),
-                },
-                _ => Summary::Unknown,
-            }
-        }
+        Target::Note(_) | Target::Reflection(_) => match (before_chars, after_chars) {
+            (Some(before), Some(after)) => Summary::Text {
+                before_chars: usize::try_from(before).unwrap_or(0),
+                after_chars: usize::try_from(after).unwrap_or(0),
+            },
+            _ => Summary::Unknown,
+        },
     }
 }
 
@@ -379,6 +382,28 @@ pub enum PlanState {
     AlreadyReverted,
     /// いまの値がすでに戻したい値と同じ（人が先に戻した、など）。何も書かず、記録を取り消し済みにする。
     AlreadyRestored,
+}
+
+impl PlanState {
+    /// API の `state`（`preview_revert`）に出す名前。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+            Self::AlreadyReverted => "already_reverted",
+            Self::AlreadyRestored => "already_restored",
+        }
+    }
+}
+
+/// 本文の確認の目印。本文そのものを持ち回ると大きいので、長さと FNV-1a（64 ビット）の値にする
+/// （確認の後に本文が変わったかを調べるための目印で、安全のための署名ではない）。
+fn body_token(body: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in body.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("body:{}:{hash:016x}", body.len())
 }
 
 /// 取り消しの計画（何を書き戻すか）。
@@ -647,7 +672,7 @@ fn plan_in(conn: &Connection, change_id: Ulid) -> Result<Plan, RevertError> {
             let after = body_of(&log.after).ok_or_else(unsupported)?;
             let current = text_doc::get(conn, doc, date)?;
             // 版の番号ではなく本文そのもの（同じ本文の保存で版だけが進んでも、止めないため）
-            let token = format!("body:{}", current.body);
+            let token = body_token(&current.body);
             let diff = text_diff(&current.body, &before);
             if current.body == before {
                 return Ok(Plan {
@@ -728,6 +753,7 @@ pub fn revert(
             }
             PlanState::AlreadyRestored => {
                 change_log::set_reverted_at(conn, change_id, now)?;
+                change_log::set_seen_at(conn, change_id, now)?;
                 return Ok(Reverted {
                     plan,
                     updated: false,
@@ -773,6 +799,8 @@ pub fn revert(
             },
         )?;
         change_log::set_reverted_at(conn, change_id, now)?;
+        // 取り消した変更は、利用者が見て扱い終えたものなので、未確認の数に数えない
+        change_log::set_seen_at(conn, change_id, now)?;
         Ok(Reverted {
             plan,
             updated: true,
@@ -1381,7 +1409,8 @@ mod tests {
         let (before_body, rev) = note_body(conn, TextDoc::Note, "2026-11-03");
         assert!(before_body.contains("二行目"));
         let plan = preview(conn, second.id).unwrap();
-        assert_eq!(plan.token, format!("body:{before_body}"));
+        assert_eq!(plan.token, body_token(&before_body));
+        assert_ne!(body_token("a"), body_token("b"));
         match &plan.effect {
             Effect::Text { diff, .. } => {
                 assert!(diff.removed.iter().any(|l| l.contains("二行目")));
@@ -1563,7 +1592,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(unseen.len(), 2);
+        // 取り消した変更は確認済みになる（追加の記録だけが未確認）
+        assert_eq!(unseen.len(), 1);
+        assert_eq!(unseen[0].log.operation, "todo.add");
         // 続き（before）と件数
         let page = list_changes(
             conn,

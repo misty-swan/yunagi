@@ -312,7 +312,7 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 | 操作 | 引数 | 成功の返り値 |
 | --- | --- | --- |
 | `list_agents` | なし | `{agents: [{id, name, scopes, created_at, last_seen_at}]}`（登録した順。固定の `cli`・`unknown` が先。`scopes` は 2章の表の順） |
-| `set_agent_scopes` | `client`（識別子）、`allow?`・`deny?`（スコープ名の配列） | `{updated, client, before, scopes}`。変えたら画面に `changed` を出す |
+| `set_agent_scopes` | `client`（識別子）、`allow?`・`deny?`（スコープ名の配列）、`expect?`（確認の画面で見せた変更前のスコープ。いまと違えば書かずに `conflict`（`changed`）） | `{updated, client, before, scopes}`。変えたら画面に `changed` を出す |
 | `list_changes` | `client?`、`unseen?`（真偽）、`before?`（記録の ID）、`limit?` | `{changes: [...], next_before}`。形は 7.2 |
 | `preview_revert` | `change_id` | `{id, operation, client, created_at, state, token, changed_since, effect}`。何も書かない。形は 7.3 |
 | `revert_change` | `change_id`、`force?`（真偽）、`expect?`（`preview_revert` の `token`） | `{updated, id, operation, state, revert_id, effect}`。書いたとき（と、すでに戻っていた記録を取り消し済みにしたとき）は画面に `changed` を出す |
@@ -472,7 +472,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 - 見る：`yunagi agent permissions [CLIENT]`。登録されているクライアントと許可したスコープ・最後の接続の一覧（出力は 4.1）。確認は要らない。`CLIENT` が登録されていなければ `not_found`（終了コード 4）。
 - 変える：`--allow S`・`--deny S`（繰り返せる。`todo,blocker` のようにコンマで区切ってもよい。`S` は 2章のスコープ名）。`CLIENT` が要る。結果の並びは 2章の表の順で、足すスコープがすでにあり、外すスコープがすでに無ければ、何も書かない（`updated: false`）。`read` も外せる（外すとそのクライアントは何も読めない。管理の操作は使える。2章）。権限の変更は人の操作なので、change_log には記録しない。
 - 引数の誤り（`invalid_argument`）：知らないスコープ名、同じスコープを足すことと外すことの両方に指定、`unknown` に `read` 以外を足す（2章）、`CLIENT` が無いのに `--allow`・`--deny` を指定（CLI。`--allow`・`--deny` が無ければ一覧になる）、API の `set_agent_scopes` で足すものも外すものも無い。`CLIENT` が登録されていなければ `not_found`。CLI は、確認の質問をする前に、分かる誤りを断る。
-- 確認：対話端末（標準入力と標準出力の両方が端末）でだけ得る。変更内容（`now:` と `after:` のスコープ、足すスコープで何ができるか）を表示し、`Apply this change? [y/N]` と聞く。`y`・`yes`（大文字小文字は問わない）だけを承諾とし、それ以外は「取りやめた」として何も書かずに終了コード 0。入力が閉じている・読めないときは、失敗（終了コード 1）。すでに目的のスコープなら、聞かずに `Nothing to change.` で終わる（0）。端末でなければ何も書かず、`permission_denied`（`required_scope` なし。終了コード 3。4.3）。確認は誤って確定しないための確認で、防御の境界ではない（2章）。
+- 確認：対話端末（標準入力と標準出力の両方が端末）でだけ得る。変更内容（`now:` と `after:` のスコープ。`after:` はコアの `apply_scopes` で、書き込みと同じ計算。足すスコープで何ができるか）を表示し、変更前のスコープを `expect` に付けて書く（確認を待つ間に別のところで変わっていたら、書かずに `conflict`（`changed`））。`Apply this change? [y/N]` と聞く。`y`・`yes`（大文字小文字は問わない）だけを承諾とし、それ以外は「取りやめた」として何も書かずに終了コード 0。入力が閉じている・読めないときは、失敗（終了コード 1）。すでに目的のスコープなら、聞かずに `Nothing to change.` で終わる（0）。端末でなければ何も書かず、`permission_denied`（`required_scope` なし。終了コード 3。4.3）。確認は誤って確定しないための確認で、防御の境界ではない（2章）。
 - 判定の順（CLI）：引数の誤り → `unknown` へ足す誤り → 端末か → `CLIENT` が登録されているか → 確認 → 書き込み。引数の誤りが権限（端末）より先なのは、直してやり直すしかないため（3.2 の例外と同じ）。
 - 画面への知らせ：変えたら `changed`（`by: agent`）を出す。設定画面のエージェントの一覧が読み直される（初めての識別子の登録と同じ経路）。
 
@@ -482,7 +482,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 
 - 新しい順（記録の ID の降順）に、エージェントの記録と、人の取り消しの記録（`operation` が `agent.revert`）の両方を返す。ID（ULID。データモデル設計書）は同じプロセスの中では作った順に増えるが、別のプロセス（アプリと CLI の直接モード）が同じミリ秒に作った記録の順は決まらない（`list_by_target` と同じ「おおよそ記録した順」。時刻は `created_at`）。`--client NAME` はそのクライアントの記録だけ（人の取り消しの記録はクライアントが無いので入らない。登録のない `NAME` は `not_found`）。`--unseen` は、エージェントによる未確認の変更（`actor = agent` で `seen_at` が空。データモデル設計書 change_log）だけ。`--limit N` は 1 以上（既定 50、200 を超える指定は 200。0 は `invalid_argument`）。`--before ID` はその記録より古いものだけ（続きを読む目印。返り値の `next_before` は、`limit` 件ちょうど返したときの最後の記録の ID で、それ未満なら `null`）。
 - 1 件の形：`{id, created_at, actor, client, operation, target, summary, seen_at, reverted_at, revert_of}`。`target` は、項目なら `{type: "item", id, date, kind, text, deleted}`（`text` はいまの本文。項目が見つからなければ `id` だけ）、ノート・振り返りなら `{type: "note" | "reflection", date}`。`summary` は、項目の追加が `{type: "added", kind, text}`、項目の欄の変更が `{type: "fields", fields: [{name, before, after}]}`（変えた欄だけ）、ノート・振り返りが `{type: "text", before_chars, after_chars}`（本文は大きいので文字数だけ。差分は取り消しの計画で見る）、読めない記録が `{type: "unknown"}`。
-- 一覧は確認済みの印（`seen_at`）を付けない。`seen_at` は変更履歴の画面で確認した時刻（データモデル設計書 change_log）なので、CLI で一覧を出しても未確認のまま残る。印を付ける口は、変更履歴 S-06（YUN-81）がコアに足す（YUN-81 の完了の条件に書いた）。
+- 一覧は、ノート・振り返りの記録の本文を読まず、文字数だけを SQLite に数えさせる（本文が大きい記録を、一覧のたびに読み込まないため）。一覧は確認済みの印（`seen_at`）を付けない。`seen_at` は変更履歴の画面で確認した時刻（データモデル設計書 change_log）なので、CLI で一覧を出しても未確認のまま残る。印を付ける口は、変更履歴 S-06（YUN-81）がコアに足す（YUN-81 の完了の条件に書いた）。
 
 ### 7.3 取り消し（`agent revert`。2026-11-04 決定。YUN-94）
 
@@ -501,7 +501,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 - 後の記録がある欄：エージェントが同じ欄を続けて変えた場合も、人の変更と区別せず、`changed` になる。新しい記録から順に取り消す。
 - すでに戻っている：いまの値がすでに戻したい値と同じ（人が先に戻した、追加した項目をすでに削除した、本文がすでに前の本文）なら、何も書かずに、元の記録を取り消し済みにして成功を返す（`updated: false`、`state: already_restored`）。取り消しの記録は作らない。
 - すでに取り消し済み（`reverted_at` がある、または取り消しの記録から指されている）：何も書かずに成功を返す（`updated: false`、`state: already_reverted`）。取り消しの応答が届かずに、人がやり直した場合を失敗にしないため。
-- `--force` が越えるのは「人があとから変えた」（`changed`）だけ。確認で見せた値だけを上書きする：CLI は取り消す内容を見せたときの状態を表す `token`（`preview_revert` の返り値）を `expect` に付けて送り、確認の後に変わっていれば、`--force` でも書かずに `conflict`（`changed`）で止める（確認を待つ間に人が変えた内容を、見せずに消さないため）。`token` は、項目では調べる欄のいまの値、ノート・振り返りでは本文そのもの（版の番号ではない。同じ本文の保存で版だけが進んでも止めないため）。項目の欄がすでに戻したい値になっているときは、`after` と違っていても人が変えた欄に数えない（上書きするものが無い）。`after` が空の記録は取り消せない（`invalid_argument`）。ノートの `--force` は本文全体を `before` に戻すので、表示する差分は「いまの本文 → 戻す本文」で、失う内容が全部見える。
+- `--force` が越えるのは「人があとから変えた」（`changed`）だけ。確認で見せた値だけを上書きする：CLI は取り消す内容を見せたときの状態を表す `token`（`preview_revert` の返り値）を `expect` に付けて送り、確認の後に変わっていれば、`--force` でも書かずに `conflict`（`changed`）で止める（確認を待つ間に人が変えた内容を、見せずに消さないため）。`token` は、項目では調べる欄のいまの値、ノート・振り返りでは本文の長さと FNV-1a（64 ビット）の値（版の番号ではない。同じ本文の保存で版だけが進んでも止めないため。本文そのものは大きく、依頼の上限（4.4）を超えうるので持ち回らない。確認の後に変わったかを調べる目印で、署名ではない）。取り消したら元の記録を確認済み（`seen_at`）にする（利用者が見て扱い終えた変更を、未確認の数に残さないため。取り消さずに確認済みにするのは変更履歴の画面（YUN-81））。項目の欄がすでに戻したい値になっているときは、`after` と違っていても人が変えた欄に数えない（上書きするものが無い）。`after` が空の記録は取り消せない（`invalid_argument`）。ノートの `--force` は本文全体を `before` に戻すので、表示する差分は「いまの本文 → 戻す本文」で、失う内容が全部見える。
 
 **判定の順**（コア。最初に当たったものを返す。3.2 と同じ形）
 
@@ -517,7 +517,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 **持ち越し済み・取りやめた TODO（9章の決定）**：取り消しは「画面で人ができること」だけを行う。持ち越し済みの項目と取りやめた TODO の `status`・`text`・`resolution_note`・`completed_at`・`close_reason` は、画面でも変えられない（データモデル設計書 3章 item）ので、取り消しでも変えない。エージェントの項目の記録が持つ欄は、どれもこの欄にあたるため、5・6 で拒んでも、取り消せずに残る欄は無い（持ち越した後の誤りは、持ち越し先の項目を人が直す）。一方、追加の取り消しは削除で、削除は画面でもできるので、持ち越し済みでも取りやめた TODO でも拒まない（確認の表示に、持ち越し先の項目 `carried_to_id` が残ることを出す）。
 
 **CLI の流れ**：引数（`CHANGE_ID` の形。ULID）→ 端末か（端末でなければ何も呼ばずに `permission_denied`。終了コード 3）→ `preview_revert` → 取り消す内容の表示 → `[y/N]` → `revert_change`。
-- 表示：`Change ID: operation by クライアント at 日時`、続けて取り消す内容。項目の欄は `欄: いま -> 戻す値`（人が変えた欄には `(changed after the record)`）、追加の取り消しは `This deletes the todo added on 日付: "本文"`（持ち越し先があれば残ることも）、本文は変わる行の差分（いまの本文にあって無くなる行に `-`、戻すと入る行に `+`。共通の先頭と末尾の行は除く。20 行まで、API は 200 行まで `truncated`）。
+- 表示：`Change ID: operation by クライアント at 日時`、続けて取り消す内容。項目の欄は `欄: いま -> 戻す値`（人が変えた欄には `(changed after the record)`）、追加の取り消しは `This deletes the todo added on 日付: "本文"`（持ち越し先があれば残ることも）、本文は変わる行の差分（いまの本文にあって無くなる行に `-`、戻すと入る行に `+`。共通の先頭と末尾の行は除く。既定は 20 行まで。`--force` のときは、失う内容が全部見えるよう、API が返す分（200 行まで。超えたら `truncated`）をすべて出す）。
 - 人が変えた欄があり `--force` が無ければ、表示のあとで `conflict`（`changed`。終了コード 5）で終わる。`--force` があれば `--force: this overwrites changes made after the record (欄).` を表示して聞く。
 - 値を書かない場合（すでに取り消し済み・すでに戻っている）は、聞かずに結果を表示する（`Already reverted. Nothing changed.`、`Already back to the earlier values. The change is marked as reverted.`）。書いたら `Reverted.`（0）。取りやめたら `Cancelled. Nothing was changed.`（0）。
 - 画面への知らせ：書いたとき（と、取り消し済みにしたとき）は `changed`（`by: agent`）を出す。ノートの取り込みはエージェントの変更と同じ（アーキテクチャ設計書 4.1）。

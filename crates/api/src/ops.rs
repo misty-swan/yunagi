@@ -142,6 +142,8 @@ pub enum AdminCall {
         client: String,
         allow: Vec<Scope>,
         deny: Vec<Scope>,
+        /// 確認の画面で見せた変更前のスコープ。いまと違えば書かない。
+        expect: Option<Vec<Scope>>,
     },
     /// 変更履歴の一覧。
     ListChanges(ChangesArgs),
@@ -292,11 +294,16 @@ impl Call {
                 Self::Admin(AdminCall::ListAgents)
             }
             "set_agent_scopes" => {
-                p.only(&["client", "allow", "deny"])?;
+                p.only(&["client", "allow", "deny", "expect"])?;
                 Self::Admin(AdminCall::SetScopes {
                     client: p.string("client")?,
                     allow: p.scopes("allow")?,
                     deny: p.scopes("deny")?,
+                    expect: if p.get("expect").is_some() {
+                        Some(p.scopes("expect")?)
+                    } else {
+                        None
+                    },
                 })
             }
             "list_changes" => {
@@ -503,9 +510,10 @@ impl AdminCall {
                 client,
                 allow,
                 deny,
+                expect,
             } => {
-                let c =
-                    agent_admin::change_scopes(conn, client, allow, deny).map_err(scope_failure)?;
+                let c = agent_admin::change_scopes(conn, client, allow, deny, expect.as_deref())
+                    .map_err(scope_failure)?;
                 let names =
                     |scopes: &[Scope]| scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>();
                 let value = json!({
@@ -545,10 +553,10 @@ impl AdminCall {
                 };
                 let r = history::revert(conn, *id, &request, agent.ui, tz, at)
                     .map_err(revert_failure)?;
-                let state = match (r.updated, r.plan.state) {
-                    (true, _) => "reverted",
-                    (false, PlanState::AlreadyReverted) => "already_reverted",
-                    (false, _) => "already_restored",
+                let state = if r.updated {
+                    "reverted"
+                } else {
+                    r.plan.state.as_str()
                 };
                 let mut value = json!({
                     "updated": r.updated,
@@ -628,10 +636,14 @@ impl<'a> Params<'a> {
 
     /// 変更履歴の記録の ID。
     fn change_id(&self, key: &str) -> Result<Ulid, Failure> {
-        self.string(key)?.parse().map_err(|_| {
-            Failure::App(invalid_argument(
-                "change_id is not a valid change ID. Use an ID from the change history.",
-            ))
+        self.parse_change_id(key, &self.string(key)?)
+    }
+
+    fn parse_change_id(&self, key: &str, value: &str) -> Result<Ulid, Failure> {
+        value.parse().map_err(|_| {
+            Failure::App(invalid_argument(&format!(
+                "{key} is not a valid change ID. Use an ID from the change history."
+            )))
         })
     }
 
@@ -655,8 +667,10 @@ impl<'a> Params<'a> {
                         .as_str()
                         .and_then(|s| s.parse::<Scope>().ok())
                         .ok_or_else(|| {
+                            let names: Vec<&str> = Scope::ALL.iter().map(|s| s.as_str()).collect();
                             Failure::App(invalid_argument(&format!(
-                                "{key} must be a list of read, todo, blocker, append and note_edit."
+                                "{key} must be a list of {}.",
+                                names.join(", ")
                             )))
                         })?;
                     if !scopes.contains(&scope) {
@@ -683,11 +697,7 @@ impl<'a> Params<'a> {
             unseen_only: self.boolean("unseen")?,
             before: match self.optional_string("before")? {
                 None => None,
-                Some(s) => Some(s.parse().map_err(|_| {
-                    Failure::App(invalid_argument(
-                        "before is not a valid change ID. Use an ID from the change history.",
-                    ))
-                })?),
+                Some(s) => Some(self.parse_change_id("before", &s)?),
             },
             limit,
         })
@@ -907,11 +917,7 @@ fn entry_json(e: &history::Entry) -> Value {
 
 /// 取り消しの計画（05 4.4 の `preview_revert`）。
 fn plan_json(p: &history::Plan) -> Value {
-    let state = match p.state {
-        PlanState::Apply => "apply",
-        PlanState::AlreadyReverted => "already_reverted",
-        PlanState::AlreadyRestored => "already_restored",
-    };
+    let state = p.state.as_str();
     json!({
         "id": p.log.id.to_string(),
         "operation": p.log.operation,
@@ -1113,6 +1119,11 @@ fn scope_failure(e: ScopeError) -> Failure {
             "not_found",
             "No client with this name is registered. A client is registered when it first connects.",
         ),
+        ScopeError::Changed => json!({
+            "code": "conflict",
+            "reason": "changed",
+            "message": "The client's scopes changed after they were shown. Nothing was changed. Look at them again.",
+        }),
         ScopeError::InvalidArgument(ScopeArgument::Nothing) => {
             invalid_argument("Give at least one scope to allow or deny.")
         }

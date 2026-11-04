@@ -130,7 +130,9 @@ pub fn permissions(
     if !env.setup.interactive {
         return needs_terminal("yunagi agent permissions", io);
     }
-    let listed = match crate::call_api(env, io, "list_agents", Map::new()) {
+    // 一覧と変更で同じ道具を使う（環境を分けている形の警告を、1 回だけ出すため）
+    let api = crate::ApiClient::new(env);
+    let listed = match api.call(io, "list_agents", Map::new()) {
         Ok(v) => v,
         Err(e) => return crate::fail(&e, false, io),
     };
@@ -191,8 +193,13 @@ pub fn permissions(
             "deny".to_owned(),
             json!(deny.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
         ),
+        // 見せた「いま」から変わっていたら、書かずに止める
+        (
+            "expect".to_owned(),
+            json!(before.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+        ),
     ]);
-    match crate::call_api(env, io, "set_agent_scopes", params) {
+    match api.call(io, "set_agent_scopes", params) {
         Ok(v) => {
             let now = names(&v["scopes"]);
             out(
@@ -266,7 +273,8 @@ pub fn revert(change_id: &str, force: bool, env: &Env, io: &mut Io<'_>) -> i32 {
         return needs_terminal("yunagi agent revert", io);
     }
     let params = Map::from_iter([("change_id".to_owned(), json!(change_id))]);
-    let plan = match crate::call_api(env, io, "preview_revert", params) {
+    let api = crate::ApiClient::new(env);
+    let plan = match api.call(io, "preview_revert", params) {
         Ok(v) => v,
         Err(e) => return crate::fail(&e, false, io),
     };
@@ -297,7 +305,8 @@ pub fn revert(change_id: &str, force: bool, env: &Env, io: &mut Io<'_>) -> i32 {
                 "The target already has the earlier values. Nothing needs to be written.",
             );
         }
-        _ => describe_effect(&plan["effect"], io),
+        // --force は、失う内容が全部見えるように、差分を切り詰めずに出す
+        _ => describe_effect(&plan["effect"], force, io),
     }
     if state == "apply" && !drift.is_empty() {
         if !force {
@@ -344,7 +353,7 @@ pub fn revert(change_id: &str, force: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     if let Some(token) = plan["token"].as_str() {
         params.insert("expect".into(), json!(token));
     }
-    match crate::call_api(env, io, "revert_change", params) {
+    match api.call(io, "revert_change", params) {
         Ok(v) => {
             report(&v, io);
             0
@@ -354,7 +363,8 @@ pub fn revert(change_id: &str, force: bool, env: &Env, io: &mut Io<'_>) -> i32 {
 }
 
 /// 取り消しで書き換わる内容の表示（確認の前）。
-fn describe_effect(effect: &Value, io: &mut Io<'_>) {
+fn describe_effect(effect: &Value, show_all: bool, io: &mut Io<'_>) {
+    let shown = if show_all { usize::MAX } else { 20 };
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
     match effect["type"].as_str().unwrap_or("") {
         "delete_item" => {
@@ -413,8 +423,8 @@ fn describe_effect(effect: &Value, io: &mut Io<'_>) {
                     s(effect, "date")
                 ),
             );
-            lines(io, '-', &effect["removed"]);
-            lines(io, '+', &effect["added"]);
+            lines(io, '-', &effect["removed"], shown);
+            lines(io, '+', &effect["added"], shown);
             if effect["truncated"].as_bool() == Some(true) {
                 out(io, "  ... (the difference is longer than shown)");
             }
@@ -423,17 +433,16 @@ fn describe_effect(effect: &Value, io: &mut Io<'_>) {
     }
 }
 
-/// 差分の行を最大 20 行まで出す。
-fn lines(io: &mut Io<'_>, mark: char, list: &Value) {
-    const SHOWN: usize = 20;
+/// 差分の行を最大 `shown` 行まで出す。
+fn lines(io: &mut Io<'_>, mark: char, list: &Value, shown: usize) {
     let list = list.as_array().map_or(&[][..], Vec::as_slice);
-    for line in list.iter().take(SHOWN) {
+    for line in list.iter().take(shown) {
         out(io, &format!("  {mark} {}", line.as_str().unwrap_or("")));
     }
-    if list.len() > SHOWN {
+    if list.len() > shown {
         out(
             io,
-            &format!("  {mark} ... ({} more lines)", list.len() - SHOWN),
+            &format!("  {mark} ... ({} more lines)", list.len() - shown),
         );
     }
 }

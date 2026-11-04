@@ -89,9 +89,9 @@ fn write_call(
     Ok(result.0.value)
 }
 
-/// 管理の操作（権限・変更履歴・取り消し。05 4.4）を `AppCore::api_write` に渡す。一覧と取り消しの計画は
-/// 何も変えない（`changed` を出さない）が、取り消しは画面の入力中・保存の失敗中の状態を見るので、
-/// 書き込みと同じ経路で行う。
+/// 管理の操作（権限・変更履歴・取り消し。05 4.4）を行う。一覧と取り消しの計画は何も変えないので
+/// `AppCore::api_read`、権限の変更と取り消しは、画面の入力中・保存の失敗中の状態を見るので
+/// `AppCore::api_write`（変えたら `changed`）に渡す。
 fn admin_call(
     core: &AppCore,
     call: &AdminCall,
@@ -99,6 +99,17 @@ fn admin_call(
     client: Option<&str>,
     registered: &Cell<bool>,
 ) -> Result<Value, Failure> {
+    // 何も変えない操作（一覧・取り消しの計画）は、読み取りと同じ経路（画面の状態は要らない）
+    if call.is_read_only() {
+        return core
+            .api_read(deadline, |conn| {
+                let client_id = ops::resolve_client(conn, client, registered)?;
+                let agent = yunagi_core::domain::agent::Agent::without_ui(client_id);
+                call.execute(conn, &agent, &system_tz(), now())
+                    .map(|reply| reply.value)
+            })
+            .map_err(|Busy| Failure::App(busy_error()))?;
+    }
     let result = core
         .api_write(
             deadline,

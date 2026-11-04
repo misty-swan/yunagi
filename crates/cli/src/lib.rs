@@ -168,10 +168,39 @@ pub(crate) fn call_api(
     method: &'static str,
     params: serde_json::Map<String, Value>,
 ) -> Result<Value, ErrorObject> {
-    let warnings = Warnings::default();
-    let result = connector(env, &warnings, "cli").and_then(|c| c.call(method, params));
-    flush_warnings(&warnings, io);
-    result
+    ApiClient::new(env).call(io, method, params)
+}
+
+/// 1 回のコマンドの中で操作を何度か行うための接続の道具（`cli` クライアント）。環境を分けている形の
+/// 警告（4.5 の 3）が、プロセスで 1 回だけ出るよう、道具と警告の入れ物を使い回す。
+pub(crate) struct ApiClient {
+    warnings: Warnings,
+    connector: Result<Connector, ErrorObject>,
+}
+
+impl ApiClient {
+    pub(crate) fn new(env: &Env) -> Self {
+        let warnings = Warnings::default();
+        let connector = connector(env, &warnings, "cli");
+        Self {
+            warnings,
+            connector,
+        }
+    }
+
+    pub(crate) fn call(
+        &self,
+        io: &mut Io<'_>,
+        method: &'static str,
+        params: serde_json::Map<String, Value>,
+    ) -> Result<Value, ErrorObject> {
+        let result = match &self.connector {
+            Ok(c) => c.call(method, params),
+            Err(e) => Err(e.clone()),
+        };
+        flush_warnings(&self.warnings, io);
+        result
+    }
 }
 
 fn run_doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {

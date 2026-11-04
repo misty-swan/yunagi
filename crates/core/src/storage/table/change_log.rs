@@ -171,19 +171,35 @@ pub struct RecentFilter {
     pub before: Option<Ulid>,
 }
 
+/// 一覧の1件。ノート・振り返りの記録は本文が大きいので、`before`・`after` を読まずに空にし、
+/// 本文の文字数だけを SQLite に数えさせる。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentRow {
+    pub log: ChangeLog,
+    /// ノート・振り返りの記録の、変更前・変更後の本文の文字数（項目の記録は `None`）。
+    pub before_chars: Option<i64>,
+    pub after_chars: Option<i64>,
+}
+
 /// 新しい順（id の降順）に、最大 `limit` 件。エージェントの記録と、人の取り消しの記録の両方を含む。
 pub fn list_recent(
     conn: &Connection,
     filter: &RecentFilter,
     limit: usize,
-) -> Result<Vec<ChangeLog>, StorageError> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {COLUMNS} FROM change_log \
+) -> Result<Vec<RecentRow>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, actor, agent_client_id, operation, target_type, target_id, \
+         CASE WHEN target_type = 'item' THEN before END, \
+         CASE WHEN target_type = 'item' THEN after END, \
+         created_at, reverted_at, revert_of_id, seen_at, \
+         CASE WHEN target_type <> 'item' THEN length(json_extract(before, '$')) END, \
+         CASE WHEN target_type <> 'item' THEN length(json_extract(after, '$')) END \
+         FROM change_log \
          WHERE (?1 IS NULL OR agent_client_id = ?1) \
          AND (?2 = 0 OR (actor = 'agent' AND seen_at IS NULL)) \
          AND (?3 IS NULL OR id < ?3) \
-         ORDER BY id DESC LIMIT ?4"
-    ))?;
+         ORDER BY id DESC LIMIT ?4",
+    )?;
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
     let rows = stmt.query_map(
         params![
@@ -192,7 +208,13 @@ pub fn list_recent(
             filter.before,
             limit
         ],
-        from_row,
+        |row| {
+            Ok(RecentRow {
+                log: from_row(row)?,
+                before_chars: row.get(12)?,
+                after_chars: row.get(13)?,
+            })
+        },
     )?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
