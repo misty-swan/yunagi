@@ -16,5 +16,13 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# 別の候補の既定ディレクトリを求めるために、利用者のホームを OS に尋ねる
+# （storage/dir_mismatch.rs。UNIX 系はパスワードデータベース、Windows は既知のフォルダの API）
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Shell"] }
+
 [dev-dependencies]
 tempfile.workspace = true

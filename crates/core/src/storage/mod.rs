@@ -11,6 +11,7 @@ pub mod cloud_sync;
 pub mod data_dir;
 mod db_copy;
 mod db_files;
+pub mod dir_mismatch;
 mod error;
 mod lock;
 mod migration;

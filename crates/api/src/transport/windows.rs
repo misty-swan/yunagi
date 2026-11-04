@@ -481,8 +481,14 @@ impl Interrupter {
 /// 既定ディレクトリ `dir` のトークンのファイルを読み、書かれているパイプの名前に接続する。
 /// Windows では名前がファイルにあるので、ファイルを先に読む（戻りの 2 つ目に入れて返す）。
 /// ファイルが無ければ待ち受けが無い（`NoListener`）。
+///
+/// パイプを開く操作は待たずに返る（全部ふさがっていれば `ERROR_PIPE_BUSY` ですぐ失敗する）ので、接続の
+/// 時間切れは使わない。開いた後、`hello`（トークンを含む）を送る前に、パイプの持ち主の SID が自分の SID と
+/// 同じことを確かめる（違えば何も送らず、`Denied`。アーキテクチャ設計書 4.6。名前を先取りしたほかの
+/// プロセスにトークンを渡さないため）。
 pub fn connect(
     dir: &yunagi_core::storage::data_dir::DefaultDir,
+    _timeout: Duration,
 ) -> Result<(Stream, Option<ConnectionInfo>), ConnectError> {
     connect_in(dir.path())
 }
@@ -492,10 +498,81 @@ pub(crate) fn connect_in(dir: &Path) -> Result<(Stream, Option<ConnectionInfo>),
     let Some(name) = info.pipe_name.clone() else {
         return Err(ConnectError::NoListener);
     };
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(name)
-        .map(|file| (Stream::new(file), Some(info)))
-        .map_err(classify)
+        .map_err(classify)?;
+    match owner_is_me(&file) {
+        Ok(true) => Ok((Stream::new(file), Some(info))),
+        Ok(false) => Err(ConnectError::Denied(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the pipe is owned by another user",
+        ))),
+        // 持ち主を確かめられないパイプには、トークンを渡さない（権限が無いのではなく、確かめる操作の
+        // 失敗なので `denied` にはしない。クライアントは `unexpected` にする）
+        Err(e) => Err(ConnectError::Io(e)),
+    }
+}
+
+/// パイプ `file` の持ち主の SID が、この処理の利用者（プロセスのトークンのユーザー、またはトークンの
+/// 既定の持ち主）の SID と同じか。サーバーはパイプに持ち主を明示しないので、持ち主は作ったプロセスの
+/// トークンで決まる（ふつうはユーザー。管理者権限なら Administrators）。
+fn owner_is_me(file: &File) -> io::Result<bool> {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS};
+    use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
+    use windows::Win32::Security::{
+        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, PSID, TOKEN_OWNER, TOKEN_QUERY,
+        TOKEN_USER, TokenOwner, TokenUser,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    // SAFETY: どの呼び出しにも、この関数の中で確保した有効な領域と、その大きさを渡す。トークンの
+    // ハンドルと、権限の記述（持ち主の SID を指す）は、使い終わったら一度だけ解放する。持ち主の SID の
+    // 比較は、権限の記述を解放する前に済ませる。
+    unsafe {
+        let mut token = HANDLE::default();
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).map_err(io::Error::from)?;
+        let mine = (|| {
+            // トークンの情報（大きさを尋ねてから読む。構造体の整列のために u64 の並びで確保する）
+            let info = |class| -> io::Result<Vec<u64>> {
+                let mut len = 0u32;
+                let _ = GetTokenInformation(token, class, None, 0, &mut len);
+                if len == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+                GetTokenInformation(token, class, Some(buf.as_mut_ptr().cast()), len, &mut len)
+                    .map_err(io::Error::from)?;
+                Ok(buf)
+            };
+            let user_buf = info(TokenUser)?;
+            let owner_buf = info(TokenOwner)?;
+            let user_sid = (*(user_buf.as_ptr().cast::<TOKEN_USER>())).User.Sid;
+            // 管理者権限で作られたオブジェクトの持ち主は、ユーザーではなくトークンの既定の持ち主
+            // （Administrators）になりうるので、これも自分として扱う
+            let token_owner_sid = (*(owner_buf.as_ptr().cast::<TOKEN_OWNER>())).Owner;
+            let mut owner = PSID::default();
+            let mut sd = PSECURITY_DESCRIPTOR::default();
+            let status = GetSecurityInfo(
+                HANDLE(file.as_raw_handle()),
+                SE_KERNEL_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                Some(&mut owner),
+                None,
+                None,
+                None,
+                Some(&mut sd),
+            );
+            if status != ERROR_SUCCESS {
+                return Err(io::Error::from_raw_os_error(status.0 as i32));
+            }
+            let same =
+                EqualSid(user_sid, owner).is_ok() || EqualSid(token_owner_sid, owner).is_ok();
+            LocalFree(Some(HLOCAL(sd.0)));
+            Ok(same)
+        })();
+        let _ = CloseHandle(token);
+        mine
+    }
 }

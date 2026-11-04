@@ -9,10 +9,13 @@
 //! - [`wire`]：プロトコル（JSON-RPC 2.0 を 1 行 1 メッセージで送る）の型と、行の読み方。
 //! - [`transport`]：UNIX ドメインソケット（macOS・Linux）と名前付きパイプ（Windows）。
 //! - [`client`]：接続して認証し、依頼を 1 つ送る（接続の手順 4.4 の 1 回分）。
+//! - [`ops`]：操作（`get_board`・`add_todo` など）の引数を読み、コアの入口を呼び、応答とエラーを
+//!   05 の JSON にする。アプリの待ち受けと、直接モードの CLI・MCP が同じものを使う。
 //!
 //! ネットワークのポートは開かない（docs/release/SECURITY.md 4.2）。
 
 pub mod client;
+pub mod ops;
 pub mod token;
 pub mod transport;
 pub mod wire;

@@ -218,7 +218,12 @@ impl Config {
     /// （黙って既定の保存先で開くと、データが消えたように見え、別の場所に新しいデータベースを
     /// 作ってしまうため）。
     pub fn load(default_dir: &DefaultDir) -> Result<Self, DataDirError> {
-        let default_dir = default_dir.path();
+        Self::load_from(default_dir.path())
+    }
+
+    /// [`Config::load`] の、フォルダのパスを受け取る版。別の候補の既定ディレクトリを読むときに使う
+    /// （候補は [`DefaultDir`] にできない。`dir_mismatch`）。
+    pub(super) fn load_from(default_dir: &Path) -> Result<Self, DataDirError> {
         let path = default_dir.join(CONFIG_FILE_NAME);
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,

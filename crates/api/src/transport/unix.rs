@@ -252,16 +252,39 @@ impl Interrupter {
 /// （サーバーはトークンをソケットより先に書くので、つながった時点のファイルがその待ち受けのもの。
 /// 先に読むと、アプリの再起動と重なったとき古いトークンで誤って認証に失敗する。4.6）ので、
 /// 戻りの 2 つ目は常に `None`。
-pub fn connect(dir: &DefaultDir) -> Result<(Stream, Option<ConnectionInfo>), ConnectError> {
-    connect_in(dir.path())
+///
+/// 接続そのものにも `timeout` の上限をかける（標準の `connect` には時間切れを付けられず、待ち行列が
+/// 満杯のとき止まって待ちうるため。非ブロッキングで接続して待つ。待ち行列が満杯なら、Linux は
+/// すぐ `EAGAIN` で失敗し、4.4 の「一時的につながらない」として試し直される。4.6）。
+pub fn connect(
+    dir: &DefaultDir,
+    timeout: Duration,
+) -> Result<(Stream, Option<ConnectionInfo>), ConnectError> {
+    connect_in_within(dir.path(), timeout)
 }
 
+#[cfg(test)]
 pub(crate) fn connect_in(dir: &Path) -> Result<(Stream, Option<ConnectionInfo>), ConnectError> {
+    connect_in_within(dir, crate::CLIENT_CONNECT_TIMEOUT)
+}
+
+fn connect_in_within(
+    dir: &Path,
+    timeout: Duration,
+) -> Result<(Stream, Option<ConnectionInfo>), ConnectError> {
+    use socket2::{Domain, SockAddr, Socket, Type};
     let path = dir.join(SOCKET_FILE_NAME);
     check_socket_path(&path).map_err(ConnectError::SocketPathTooLong)?;
-    UnixStream::connect(&path)
-        .map(|s| (Stream(s), None))
-        .map_err(classify)
+    let addr = SockAddr::unix(&path).map_err(classify)?;
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None).map_err(classify)?;
+    // 0 の時間切れは扱えないので、1 ミリ秒を下限にする
+    socket
+        .connect_timeout(&addr, timeout.max(Duration::from_millis(1)))
+        .map_err(classify)?;
+    Ok((
+        Stream(UnixStream::from(std::os::fd::OwnedFd::from(socket))),
+        None,
+    ))
 }
 
 #[cfg(test)]

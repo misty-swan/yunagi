@@ -4614,8 +4614,11 @@ name = "yunagi-api"
 version = "0.0.0"
 dependencies = [
  "getrandom 0.4.3",
+ "jiff",
+ "rusqlite",
  "serde",
  "serde_json",
+ "socket2",
  "tempfile",
  "windows",
  "yunagi-core",
@@ -4639,6 +4642,7 @@ dependencies = [
  "ts-rs",
  "windows",
  "yunagi-api",
+ "yunagi-cli",
  "yunagi-core",
 ]
 
@@ -4646,6 +4650,10 @@ dependencies = [
 name = "yunagi-cli"
 version = "0.0.0"
 dependencies = [
+ "jiff",
+ "serde_json",
+ "tempfile",
+ "yunagi-api",
  "yunagi-core",
 ]
 
@@ -4655,10 +4663,12 @@ version = "0.0.0"
 dependencies = [
  "getrandom 0.4.3",
  "jiff",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "windows",
 ]
 
 [[package]]

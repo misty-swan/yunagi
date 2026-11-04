@@ -31,6 +31,8 @@ windows.workspace = true
 core-foundation.workspace = true
 
 [dev-dependencies]
+# ローカル API の結合テスト（tests/api.rs）で、`yunagi`（CLI）をアプリ経由で動かす
+yunagi-cli.workspace = true
 # 結合テスト（tests/）で、WebView を開かずにコマンドとイベントを呼ぶ（tauri::test）
 tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
