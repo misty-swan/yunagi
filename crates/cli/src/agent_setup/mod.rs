@@ -149,7 +149,9 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
                 failed = true;
                 err(
                     io,
-                    &format!("Claude Code: cannot continue. {msg} Nothing was changed."),
+                    &format!(
+                        "Claude Code: cannot continue. {msg} Nothing was changed for Claude Code."
+                    ),
                 );
             }
         }
@@ -168,7 +170,7 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
                 failed = true;
                 err(
                     io,
-                    &format!("Codex: cannot continue. {msg} Nothing was changed."),
+                    &format!("Codex: cannot continue. {msg} Nothing was changed for Codex."),
                 );
             }
         }
@@ -213,8 +215,27 @@ pub fn run(want_claude: bool, want_codex: bool, env: &Env, io: &mut Io<'_>) -> i
     let _ = write!(io.stdout, "\nApply these changes? [y/N] ");
     let _ = io.stdout.flush();
     let mut answer = String::new();
-    let confirmed = io.stdin.read_line(&mut answer).is_ok()
-        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+    // 入力が閉じている・読めないときは、「断った」ではなく失敗にする（呼び出した側が区別できるように）
+    match io.stdin.read_line(&mut answer) {
+        Ok(0) => {
+            out(io, "");
+            err(
+                io,
+                "No answer was given (the input is closed). Nothing was changed.",
+            );
+            return 1;
+        }
+        Err(e) => {
+            out(io, "");
+            err(
+                io,
+                &format!("Could not read the answer ({e}). Nothing was changed."),
+            );
+            return 1;
+        }
+        Ok(_) => {}
+    }
+    let confirmed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
     if !confirmed {
         out(io, "Cancelled. Nothing was changed.");
         return 0;

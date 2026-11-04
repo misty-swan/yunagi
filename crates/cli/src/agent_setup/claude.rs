@@ -96,22 +96,27 @@ fn is_desired(entry: &Value) -> bool {
     kind_ok && command_ok && args_ok && env_ok
 }
 
-/// 登録の中身を 1 行にしたもの（環境変数は名前だけ。値は出さない）。
+/// 登録の中身を 1 行にしたもの。環境変数は名前だけ（値は出さない）。引数は、Yunagi 自身のコマンド
+/// （`yunagi`）のときだけ出す：ほかのコマンドの引数には、トークンなどが入りうる（`--token abc`）ため、
+/// 個数だけにする。
 fn summarize(entry: &Value) -> String {
     let command = entry.get("command").and_then(Value::as_str);
     let Some(command) = command else {
         return "(not a command-based server)".to_owned();
     };
-    let args = entry
+    let args: Vec<&str> = entry
         .get("args")
         .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
+    let own_command = Path::new(command)
+        .file_stem()
+        .is_some_and(|stem| stem == SERVER_COMMAND);
+    let args = match (own_command, args.len()) {
+        (_, 0) => String::new(),
+        (true, _) => args.join(" "),
+        (false, n) => format!("({n} arguments not shown)"),
+    };
     let mut line = format!("{command} {args}").trim_end().to_owned();
     if let Some(env) = entry.get("env").and_then(Value::as_object)
         && !env.is_empty()
@@ -261,19 +266,28 @@ impl Change for Plan {
             .chain(SERVER_ARGS)
             .collect();
         if let Action::Update(old) = &self.action {
-            run(
+            if let Err(e) = run(
                 &self.exe,
                 &["mcp", "remove", "--scope", "user", SERVER_NAME],
-            )
-            .map_err(|e| {
-                format!("Could not remove the old registration, so nothing was changed. {e}")
-            })?;
+            ) {
+                // 何も変わっていない。使わなかった参考のコピーは残さない（OAuth トークンなどが入る
+                // ファイルの写しを、やり直すたびに増やさない）
+                discard(copy.as_deref());
+                return Err(format!(
+                    "Could not remove the old registration, so nothing was changed. {e}"
+                ));
+            }
             if let Err(e) = run(&self.exe, &add) {
                 return Err(self.restore(old, &e, copy.as_deref()));
             }
             done.push("replaced the old registration".to_owned());
         } else {
-            run(&self.exe, &add).map_err(|e| format!("`claude mcp add` failed. {e}"))?;
+            if let Err(e) = run(&self.exe, &add) {
+                discard(copy.as_deref());
+                return Err(format!(
+                    "`claude mcp add` failed, so nothing was changed. {e}"
+                ));
+            }
             done.push("registered with `claude mcp add`".to_owned());
         }
         done.push("undo: claude mcp remove --scope user yunagi".to_owned());
@@ -294,6 +308,18 @@ impl Plan {
             ))
             .unwrap_or_default()
         );
+        // Windows の `.cmd`・`.bat` には、Rust が引用符などを安全に渡せない（JSON を 1 つの引数にできない）
+        let batch = self
+            .exe
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+        if batch {
+            return format!(
+                "The new registration failed ({cause}) after the old one was removed. This \
+                 `claude` is a batch file, which cannot take the old settings safely, so it \
+                 was not restored automatically. {recover}"
+            );
+        }
         if !is_plain_command(old) {
             // 環境変数の値や、ヘッダーのトークンなどを、コマンドの引数（プロセスの一覧から見える）に載せない
             return format!(
@@ -319,6 +345,13 @@ impl Plan {
                  ({e}). {recover} To register Yunagi's standard command instead, run: {ADD_COMMAND}"
             ),
         }
+    }
+}
+
+/// 何も変えなかったとき、作った参考のコピーを消す。
+fn discard(copy: Option<&Path>) {
+    if let Some(copy) = copy {
+        let _ = fs::remove_file(copy);
     }
 }
 
@@ -432,7 +465,16 @@ mod tests {
     fn summaries_hide_environment_values() {
         let entry = json!({"command": "x", "args": ["a", "b"], "env": {"TOKEN": "secret"}});
         let line = summarize(&entry);
-        assert!(line.contains("x a b") && line.contains("TOKEN"), "{line}");
+        assert!(line.contains("TOKEN"), "{line}");
         assert!(!line.contains("secret"), "{line}");
+        // 引数にトークンが入りうるので、Yunagi のコマンドのほかは個数だけ
+        let npx = json!({"command": "npx", "args": ["x", "--token", "abc123"]});
+        let line = summarize(&npx);
+        assert!(
+            line.contains("3 arguments not shown") && !line.contains("abc123"),
+            "{line}"
+        );
+        let own = json!({"command": "/opt/bin/yunagi", "args": ["mcp", "--client", "codex"]});
+        assert_eq!(summarize(&own), "/opt/bin/yunagi mcp --client codex");
     }
 }

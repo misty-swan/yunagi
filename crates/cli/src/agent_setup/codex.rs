@@ -31,22 +31,26 @@ fn codex_dir(setup: &SetupEnv) -> Option<PathBuf> {
         .or_else(|| setup.home.as_ref().map(|h| h.join(".codex")))
 }
 
-/// 登録の中身（変更内容の表示と同じ形）。
-fn block(names: &[&str]) -> Vec<String> {
-    let quote = |items: &[&str]| {
-        items
-            .iter()
-            .map(|s| format!("\"{s}\""))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    vec![
-        format!("[mcp_servers.{SERVER_NAME}]"),
-        format!("command = \"{SERVER_COMMAND}\""),
-        format!("args = [{}]", quote(&SERVER_ARGS)),
-        format!("env_vars = [{}]", quote(names)),
-    ]
+/// 表 `entry` の `command`・`args`・`env_vars` を 1 行ずつにしたもの（変更内容の表示。書き込む文字列と同じ
+/// 文書から作るので、表示と書き込みがずれない。`env` は値を含みうるので出さない）。
+fn shown_fields(entry: &dyn TableLike) -> Vec<String> {
+    ["command", "args", "env_vars"]
+        .iter()
+        .filter_map(|key| {
+            entry
+                .get(key)
+                .map(|item| format!("{key} = {}", item.to_string().trim()))
+        })
+        .collect()
 }
+
+/// `mcp_servers.yunagi` が HTTP のサーバーとして書かれているときの欄（`command` と同時には使えない）。
+const HTTP_KEYS: [&str; 4] = [
+    "url",
+    "bearer_token_env_var",
+    "http_headers",
+    "env_http_headers",
+];
 
 /// `mcp_servers.yunagi` の今の状態。
 enum Current {
@@ -71,6 +75,13 @@ fn current(doc: &DocumentMut, names: &[&str]) -> Result<Current, String> {
     let entry = entry
         .as_table_like()
         .ok_or("`mcp_servers.yunagi` in the file is not a table.")?;
+    if let Some(key) = HTTP_KEYS.iter().find(|k| entry.contains_key(k)) {
+        // `command` を足すと、Codex が設定ファイル全体を読めなくなりうる。利用者の設定なので書き換えない
+        return Err(format!(
+            "`mcp_servers.yunagi` is set up as an HTTP server (it has `{key}`), which cannot be \
+             combined with a command. Remove or rename that table yourself first."
+        ));
+    }
     let strings = |key: &str| -> Option<Vec<String>> {
         entry
             .get(key)?
@@ -85,16 +96,7 @@ fn current(doc: &DocumentMut, names: &[&str]) -> Result<Current, String> {
     if same {
         return Ok(Current::Same);
     }
-    // 今の値を表示する（`env` は値を含みうるので出さない）
-    let shown = ["command", "args", "env_vars"]
-        .iter()
-        .filter_map(|key| {
-            entry
-                .get(key)
-                .map(|item| format!("{key} = {}", item.to_string().trim()))
-        })
-        .collect();
-    Ok(Current::Different(shown))
+    Ok(Current::Different(shown_fields(entry)))
 }
 
 /// `mcp_servers.yunagi` が `enabled = false` か。
@@ -167,10 +169,12 @@ fn working_text(text: &str) -> String {
     }
 }
 
-/// 書き出す文字列。元のファイルが CRLF なら、足した行も CRLF にそろえる。
+/// 書き出す文字列。元のファイルの改行がすべて CRLF なら、CRLF にそろえる（`toml_edit` は読み込むときに
+/// LF にそろえるため）。LF と CRLF が混ざったファイルは、ここに来る前に止める。
 fn render(doc: &DocumentMut, original: Option<&str>) -> String {
     let text = doc.to_string();
-    if original.is_some_and(|o| o.contains("\r\n")) {
+    let all_crlf = |o: &str| o.contains("\r\n") && !o.replace("\r\n", "").contains('\n');
+    if original.is_some_and(all_crlf) {
         text.replace("\r\n", "\n").replace('\n', "\r\n")
     } else {
         text
@@ -210,6 +214,18 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
             return Prepared::Failed(format!("Could not read {}: {e}.", path.display()));
         }
     };
+    // `toml_edit` は読み込むときに CRLF を LF にそろえるので、LF と CRLF が混ざったファイルは、元の行を
+    // そのまま残せない。黙って正規化せず、書かずに止める
+    if let Some(o) = original.as_deref()
+        && o.contains("\r\n")
+        && o.replace("\r\n", "").contains('\n')
+    {
+        return Prepared::Failed(format!(
+            "{} mixes LF and CRLF line endings, and rewriting it would change the endings of lines \
+             that are not ours. Make the endings consistent first.",
+            path.display()
+        ));
+    }
     let text = working_text(original.as_deref().unwrap_or(""));
     let text = text.as_str();
     let mut doc: DocumentMut = match text.parse() {
@@ -239,10 +255,19 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
         return Prepared::Failed(format!("{} — {msg}", path.display()));
     }
     let new_text = render(&doc, original.as_deref());
+    let mut new_fields = vec![format!("[mcp_servers.{SERVER_NAME}]")];
+    if let Some(entry) = doc
+        .get("mcp_servers")
+        .and_then(Item::as_table_like)
+        .and_then(|servers| servers.get(SERVER_NAME))
+        .and_then(Item::as_table_like)
+    {
+        new_fields.extend(shown_fields(entry));
+    }
     Prepared::Change(Plan {
         disabled: is_disabled(&doc),
         path,
-        names: names.iter().map(|s| (*s).to_owned()).collect(),
+        new_fields,
         old,
         original,
         new_text,
@@ -256,7 +281,8 @@ pub struct Plan {
     /// 利用者が `enabled = false` にしている（書き換えても Codex は起動しない）。
     disabled: bool,
     path: PathBuf,
-    names: Vec<String>,
+    /// 書く表の見出しと、`command`・`args`・`env_vars`（書き込む文書から作った表示）。
+    new_fields: Vec<String>,
     /// 今の登録の `command`・`args`・`env_vars`（無ければ `None`）。
     old: Option<Vec<String>>,
     /// 読んだときのファイルの中身（ファイルが無ければ `None`）。書く前に、変わっていないか確かめる。
@@ -268,7 +294,6 @@ pub struct Plan {
 
 impl Change for Plan {
     fn describe(&self) -> Vec<String> {
-        let names: Vec<&str> = self.names.iter().map(String::as_str).collect();
         let mut lines = Vec::new();
         let file = if self.original.is_some() {
             "the existing file"
@@ -290,7 +315,7 @@ impl Change for Plan {
                 );
             }
         }
-        lines.extend(block(&names).into_iter().map(|l| format!("  {l}")));
+        lines.extend(self.new_fields.iter().map(|l| format!("  {l}")));
         lines.push(
             "env_vars holds variable names only; Codex passes their values from its own \
              environment when it starts the server, so no value is stored."
@@ -455,6 +480,37 @@ mod tests {
         // 表でないものは、書かずに止める
         assert!(current(&parse("mcp_servers = 1\n"), &NAMES).is_err());
         assert!(current(&parse("[mcp_servers]\nyunagi = \"x\"\n"), &NAMES).is_err());
+    }
+
+    #[test]
+    fn an_http_server_table_is_not_turned_into_a_command() {
+        let doc: DocumentMut = "[mcp_servers.yunagi]\nurl = \"https://example.invalid/mcp\"\n"
+            .parse()
+            .unwrap();
+        let Err(msg) = current(&doc, &NAMES) else {
+            panic!("expected a conflict");
+        };
+        assert!(
+            msg.contains("HTTP server") && msg.contains("`url`"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn mixed_line_endings_stop_instead_of_being_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("codex/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "a = 1\r\nb = 2\n").unwrap();
+        let setup = SetupEnv {
+            codex_home: Some(dir.path().join("codex")),
+            ..crate::agent_setup::test_setup()
+        };
+        let Prepared::Failed(msg) = prepare(&setup) else {
+            panic!("expected a failure");
+        };
+        assert!(msg.contains("mixes LF and CRLF"), "{msg}");
+        assert_eq!(fs::read(&config).unwrap(), b"a = 1\r\nb = 2\n");
     }
 
     #[test]

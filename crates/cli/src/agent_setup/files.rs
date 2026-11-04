@@ -130,6 +130,13 @@ pub fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
         if let Some(permissions) = permissions {
             fs::set_permissions(&tmp, permissions)?;
         }
+        // 持ち主とグループも合わせる（権限が足りなければ、合わせられないだけで続ける。ACL・拡張属性・
+        // ハードリンクは引き継がない：名前を変えて置き換えるため）
+        #[cfg(unix)]
+        if let Ok(meta) = fs::metadata(&real) {
+            use std::os::unix::fs::MetadataExt;
+            let _ = std::os::unix::fs::chown(&tmp, Some(meta.uid()), Some(meta.gid()));
+        }
         fs::rename(&tmp, &real)
     })();
     if result.is_err() {

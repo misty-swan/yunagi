@@ -123,7 +123,7 @@ fn without_a_terminal_the_changes_are_shown_and_nothing_is_written() {
 fn declining_changes_nothing() {
     let f = Fixture::new();
     f.fake_claude();
-    for answer in ["n\n", "\n", "yes please\n", ""] {
+    for answer in ["n\n", "\n", "yes please\n"] {
         let r = go(f.setup(true), true, true, answer);
         assert_eq!(r.code, 0, "{answer:?}");
         assert!(
@@ -134,6 +134,12 @@ fn declining_changes_nothing() {
         assert!(f.calls().is_empty());
         assert_eq!(f.files("codex"), Vec::<String>::new());
     }
+    // 入力が閉じている（答えが無い）のは、断ったのではなく失敗（終了コード 1）
+    let r = go(f.setup(true), true, true, "");
+    assert_eq!(r.code, 1);
+    assert!(r.stderr.contains("No answer was given"), "{}", r.stderr);
+    assert!(f.calls().is_empty());
+    assert_eq!(f.files("codex"), Vec::<String>::new());
 }
 
 #[test]
@@ -331,7 +337,16 @@ fn without_the_claude_command_the_command_to_run_is_shown() {
     assert_eq!(r.code, 4);
     // 検出で選ばれただけ（設定ファイルはあるが `claude` が無い）のときは、案内だけで 0
     f.claude_json(&serde_json::json!({}));
-    let auto = go(f.setup(true), false, false, "");
+    // （Codex は、設定のフォルダが無い場所を指して、検出されないようにする）
+    let auto = go(
+        SetupEnv {
+            codex_home: Some(f.path("no-codex-here")),
+            ..f.setup(true)
+        },
+        false,
+        false,
+        "",
+    );
     assert_eq!(auto.code, 0, "{}{}", auto.stdout, auto.stderr);
     assert!(auto.stdout.contains("`claude` command was not found"));
     assert!(
