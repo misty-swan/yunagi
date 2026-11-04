@@ -9,8 +9,19 @@ import { prefs } from "../lib/prefs.svelte";
 
 let app: ReturnType<typeof mount> | undefined;
 
+// OS のフォルダ選択（Tauri のダイアログ）は、選ぶ結果を決めて差し替える
+const picked = vi.hoisted(() => ({ value: null as string | null, asked: [] as string[] }));
+vi.mock("../lib/folder", () => ({
+  pickFolder: async (title: string) => {
+    picked.asked.push(title);
+    return picked.value;
+  },
+}));
+
 beforeEach(() => {
   prefs.lang = "ja";
+  picked.value = null;
+  picked.asked = [];
 });
 
 afterEach(async () => {
@@ -198,6 +209,30 @@ test("保存先を選び直す：使えないフォルダは理由を出し、�
   click("このフォルダを使う");
   await until(() => calls.filter((c) => c.cmd === "choose_data_dir").length === 2);
   await until(() => $(".startup .error") === null);
+});
+
+test("保存先を選び直す：「フォルダを選ぶ」で選んだパスが入力欄に入り、取りやめれば入力は変わらない", async () => {
+  const calls = await start(NOT_FOUND, (cmd) => (cmd === "choose_data_dir" ? { state: "ready" } : undefined));
+  const input = $(".choose input") as HTMLInputElement;
+  const submit = () => [...document.querySelectorAll<HTMLButtonElement>(".choose button")].at(-1)!;
+  expect(submit().disabled).toBe(true);
+
+  picked.value = "/mnt/drive/yunagi";
+  click("フォルダを選ぶ");
+  await until(() => input.value === "/mnt/drive/yunagi");
+  expect(picked.asked.at(-1)).toBe("データベースのあるフォルダを選ぶ");
+  // 選んだだけでは記録しない（「このフォルダを使う」で行う）
+  expect(calls.some((c) => c.cmd === "choose_data_dir")).toBe(false);
+  expect(submit().disabled).toBe(false);
+
+  picked.value = null;
+  click("フォルダを選ぶ");
+  await until(() => picked.asked.length === 2);
+  expect(input.value).toBe("/mnt/drive/yunagi");
+
+  click("このフォルダを使う");
+  await until(() => calls.some((c) => c.cmd === "choose_data_dir"));
+  expect(calls.find((c) => c.cmd === "choose_data_dir")?.args).toEqual({ dir: "/mnt/drive/yunagi" });
 });
 
 test("新しく作るは、確かめてから create_database を呼ぶ", async () => {

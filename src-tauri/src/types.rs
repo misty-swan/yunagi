@@ -16,11 +16,12 @@ use yunagi_core::domain::agent::ItemField as CoreItemField;
 use yunagi_core::domain::board;
 use yunagi_core::domain::carryover;
 use yunagi_core::domain::item::{self as core_item, CloseReason as CoreCloseReason};
-use yunagi_core::domain::logical_date::LogicalDate;
+use yunagi_core::domain::logical_date::{DayBoundary, LogicalDate};
 use yunagi_core::domain::note_body;
 use yunagi_core::domain::note_send;
+use yunagi_core::domain::settings;
 use yunagi_core::domain::text_doc::{self, TextDoc as CoreTextDoc};
-use yunagi_core::storage::{Ulid, search};
+use yunagi_core::storage::{Ulid, cloud_sync, search};
 
 // ---- 値 ----
 
@@ -1144,6 +1145,221 @@ pub struct BackupFailed {
     pub detail: String,
 }
 
+// ---- 設定 ----
+
+/// テーマ（画面設計書 7章「表示」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    /// OS に合わせる（既定）。
+    System,
+    Light,
+    Dark,
+}
+
+/// ノートの書体（画面設計書 7章「表示」、デザインガイド 4章）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum NoteFont {
+    /// 本文と同じ（既定）。
+    Body,
+    /// 等幅。
+    Mono,
+}
+
+/// 整理モードのレイアウト（画面設計書 3章「レイアウト」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+pub enum Layout {
+    /// 2段（既定）。
+    A,
+    /// 3列。
+    B,
+    /// 縦積み。
+    C,
+}
+
+/// 画面の言語。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Locale {
+    Ja,
+    En,
+}
+
+macro_rules! mirror_settings_enum {
+    ($name:ident <=> $core:ty { $($variant:ident),+ $(,)? }) => {
+        impl From<$core> for $name {
+            fn from(v: $core) -> Self {
+                match v {
+                    $(<$core>::$variant => Self::$variant),+
+                }
+            }
+        }
+
+        impl From<$name> for $core {
+            fn from(v: $name) -> Self {
+                match v {
+                    $($name::$variant => Self::$variant),+
+                }
+            }
+        }
+    };
+}
+
+mirror_settings_enum!(Theme <=> settings::Theme { System, Light, Dark });
+mirror_settings_enum!(NoteFont <=> settings::NoteFont { Body, Mono });
+mirror_settings_enum!(Layout <=> settings::Layout { A, B, C });
+mirror_settings_enum!(Locale <=> settings::Locale { Ja, En });
+
+/// 画面に出す設定（既定値を当てた後のもの。データモデル設計書 3章 setting）。時刻は `HH:MM`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    /// 日付の切り替わり時刻（既定 `04:00`）。
+    pub day_boundary: String,
+    /// 凪メーターの始業（既定 `09:00`）。
+    pub meter_start: String,
+    /// 凪メーターの終業（既定 `19:00`）。始業より後。
+    pub meter_end: String,
+    /// 画面の言語。設定が無ければ `null`（OS の言語に合わせる）。
+    pub locale: Option<Locale>,
+    /// 更新の自動確認（既定 `true`）。
+    pub update_check: bool,
+    pub theme: Theme,
+    /// フォントサイズ（px。13〜19、既定 15）。
+    pub font_size: u8,
+    pub note_font: NoteFont,
+    pub layout: Layout,
+    /// 持ち越し見直しの回数（1 以上、既定 3）。
+    pub carryover_review_threshold: u32,
+    /// サイドバーの開閉（広いウィンドウの整理モードでの状態。既定は開く）。
+    pub sidebar_open: bool,
+}
+
+impl From<settings::Settings> for Settings {
+    fn from(s: settings::Settings) -> Self {
+        Self {
+            day_boundary: s.day_boundary.to_string(),
+            meter_start: s.meter_hours.start.to_string(),
+            meter_end: s.meter_hours.end.to_string(),
+            locale: s.locale.map(Locale::from),
+            update_check: s.update_check,
+            theme: s.theme.into(),
+            font_size: s.font_size,
+            note_font: s.note_font.into(),
+            layout: s.layout.into(),
+            carryover_review_threshold: s.carryover_review_threshold,
+            sidebar_open: s.sidebar_open,
+        }
+    }
+}
+
+impl SettingsPatch {
+    /// コアの形にする。時刻が `HH:MM` でなければ `invalid_argument`（`time_of_day`）。
+    /// 凪メーターの始業・終業は、片方だけのときもう片方に `current` の値を使う。
+    pub fn into_core(
+        self,
+        current: &settings::Settings,
+    ) -> Result<settings::SettingsPatch, CommandError> {
+        let time = |s: Option<String>| -> Result<_, CommandError> {
+            s.map(|s| {
+                s.parse::<DayBoundary>()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        reason: InvalidReason::TimeOfDay,
+                    })
+            })
+            .transpose()
+        };
+        let (start, end) = (time(self.meter_start)?, time(self.meter_end)?);
+        let meter_hours = (start.is_some() || end.is_some()).then(|| {
+            (
+                start.unwrap_or(current.meter_hours.start),
+                end.unwrap_or(current.meter_hours.end),
+            )
+        });
+        Ok(settings::SettingsPatch {
+            day_boundary: time(self.day_boundary)?,
+            meter_hours,
+            locale: self.locale.map(Into::into),
+            update_check: self.update_check,
+            theme: self.theme.map(Into::into),
+            font_size: self.font_size,
+            note_font: self.note_font.map(Into::into),
+            layout: self.layout.map(Into::into),
+            carryover_review_threshold: self.carryover_review_threshold,
+            sidebar_open: self.sidebar_open,
+        })
+    }
+}
+
+/// 設定の保存：変える欄だけ（無い欄には触れない）。`meterStart`・`meterEnd` は、片方だけでも、
+/// もう片方は今の値を使う。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsPatch {
+    #[cfg_attr(test, ts(optional))]
+    pub day_boundary: Option<String>,
+    #[cfg_attr(test, ts(optional))]
+    pub meter_start: Option<String>,
+    #[cfg_attr(test, ts(optional))]
+    pub meter_end: Option<String>,
+    #[cfg_attr(test, ts(optional))]
+    pub locale: Option<Locale>,
+    #[cfg_attr(test, ts(optional))]
+    pub update_check: Option<bool>,
+    #[cfg_attr(test, ts(optional))]
+    pub theme: Option<Theme>,
+    #[cfg_attr(test, ts(optional))]
+    pub font_size: Option<u8>,
+    #[cfg_attr(test, ts(optional))]
+    pub note_font: Option<NoteFont>,
+    #[cfg_attr(test, ts(optional))]
+    pub layout: Option<Layout>,
+    #[cfg_attr(test, ts(optional))]
+    pub carryover_review_threshold: Option<u32>,
+    #[cfg_attr(test, ts(optional))]
+    pub sidebar_open: Option<bool>,
+}
+
+/// クラウド同期のサービス（保存先の警告に使う。画面設計書 7章）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum CloudService {
+    ICloudDrive,
+    Dropbox,
+    OneDrive,
+    GoogleDrive,
+}
+
+impl From<cloud_sync::CloudService> for CloudService {
+    fn from(s: cloud_sync::CloudService) -> Self {
+        use cloud_sync::CloudService as C;
+        match s {
+            C::ICloudDrive => Self::ICloudDrive,
+            C::Dropbox => Self::Dropbox,
+            C::OneDrive => Self::OneDrive,
+            C::GoogleDrive => Self::GoogleDrive,
+        }
+    }
+}
+
+/// 保存先の変更の結果（`change_data_dir`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct DataDirChanged {
+    /// 移した後に消せなかった、元の保存先のファイル・フォルダ（データは新しい保存先に移っている。
+    /// 消すかどうかは利用者に任せる）。
+    pub leftovers: Vec<String>,
+}
+
 // ---- エラー ----
 
 /// コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
@@ -1169,9 +1385,13 @@ pub enum CommandError {
     /// これを返してから次に保存が成功するまで、コアはエージェントの書き込みを受け付けない
     /// （アーキテクチャ設計書 4.1「保存に失敗している間」）。
     Storage { detail: String },
-    /// 選んだバックアップ・保存先を使えないので、何も変えなかった（起動時の
-    /// `restore_at_startup`・`choose_data_dir`）。
+    /// 選んだバックアップ・保存先を使えないので、何も変えなかった（`restore_at_startup`・
+    /// `choose_data_dir`・設定画面の `change_data_dir`・`use_data_dir`・`restore_backup`）。
     Rejected { reason: RejectReason },
+    /// Markdown の書き出しで、ファイルを書けなかった（書き出し先のフォルダが無い・書き込めないなど）。
+    /// `replaced` は、それまでに置き換え終えたファイルの数（0 なら何も変えていない）。`detail` は
+    /// ログ用の文。データベースの読み取りの失敗は `storage`（画面設計書 7章・アーキテクチャ設計書 6.4）。
+    ExportFailed { replaced: usize, detail: String },
     /// バックアップから戻すのに失敗し、退避した前のデータベースを元の場所に戻すこともできなかった
     /// （`restore_at_startup`）。前のデータベースは `set_aside`（とその横のファイル）に残っている。
     /// `detail` はログ用の文。
@@ -1200,6 +1420,13 @@ pub enum RejectReason {
     NotYunagi,
     /// このアプリより新しい版で作られている。
     NewerSchema,
+    /// 選んだ保存先が、今の保存先と同じ（保存先の変更）。
+    SameDirectory,
+    /// 選んだ保存先が、今の保存先の `backups/` の中にある（保存先の変更）。
+    InsideBackups,
+    /// 選んだ保存先に、すでにデータベースの跡か、空でない `backups/` がある（保存先の変更。
+    /// 上書きしない）。
+    TargetHasData,
 }
 
 /// 引数の誤りの種類。
@@ -1227,6 +1454,14 @@ pub enum InvalidReason {
     NoteLine,
     /// 守る行の番号が 0（1始まり）。
     InvalidLine,
+    /// 設定：凪メーターの始業が終業より前でない。
+    MeterHours,
+    /// 設定：フォントサイズが 13〜19 でない。
+    FontSize,
+    /// 設定：持ち越し見直しの回数が 1 以上でない。
+    ReviewThreshold,
+    /// 設定：`HH:MM` の形でない時刻。
+    TimeOfDay,
 }
 
 /// 受け付けられない状態の理由。
@@ -1371,6 +1606,36 @@ impl From<carryover::CarryoverError> for CommandError {
             E::AlreadyDone => Self::Conflict(Conflict::CarryoverDone),
             E::InvalidArgument(a) => Self::InvalidArgument { reason: a.into() },
             E::Storage(_) => Self::storage(&e),
+        }
+    }
+}
+
+impl From<settings::SettingsError> for CommandError {
+    fn from(e: settings::SettingsError) -> Self {
+        use settings::InvalidSetting as I;
+        match e {
+            settings::SettingsError::Invalid(field) => Self::InvalidArgument {
+                reason: match field {
+                    I::MeterHours => InvalidReason::MeterHours,
+                    I::FontSize => InvalidReason::FontSize,
+                    I::ReviewThreshold => InvalidReason::ReviewThreshold,
+                },
+            },
+            settings::SettingsError::Storage(e) => Self::storage(&e),
+        }
+    }
+}
+
+impl From<yunagi_core::domain::export::ExportError> for CommandError {
+    fn from(e: yunagi_core::domain::export::ExportError) -> Self {
+        use yunagi_core::domain::export::ExportError as E;
+        let replaced = match &e {
+            E::RelativeDir { .. } => 0,
+            E::Write { replaced, .. } => *replaced,
+        };
+        Self::ExportFailed {
+            replaced,
+            detail: crate::app_core::chain(&e),
         }
     }
 }

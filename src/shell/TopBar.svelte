@@ -210,6 +210,7 @@
           <p class="muted">{m.saveKeep}</p>
           <div class="actions">
             <button type="button" class="btn" onclick={() => save.retryNow()}>{m.retry}</button>
+            <button type="button" class="btn" onclick={() => onCommand("dataSettings")}>{m.changeDataDir}</button>
           </div>
         </div>
       {/if}

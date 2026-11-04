@@ -10,5 +10,6 @@ pub mod item;
 pub mod logical_date;
 pub mod note_body;
 pub mod note_send;
+pub mod settings;
 pub mod sort_key;
 pub mod text_doc;

@@ -356,6 +356,19 @@ test("ほかの入力欄にフォーカスがあるときは、Mod+Shift+H を�
   expect(document.activeElement).toBe(input);
 });
 
+test("設定を開いている間は、設定のボタンにフォーカスがあるときも Mod+Shift+H を受けない", async () => {
+  const { view } = await start("");
+  const dialog = document.createElement("div");
+  dialog.setAttribute("data-settings", "");
+  const button = document.createElement("button");
+  dialog.append(button);
+  document.body.append(dialog);
+  button.focus();
+  press(H, button);
+  expect(view().state.doc.toString()).toBe("");
+  expect(document.activeElement).toBe(button);
+});
+
 test("日を移ってすぐ戻っても、古い読み込みが入力を消さない。読んでいる間に進んだ版は読み終えてから取り込む", async () => {
   const { core, view, props } = await start("a");
   let open!: () => void;

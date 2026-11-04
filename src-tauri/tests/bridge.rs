@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 19] = [
+    let tests: [(&str, Test); 21] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -102,6 +102,11 @@ fn main() {
         (
             "a_newer_database_is_reported_without_touching_it",
             a_newer_database_is_reported_without_touching_it,
+        ),
+        ("settings_commands", settings_commands),
+        (
+            "data_dir_operations_keep_the_screen_ready",
+            data_dir_operations_keep_the_screen_ready,
         ),
     ];
     // `cargo test <名前>` の名前（`-` で始まらない引数）があれば、名前にそれを含むものだけを走らせる
@@ -899,13 +904,16 @@ fn export_markdown_writes_one_file_per_day(_: &Path) {
         ),
         json!([])
     );
-    // 書けないときは storage（無いフォルダ・相対パス）
+    // 書き出し先に書けないとき（無いフォルダ・相対パス）は export_failed（置き換え終えた数 0）。
+    // データベースの読み取りの失敗は storage のまま（画面設計書 7章・アーキテクチャ設計書 6.4）
     for bad in [out.path().join("無い").to_str().unwrap(), "relative"] {
         let err = h.err(
             "export_markdown",
             json!({ "from": "2030-02-01", "to": "2030-02-01", "dir": bad }),
         );
-        assert_eq!(err["kind"], "storage", "{bad}");
+        assert_eq!(err["kind"], "export_failed", "{bad}");
+        assert_eq!(err["replaced"], 0, "{bad}");
+        assert!(!err["detail"].as_str().unwrap().is_empty(), "{err}");
     }
 }
 
@@ -1488,6 +1496,211 @@ fn a_newer_database_is_reported_without_touching_it(default_dir: &Path) {
         h.err("restore_at_startup", json!({ "backup": "/x.db" })),
         json!({ "kind": "invalid_state" })
     );
+}
+
+/// 設定の読み書き（画面設計書 7章）：既定値、変える欄だけの保存、誤った値の拒否（何も書かない）、
+/// 変えたときだけ届く `changed`、日付の切り替わり時刻を変えたときにすぐ今日を求め直すこと。
+fn settings_commands(default_dir: &Path) {
+    let base = default_dir.parent().unwrap().join("settings-base");
+    create_with_backup(default_dir, &base, "seed");
+    let h = Harness::opened();
+    let defaults = json!({
+        "dayBoundary": "04:00",
+        "meterStart": "09:00",
+        "meterEnd": "19:00",
+        "locale": null,
+        "updateCheck": true,
+        "theme": "system",
+        "fontSize": 15,
+        "noteFont": "body",
+        "layout": "A",
+        "carryoverReviewThreshold": 3,
+        "sidebarOpen": true,
+    });
+    assert_eq!(h.ok("get_settings", json!({})), defaults);
+
+    // 変える欄だけ。片方だけの始業・終業は、もう片方に今の値を使う
+    let saved = h.ok(
+        "save_settings",
+        json!({ "patch": { "theme": "dark", "meterEnd": "18:30", "locale": "ja", "noteFont": "mono" } }),
+    );
+    let mut expected = defaults.clone();
+    expected["theme"] = json!("dark");
+    expected["meterEnd"] = json!("18:30");
+    expected["locale"] = json!("ja");
+    expected["noteFont"] = json!("mono");
+    assert_eq!(saved, expected);
+    // 設定はボードのデータではないので、`changed` は出さない（画面は自分で当てる）
+    h.assert_no_event();
+    assert_eq!(h.ok("get_settings", json!({})), expected);
+    // 同じ値を保存しても、知らせない
+    h.ok("save_settings", json!({ "patch": { "theme": "dark" } }));
+    h.assert_no_event();
+
+    // 誤った値は、同じ保存の正しい欄も含めて何も書かない
+    for (patch, reason) in [
+        (json!({ "meterStart": "19:00" }), "meter_hours"),
+        (
+            json!({ "meterStart": "20:00", "theme": "light" }),
+            "meter_hours",
+        ),
+        (json!({ "fontSize": 12, "theme": "light" }), "font_size"),
+        (json!({ "fontSize": 20 }), "font_size"),
+        (json!({ "carryoverReviewThreshold": 0 }), "review_threshold"),
+        (json!({ "dayBoundary": "4:00" }), "time_of_day"),
+        (json!({ "meterEnd": "25:00" }), "time_of_day"),
+    ] {
+        assert_eq!(
+            h.err("save_settings", json!({ "patch": patch })),
+            json!({ "kind": "invalid_argument", "reason": reason }),
+            "{patch}"
+        );
+    }
+    assert_eq!(h.ok("get_settings", json!({})), expected);
+    h.assert_no_event();
+
+    // 日付の切り替わり時刻を変えると、30 秒を待たずに今日を求め直し、変わっていれば知らせる
+    let before = h.today();
+    h.ok(
+        "save_settings",
+        json!({ "patch": { "dayBoundary": "23:59" } }),
+    );
+    let after = h.today();
+    if after != before {
+        assert_eq!(h.next_event(), ("today-changed", json!({ "today": after })));
+    }
+    h.assert_no_event();
+    std::fs::remove_file(default_dir.join("config.json")).unwrap();
+}
+
+/// 動いている間の保存先の変更・選び直し・復元（画面設計書 7章 S-05 のデータ）：画面を消さない（状態は
+/// 「開いた」のまま、`startup` を知らせない）、ほかのコマンドは終わるまで待つだけで失敗しない、
+/// 使えないものは理由を付けて断り何も変えない。
+fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
+    let root = default_dir.parent().unwrap();
+    let base = root.join("operations-base");
+    create_with_backup(default_dir, &base, "seed");
+    let h = Harness::opened();
+    let ready = json!({ "state": "ready" });
+    assert_eq!(
+        h.ok("get_data_dir", json!({})),
+        json!(base.display().to_string())
+    );
+
+    // 復元：定期バックアップ（TODO を足す前）に戻す。今のデータは「復元前」に残る
+    let today = h.today();
+    let list = h.ok("list_backups", json!({}));
+    let daily = list[0]["path"].as_str().unwrap().to_owned();
+    assert_eq!(list[0]["kind"]["type"], "daily");
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(texts(&board["todos"]), ["seed"]);
+    h.drain();
+    h.ok("restore_backup", json!({ "backup": daily }));
+    assert_eq!(h.next_event(), changed_by("screen"));
+    h.assert_no_event();
+    assert_eq!(h.ok("startup_status", json!({})), ready);
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert!(texts(&board["todos"]).is_empty(), "{board}");
+    let kinds: Vec<_> = h
+        .ok("list_backups", json!({}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["kind"]["type"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(kinds.contains(&"pre_restore".to_owned()), "{kinds:?}");
+    // 使えないバックアップは、何も変えずに断る
+    let not_a_backup = base.join("nothing.db");
+    std::fs::write(&not_a_backup, "not a database").unwrap();
+    let err = h.err(
+        "restore_backup",
+        json!({ "backup": not_a_backup.display().to_string() }),
+    );
+    assert_eq!(err["kind"], "rejected", "{err}");
+    h.assert_no_event();
+    assert_eq!(h.ok("startup_status", json!({})), ready);
+
+    // 保存先の変更：クラウド同期フォルダではない場所は、判定なし。移した後も開いたまま、データは同じ
+    h.add_todo(&today, "moves along");
+    h.drain();
+    let moved = root.join("operations-moved");
+    assert_eq!(
+        h.ok(
+            "check_data_dir",
+            json!({ "dir": moved.display().to_string() })
+        ),
+        Value::Null
+    );
+    assert_eq!(
+        h.ok(
+            "change_data_dir",
+            json!({ "dir": moved.display().to_string() })
+        ),
+        json!({ "leftovers": [] })
+    );
+    h.assert_no_event();
+    assert_eq!(h.ok("startup_status", json!({})), ready);
+    assert_eq!(
+        h.ok("get_data_dir", json!({})),
+        json!(moved.display().to_string())
+    );
+    assert!(moved.join("yunagi.db").is_file());
+    assert!(!base.join("yunagi.db").exists());
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(texts(&board["todos"]), ["moves along"]);
+    let config: Value =
+        serde_json::from_str(&std::fs::read_to_string(default_dir.join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["data_dir"], moved.display().to_string());
+    // 開き直した後も書き込める
+    h.add_todo(&today, "after the move");
+
+    // 使えない保存先は、理由を付けて断り、何も変えない
+    for (dir, reason) in [
+        (moved.display().to_string(), "same_directory"),
+        (
+            moved.join("backups").join("in").display().to_string(),
+            "inside_backups",
+        ),
+        ("relative/path".to_owned(), "invalid_path"),
+    ] {
+        assert_eq!(
+            h.err("change_data_dir", json!({ "dir": dir })),
+            json!({ "kind": "rejected", "reason": reason }),
+            "{dir}"
+        );
+    }
+    assert_eq!(
+        h.ok("get_data_dir", json!({})),
+        json!(moved.display().to_string())
+    );
+    h.drain();
+
+    // 選び直し：データベースの無いフォルダは断る。ある保存先を選び直すと、開き直してデータを読める
+    for (dir, reason) in [
+        (base.display().to_string(), "no_database"),
+        (
+            root.join("operations-none").display().to_string(),
+            "not_a_directory",
+        ),
+    ] {
+        assert_eq!(
+            h.err("use_data_dir", json!({ "dir": dir })),
+            json!({ "kind": "rejected", "reason": reason }),
+            "{dir}"
+        );
+    }
+    h.ok(
+        "use_data_dir",
+        json!({ "dir": moved.display().to_string() }),
+    );
+    assert_eq!(h.next_event(), changed_by("screen"));
+    assert_eq!(h.ok("startup_status", json!({})), ready);
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(texts(&board["todos"]), ["moves along", "after the move"]);
+    h.assert_no_event();
+    drop(h);
+    std::fs::remove_file(default_dir.join("config.json")).unwrap();
 }
 
 /// `db` のスキーマの番号を `version` にする（新しい版で作られたことにする）。

@@ -15,6 +15,7 @@ tauri-build.workspace = true
 [dependencies]
 yunagi-core.workspace = true
 tauri.workspace = true
+tauri-plugin-dialog.workspace = true
 jiff.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

@@ -37,6 +37,11 @@
   import type { ShellCommand } from "./shell/commands";
   import { Carryover } from "./lib/carryover.svelte";
   import CarryoverPanel from "./carryover/CarryoverPanel.svelte";
+  import { reloadPage } from "./lib/page";
+  import { SettingsStore } from "./lib/settings.svelte";
+  import { SettingsPanel } from "./lib/settings_panel.svelte";
+  import { DataSettings } from "./lib/settings_data.svelte";
+  import SettingsDialog from "./settings/SettingsDialog.svelte";
 
   const session = startSession();
   onDestroy(() => void session.stop());
@@ -51,6 +56,44 @@
   // バックアップから戻した後（restored）は、利用者が確かめるまで起動時の画面のまま
   const ready = $derived(session.startup?.state === "ready");
 
+  // ---- 設定（S-05。画面設計書 7章） ----
+
+  const settingsStore = new SettingsStore();
+  const settingsPanel = new SettingsPanel();
+  // 保存先の変更・選び直し・復元の前に、まだ保存していない入力を送る。選び直しと復元の後は読み込み直す
+  const dataSettings = new DataSettings({
+    flush: () => save.flushAll(),
+    unsaved: () => save.failing || save.saving,
+    reload: reloadPage,
+    today: () => session.today,
+  });
+  onDestroy(() => dataSettings.stop());
+  // データベースを開けたら、外枠を出す前に設定を読む（保存した値で描く。等幅のノートの書体は、読み込み終えて
+  // から描く）。読めなければ既定の値で続ける
+  let settingsStarted = false;
+  $effect(() => {
+    if (!ready) {
+      // 開き直すことになった（別のデータベースを開くかもしれない）ので、開けたらもう一度読む
+      if (settingsStarted) untrack(() => settingsStore.unload());
+      settingsStarted = false;
+      return;
+    }
+    if (settingsStarted) return;
+    settingsStarted = true;
+    untrack(() => {
+      void settingsStore.load(() => {
+        // 保存してあった、広いウィンドウでのサイドバーの開閉（最初に外枠を描くときから当てる）。
+        // 利用者が開け閉めしたら保存する。保存できなかったら、画面の開閉も戻す
+        shell.setWideOpen(prefs.sidebarOpen);
+        shell.onWideOpenChange = (open) =>
+          void settingsStore.save({ sidebarOpen: open }, { silent: true }).then((ok) => {
+            if (!ok) shell.setWideOpen(prefs.sidebarOpen);
+          });
+      });
+    });
+  });
+  const shown = $derived(ready && settingsStore.loaded);
+
   // 定期バックアップを作れなかった（1日に1回だけ届く。コアは自動で作り直す。画面設計書 3章「上部のバー」）
   let stopped = false;
   const unlistenBackup = coreEvents
@@ -63,7 +106,7 @@
     void unlistenBackup.then((u) => u?.());
   });
 
-  $effect(() => applyPrefs(prefs.theme, prefs.lang));
+  $effect(() => applyPrefs(prefs.theme, prefs.lang, prefs.fontSize));
 
   // ---- 持ち越し（S-03。画面設計書 5章） ----
 
@@ -161,14 +204,19 @@
   let targetSeq = 0;
   /** 増えたら、上部のバーの保存できていない原因の表示を開く。 */
   let saveDetailRequest = $state(0);
-  // 持ち越しを出したら、パレットは閉じる（持ち越しを閉じた後は、パレットを開く前の所へ戻る）
+  // 持ち越しを出したら、パレットと設定は閉じる（持ち越しを閉じた後は、開く前の所へ戻る）
   $effect(() => {
     if (!carry.open) return;
     untrack(() => {
-      if (!palette.open) return;
-      carry.returnFocus = palette.returnFocus;
-      palette.returnFocus = null;
-      palette.close();
+      if (palette.open) {
+        carry.returnFocus = palette.returnFocus;
+        palette.returnFocus = null;
+        palette.close();
+      } else if (settingsPanel.open) {
+        carry.returnFocus = settingsPanel.returnFocus;
+        settingsPanel.returnFocus = null;
+        settingsPanel.close();
+      }
     });
   });
   // 移り終える前に、ほかの日へ移ったら、移るのをやめる
@@ -227,7 +275,7 @@
       case "layoutA":
       case "layoutB":
       case "layoutC":
-        prefs.layout = id === "layoutA" ? "A" : id === "layoutB" ? "B" : "C";
+        void settingsStore.save({ layout: id === "layoutA" ? "A" : id === "layoutB" ? "B" : "C" });
         return;
       case "archive":
       case "agents":
@@ -237,9 +285,14 @@
     }
   }
 
-  // 設定（S-05）・変更履歴（S-06）・ふりかえり（S-08）は、それぞれの画面の課題で開くようにする。
-  // サイドバー・上部のバー・キー・パレットのどこから開くときも、ここを通る（画面設計書 6章）
-  function openScreen(_c: Exclude<ShellCommand, "palette">) {}
+  // 設定（S-05）を開く。変更履歴（S-06）・ふりかえり（S-08）は、それぞれの画面の課題で開くようにする
+  // （それまでは何もしない）。サイドバー・上部のバー・キー・パレットのどこから開くときも、ここを通る
+  // （画面設計書 6章）。持ち越しを出している間は設定を開かない（背後の操作を受け付けないため）
+  function openScreen(c: Exclude<ShellCommand, "palette">) {
+    if (carry.open) return;
+    if (c === "settings") settingsPanel.show();
+    else if (c === "dataSettings") settingsPanel.show("data");
+  }
 
   function onCommand(c: ShellCommand) {
     if (c === "palette") {
@@ -255,9 +308,9 @@
 
 {#if !ready}
   <StartupScreen startup={session.startup} actions={startupActions} />
-{:else}
-  <!-- 持ち越し・パレットを出している間は、背後の外枠と本文を操作できなくする -->
-  <div inert={carry.open || palette.open}>
+{:else if shown}
+  <!-- 持ち越し・パレット・設定を出している間は、背後の外枠と本文を操作できなくする -->
+  <div inert={carry.open || palette.open || settingsPanel.open}>
     <AppShell {session} {save} {shell} {mac} notice={notice.text} {onCommand} {saveDetailRequest}>
       <main
         class="content"
@@ -310,6 +363,13 @@
       mac,
     }}
     onRun={runPalette}
+  />
+  <SettingsDialog
+    panel={settingsPanel}
+    store={settingsStore}
+    data={dataSettings}
+    {mac}
+    onOpenAgents={() => openScreen("agents")}
   />
   <CarryoverPanel {carry} />
 {/if}

@@ -2,6 +2,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { afterEach, expect, test, vi } from "vitest";
 import { SaveStatus } from "../lib/autosave.svelte";
 import { prefs } from "../lib/prefs.svelte";
+import type { ShellCommand } from "./commands";
 import TopBar from "./TopBar.svelte";
 
 let bar: ReturnType<typeof mount> | undefined;
@@ -13,7 +14,7 @@ afterEach(() => {
   prefs.lang = "ja";
 });
 
-function render(save: SaveStatus) {
+function render(save: SaveStatus, onCommand: (c: ShellCommand) => void = () => {}) {
   prefs.lang = "ja";
   const noop = () => {};
   bar = mount(TopBar, {
@@ -30,7 +31,7 @@ function render(save: SaveStatus) {
       onNext: noop,
       onToday: noop,
       onMode: noop,
-      onCommand: noop,
+      onCommand,
     },
   });
   flushSync();
@@ -90,6 +91,21 @@ test("保存に失敗している間は「保存できていません」を出�
   flushSync();
   expect($(".save-fail")).toBeNull();
   expect($(".pop")).toBeNull();
+});
+
+test("保存できていない原因の表示の「保存先を変える」で、設定のデータ区分を開く", () => {
+  const save = new SaveStatus();
+  const commands: ShellCommand[] = [];
+  render(save, (c) => commands.push(c));
+  save.failing = true;
+  save.error = { kind: "storage", detail: "x" };
+  flushSync();
+  $(".save-fail")?.click();
+  flushSync();
+  const change = [...document.querySelectorAll<HTMLElement>(".pop .btn")].find((b) => b.textContent?.trim() === "保存先を変える");
+  expect(change).toBeDefined();
+  change?.click();
+  expect(commands).toEqual(["dataSettings"]);
 });
 
 test("macOS ではキーを ⌘ で出す", () => {

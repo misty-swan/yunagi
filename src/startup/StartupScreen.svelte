@@ -7,8 +7,9 @@
   //   入れ直し、バックアップから戻す）・問い合わせ先・詳しい情報（ログ用の文）を出す。
   // - バックアップから戻した後：退避した前のデータベースの場所を示し、「続ける」で整理モードへ進む。
   import { getVersion } from "@tauri-apps/api/app";
+  import { backupKindLabel, backupTime } from "../lib/backups";
   import type { BackupEntry, Startup, StartupFailure } from "../lib/bindings";
-  import { shortDate } from "../lib/dates";
+  import { pickFolder } from "../lib/folder";
   import { t } from "../lib/i18n";
   import type { StartupActions } from "../lib/startup.svelte";
   import { ISSUES_URL, SUPPORT_MAIL, currentOs, installCommand } from "../lib/support";
@@ -108,25 +109,13 @@
   }
   const error = $derived(errorText());
 
-  function pad(n: number) {
-    return String(n).padStart(2, "0");
-  }
+  const createdAt = backupTime;
+  const kindLabel = (b: BackupEntry) => backupKindLabel(b, m);
 
-  /** 作った時刻（端末のタイムゾーンで `2026.11.03 14:05`）。 */
-  function createdAt(ms: number): string {
-    const d = new Date(ms);
-    return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }
-
-  function kindLabel(b: BackupEntry): string {
-    switch (b.kind.type) {
-      case "daily":
-        return m.backupDaily(shortDate(b.kind.date));
-      case "pre_migration":
-        return m.backupPreMigration(b.kind.from, b.kind.to);
-      case "pre_restore":
-        return m.backupPreRestore;
-    }
+  /** OS のフォルダ選択で選んだフォルダのパスを入力欄に入れる（記録は「このフォルダを使う」で行う）。 */
+  async function pick() {
+    const picked = await pickFolder(m.pickFolderTitle, dir.trim() === "" ? undefined : dir.trim());
+    if (picked !== null) dir = picked;
   }
 
   function onChoose(e: SubmitEvent) {
@@ -248,6 +237,7 @@
             <span class="path-label">{m.chooseLabel}</span>
             <input type="text" bind:value={dir} spellcheck="false" autocomplete="off" disabled={busy} />
           </label>
+          <button type="button" class="btn ghost" disabled={busy} onclick={() => void pick()}>{m.pickFolder}</button>
           <button type="submit" class="btn" disabled={busy || dir.trim() === ""}>
             {actions.busy === "choose" ? m.working : m.choose}
           </button>
