@@ -291,8 +291,9 @@ pub fn run(
                 }
                 // 待ち受けが開く前に成功で終わった：動いているアプリ（起動時の画面など）に引き渡した。
                 // アプリが窓を前面に出しているので、待ち受けが開くのを待たない
+                // （起動したのではないので `launched` は偽）
                 Ok(Some(_)) if app.direct => {
-                    return Ok(json!({"requested": true, "launched": true}));
+                    return Ok(json!({"requested": true, "launched": false}));
                 }
                 _ => {}
             }

@@ -2133,7 +2133,8 @@ fn show_no_app(w: &World) {
         Duration::from_secs(5),
     );
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(out.json(), json!({"requested": true, "launched": true}));
+    // 引き渡して終わった（起動したのではない）
+    assert_eq!(out.json(), json!({"requested": true, "launched": false}));
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "{:?}",
@@ -2195,7 +2196,8 @@ fn show_too_long(w: &World) {
         Duration::from_secs(5),
     );
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(out.json(), json!({"requested": true, "launched": true}));
+    // 引き渡して終わった（起動したのではない）
+    assert_eq!(out.json(), json!({"requested": true, "launched": false}));
     assert_eq!(fs::read_to_string(&marker).unwrap(), "started\n");
     // 起動に失敗したら失敗
     let crash = app_script(w, "crash", "exit 1");

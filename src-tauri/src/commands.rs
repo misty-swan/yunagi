@@ -634,7 +634,9 @@ pub async fn set_global_shortcut(
 /// 呼ぶ。受け取ると忘れる。
 #[tauri::command]
 pub fn take_show_note(core: State<'_, Arc<AppCore>>) -> bool {
-    core.take_show_note()
+    // コアを持たせる前に届いた頼み（`crate::EARLY_SHOW_NOTE`）も受け取る
+    let early = crate::EARLY_SHOW_NOTE.swap(false, std::sync::atomic::Ordering::AcqRel);
+    core.take_show_note() || early
 }
 
 /// Vim の挿入モードを抜けた：IME を英数入力に切り替える（操作仕様書 4.4 の 1）。切替は専用のスレッドが

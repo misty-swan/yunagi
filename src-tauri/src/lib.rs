@@ -124,6 +124,11 @@ fn show_window<R: Runtime>(app: &AppHandle<R>, request: types::ShowRequested) ->
     app.emit(EVENT_SHOW_REQUESTED, request)
 }
 
+/// コアを持たせる前に届いた、ノートモードで前面に出す頼み（[`handover`]）。コアの `show_note` と同じ
+/// 決まりで、画面が `take_show_note` で受け取る。
+pub(crate) static EARLY_SHOW_NOTE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// 2 つ目の起動の引き渡し（`tauri-plugin-single-instance`）。引数に `--note` があれば（`yunagi show
 /// --note` が起動したとき）、ノートモードで前面に出す。コアは、画面が準備できる前でも頼みを覚える。
 fn handover<R: Runtime>(app: &AppHandle<R>, args: &[String]) {
@@ -131,6 +136,9 @@ fn handover<R: Runtime>(app: &AppHandle<R>, args: &[String]) {
     match app.try_state::<Arc<AppCore>>() {
         Some(core) => core.request_show(note),
         None => {
+            // コアを持たせる前（起動の途中）に届いた頼み：覚えておき、画面が受け取る
+            // （`commands::take_show_note`）
+            EARLY_SHOW_NOTE.store(note, std::sync::atomic::Ordering::Release);
             if let Err(e) = show_window(app, types::ShowRequested { note }) {
                 eprintln!("yunagi: failed to notify the screen: {e}");
             }

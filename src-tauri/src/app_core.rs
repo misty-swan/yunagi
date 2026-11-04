@@ -735,9 +735,8 @@ impl AppCore {
     /// にも錠にも触れないので、保存先の変更・復元の最中でも待たずに効く。窓を操作する部分は、知らせの
     /// 受け手（`crate::run`）が持つ（窓の無い試験では知らせを受け取るだけ）。
     pub fn request_show(&self, note: bool) {
-        if note {
-            self.show_note.store(true, Ordering::Release);
-        }
+        // 最後の頼みに従う（ノートモードの指定の無い頼みは、まだ受け取られていない古い頼みを取り消す）
+        self.show_note.store(note, Ordering::Release);
         self.notify(Notice::ShowRequested(ShowRequested { note }));
     }
 
