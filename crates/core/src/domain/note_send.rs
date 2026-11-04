@@ -840,6 +840,37 @@ pub struct RequestContext {
     pub blockers: Vec<Item>,
 }
 
+impl RequestContext {
+    /// 依頼文の「Context」に載せる行（上から順。MCP・CLI 仕様書 5章）。区間の行から、項目へ送った行
+    /// （[`RequestContext::sent_lines`]）、空白だけの行、見出しの行、区切り線を除き、残りの行は行頭の空白と
+    /// リストの印・チェック欄を除く（項目の本文を作るときと同じ。[`item_text`]）。コードの囲みの中の行は、
+    /// 囲みの印の行を除いて、前後の空白を除いてそのまま載せる（ログなどを、リストの印のように見える行も
+    /// 含めて崩さないため）。囲みは区間の中だけで数える。
+    pub fn context_texts(&self) -> Vec<String> {
+        let lines: Vec<&str> = self.lines.iter().map(String::as_str).collect();
+        let in_code = code_lines(&lines);
+        lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                if self
+                    .sent_lines
+                    .binary_search(&(self.section.lines.start + i))
+                    .is_ok()
+                {
+                    return None;
+                }
+                if in_code[i] {
+                    let text = line.replace('\r', " ");
+                    let text = text.trim();
+                    return (!text.is_empty()).then(|| text.to_owned());
+                }
+                item_text(line).ok()
+            })
+            .collect()
+    }
+}
+
 /// 項目 `item_id` の依頼文の書き出しの文脈。ノートから来ていない項目（[`source_line`] が `None`）
 /// は `None`（「Context」と「Related blockers」の節を省く）。
 ///

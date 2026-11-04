@@ -108,7 +108,9 @@ Commands:
                                     Append to the note (with a time heading)
   note edit --line N --expect TEXT (--replace TEXT | --delete | --move-to M) [--date D]
                                     Change a line of the note
-  show [--note]                     Bring the Yunagi window to the front (starts Yunagi
+  handoff export ID                 Print a request for an AI agent made from a TODO and
+                                    its notes (alias: handoff ID)
+  show [--note]                   Bring the Yunagi window to the front (starts Yunagi
                                     if it is not running; --note opens Note mode)
   doctor                            Show diagnostic information (no work data)
   mcp [--client ID]                 Run the MCP server on standard input and output
@@ -399,6 +401,13 @@ fn command(
                 let params = text_date_params(&mut opts, text)?;
                 opts.finish()?;
                 Command::Operation(Operation::new("append_reflection", params).with_stdin("text"))
+            }
+            _ => return Err(unknown_or_usage(positionals, rest)),
+        },
+        // `handoff export ID`。`handoff ID` も同じ（別名。05 3章）
+        "handoff" => match rest {
+            ["export", id] | [id] if *id != "export" => {
+                item_id(&mut opts, "export_handoff", id)?
             }
             _ => return Err(unknown_or_usage(positionals, rest)),
         },
@@ -966,6 +975,11 @@ mod tests {
             &["search", "a", "b"],
             &["search", "a", "--limit", "x"],
             &["note"],
+            &["handoff"],
+            &["handoff", "export"],
+            &["handoff", "export", "A", "B"],
+            &["handoff", "A", "B"],
+            &["handoff", "export", "A", "--date", "today"],
             &["doctor", "extra"],
             &["mcp", "extra"],
             &["mcp", "--client"],
@@ -1006,6 +1020,17 @@ mod tests {
                 .params
                 .contains_key("note")
         );
+    }
+
+    #[test]
+    fn handoff_export_and_its_alias() {
+        for args in [&["handoff", "export", "ID1"][..], &["handoff", "ID1"][..]] {
+            let o = op(args);
+            assert_eq!(o.method, "export_handoff");
+            assert_eq!(o.params["id"], "ID1");
+            assert_eq!(o.params.len(), 1);
+            assert_eq!(o.stdin_key, None);
+        }
     }
 
     #[test]

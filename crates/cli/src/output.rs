@@ -16,6 +16,11 @@ pub fn render(method: &str, value: &Value) -> String {
         "open_board" => board(value, false),
         "get_note" => note(value),
         "search" => search(value),
+        // 依頼文はそのまま出す（貼り付けやパイプで使うため。05 5章）。欄が無い応答は JSON のまま出す
+        "export_handoff" => match value.get("markdown").and_then(Value::as_str) {
+            Some(markdown) => ensure_newline(markdown),
+            None => format!("{value}\n"),
+        },
         "add_todo" => added("TODO", value),
         "add_blocker" => added("blocker", value),
         "edit_todo" | "edit_blocker" => changed(value, "Edited.", "Same text. Nothing changed."),
@@ -506,6 +511,20 @@ mod tests {
         assert_eq!(
             render("get_note", &two),
             "-- 10:00 x (line 3) --\n## 10:00 x\none\n-- 10:00 x (line 9) --\n## 10:00 x\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn export_handoff_prints_the_markdown_as_it_is() {
+        let value = json!({"id": "T1", "markdown": "## Task\nx\n\n(Exported from Yunagi on 2026-11-03)\n"});
+        assert_eq!(
+            render("export_handoff", &value),
+            "## Task\nx\n\n(Exported from Yunagi on 2026-11-03)\n"
+        );
+        // 欄が無い応答は、JSON のまま出す
+        assert_eq!(
+            render("export_handoff", &json!({"id": "T1"})),
+            "{\"id\":\"T1\"}\n"
         );
     }
 

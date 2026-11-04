@@ -8,6 +8,7 @@ pub mod board;
 pub mod carryover;
 pub mod day;
 pub mod export;
+pub mod handoff;
 pub mod history;
 pub mod item;
 pub mod logical_date;
