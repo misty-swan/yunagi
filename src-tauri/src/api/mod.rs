@@ -9,7 +9,9 @@
 
 pub mod dispatch;
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
@@ -299,11 +301,14 @@ fn spawn_connection(shared: &Arc<Shared>, stream: Stream) {
     let spawned = thread::Builder::new()
         .name("yunagi-api-conn".into())
         .spawn(move || {
+            // 処理が panic しても、登録を消して止める側に知らせる（`Drop`）。登録を消してから
+            // ストリームを閉じる（Windows では、消した後のハンドルを中断しないため）
+            let _registration = Registration {
+                shared: Arc::clone(&handler),
+                id,
+            };
             serve(&handler, id, &stream);
-            // 登録を消してから、ストリームを閉じる（Windows では、消した後のハンドルを
-            // 中断しないため）
-            handler.registry().conns.remove(&id);
-            handler.drained.notify_all();
+            drop(_registration);
             drop(stream);
         });
     if spawned.is_err() {
@@ -312,19 +317,47 @@ fn spawn_connection(shared: &Arc<Shared>, stream: Stream) {
     }
 }
 
+/// 接続の登録。手放す（処理が終わる・panic する）と登録を消し、止める側に知らせる。
+struct Registration {
+    shared: Arc<Shared>,
+    id: u64,
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        self.shared.registry().conns.remove(&self.id);
+        self.shared.drained.notify_all();
+    }
+}
+
+/// 期限までしか待たない読み手。読みごとに、残りの時間を読みの時間切れにする。1 バイトずつ送って
+/// 時間切れを延ばし続けるクライアントでも、1 行の合計の時間が期限を超えると読みが失敗する。
+struct Timed<'a> {
+    stream: &'a Stream,
+    deadline: Cell<Instant>,
+}
+
+impl Read for Timed<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self
+            .deadline
+            .get()
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "the read deadline passed"))?;
+        self.stream.set_read_timeout(Some(left))?;
+        (&*self.stream).read(buf)
+    }
+}
+
 /// 1 つの接続を処理する：`hello` → 依頼 1 つ → 応答 1 つ。
 fn serve(shared: &Shared, id: u64, stream: &Stream) {
     let options = shared.options;
-    if stream
-        .set_read_timeout(Some(options.hello_timeout))
-        .is_err()
-        || stream
-            .set_write_timeout(Some(options.write_timeout))
-            .is_err()
-    {
-        return;
-    }
-    let mut reader = std::io::BufReader::new(stream);
+    let wt = options.write_timeout;
+    let mut reader = std::io::BufReader::new(Timed {
+        stream,
+        deadline: Cell::new(Instant::now() + options.hello_timeout),
+    });
     // 1. hello
     let hello_line = match wire::read_line(&mut reader, MAX_HELLO_LINE) {
         Ok(Some(line)) => line,
@@ -332,6 +365,7 @@ fn serve(shared: &Shared, id: u64, stream: &Stream) {
         Err(LineError::TooLong) => {
             return reply(
                 stream,
+                wt,
                 &wire::error_line(
                     &Value::Null,
                     wire::INVALID_REQUEST,
@@ -343,21 +377,22 @@ fn serve(shared: &Shared, id: u64, stream: &Stream) {
     };
     let client = match handshake(shared, &hello_line) {
         Ok((line, client)) => {
-            if !reply_ok(stream, &line) {
+            if !reply_ok(stream, wt, &line) {
                 return;
             }
             client
         }
-        Err(line) => return reply(stream, &line),
+        Err(line) => return reply(stream, wt, &line),
     };
     // 2. 依頼
-    if stream
-        .set_read_timeout(Some(options.request_timeout))
-        .is_err()
-    {
-        return;
-    }
-    let line = match wire::read_line(&mut reader, MAX_REQUEST_LINE) {
+    reader
+        .get_ref()
+        .deadline
+        .set(Instant::now() + options.request_timeout);
+    let read = wire::read_line(&mut reader, MAX_REQUEST_LINE);
+    // 読み終えたら、読みの時間切れを外す。Windows では見張りが書きを中断しないように
+    let _ = stream.set_read_timeout(None);
+    let line = match read {
         Ok(Some(line)) => line,
         // 依頼が来る前の、時間切れ・止める合図・切断。クライアントが後から依頼を送って接続が切れた
         // ように見えると `result_unknown`（反映されたか分からない）になってしまうので、何も反映して
@@ -366,12 +401,14 @@ fn serve(shared: &Shared, id: u64, stream: &Stream) {
         Ok(None) | Err(LineError::Io(_) | LineError::Truncated) => {
             return reply(
                 stream,
+                wt,
                 &wire::app_error_line(&Value::Null, &dispatch::busy_error()),
             );
         }
         Err(LineError::TooLong) => {
             return reply(
                 stream,
+                wt,
                 &wire::error_line(
                     &Value::Null,
                     wire::INVALID_REQUEST,
@@ -401,7 +438,7 @@ fn serve(shared: &Shared, id: u64, stream: &Stream) {
             None => wire::app_error_line(&request.id, &dispatch::busy_error()),
         },
     };
-    reply(stream, &response);
+    reply(stream, wt, &response);
 }
 
 /// `hello` を確かめる。通れば応答の行と、クライアントの識別子。通らなければ、返す失敗の行。
@@ -461,8 +498,12 @@ fn handshake(shared: &Shared, line: &[u8]) -> Result<(String, Option<String>), S
 }
 
 /// 応答の 1 行を書く（書けなければ諦める）。
-fn reply_ok(stream: &Stream, line: &str) -> bool {
+fn reply_ok(stream: &Stream, timeout: Duration, line: &str) -> bool {
     use std::io::Write;
+    // 相手が読まずに黙っていても、書きで止まり続けない（接続の枠を塞がない）
+    if stream.set_write_timeout(Some(timeout)).is_err() {
+        return false;
+    }
     let mut writer = stream;
     writer
         .write_all(line.as_bytes())
@@ -471,8 +512,8 @@ fn reply_ok(stream: &Stream, line: &str) -> bool {
 }
 
 /// 最後の応答を書いて、書き終えたことを相手に伝える。
-fn reply(stream: &Stream, line: &str) {
-    if reply_ok(stream, line) {
+fn reply(stream: &Stream, timeout: Duration, line: &str) {
+    if reply_ok(stream, timeout, line) {
         stream.finish();
     }
 }

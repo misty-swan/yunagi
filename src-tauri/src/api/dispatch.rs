@@ -9,6 +9,10 @@
 //! 用の版。画面と同じ `changed` を出す）を通る。`date` は受け取ったまま（`today` など）で、
 //! アプリが自分の設定とタイムゾーンで日付を求める。
 
+use std::time::Instant;
+
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde_json::{Map, Value, json};
 use yunagi_api::wire::{self, Request};
 use yunagi_core::domain::agent::{self, PermissionDenied, ReadError};
@@ -79,24 +83,25 @@ fn run(core: &AppCore, client: Option<&str>, request: &Request) -> Result<Value,
         .as_object()
         .ok_or_else(|| Failure::Params("params must be an object".into()))?;
     let call = Call::parse(&request.method, params)?;
-    // 呼び出し元のクライアントを求める（初めての識別子は `read` だけで登録し、最後の接続の時刻を更新する）
-    let client_id = core
-        .api_read(|conn| {
-            let id = agent::client_for(conn, client, now())?;
-            // 時刻の更新は、できたらやる（ディスクがいっぱいなどで書けなくても、読み取りは断らない）
-            if let Some(id) = id
-                && let Err(e) = agent::touch_client(conn, id, now())
-            {
-                eprintln!(
-                    "yunagi: could not record the last connection of a client: {}",
-                    ErrorChain(&e)
-                );
-            }
-            Ok::<_, StorageError>(id)
-        })?
+    // データベースを使えるまで待つ期限は、依頼ごとに 1 回だけ求める（クライアントを求める処理も、
+    // 操作の本体も、同じ期限と同じ錠の中で行う）
+    call.execute(core, core.api_deadline(), client)
+}
+
+/// 呼び出し元のクライアントを求める（初めての識別子は `read` だけで登録する）。最後に接続した時刻の
+/// 更新は、できたらやる（ディスクがいっぱいなどで書けなくても、読み取りは断らない）。
+fn resolve_client(conn: &rusqlite::Connection, client: Option<&str>) -> Result<Ulid, Failure> {
+    let at = now();
+    let id = agent::client_for(conn, client, at)
         .map_err(storage_failure)?
         .ok_or_else(|| Failure::Params("client is not a valid identifier".into()))?;
-    call.execute(core, client_id)
+    if let Err(e) = agent::touch_client(conn, id, at) {
+        eprintln!(
+            "yunagi: could not record the last connection of a client: {}",
+            ErrorChain(&e)
+        );
+    }
+    Ok(id)
 }
 
 /// 日付の指定。
@@ -188,11 +193,15 @@ impl Call {
         Ok(call)
     }
 
-    fn execute(self, core: &AppCore, client_id: Ulid) -> Result<Value, Failure> {
-        let tz = system_tz();
-        let at = now();
+    fn execute(
+        self,
+        core: &AppCore,
+        deadline: Instant,
+        client: Option<&str>,
+    ) -> Result<Value, Failure> {
         match self {
-            Self::GetBoard(date) => core.api_read(|conn| {
+            Self::GetBoard(date) => core.api_read(deadline, |conn| {
+                let client_id = resolve_client(conn, client)?;
                 let date = resolve(conn, date)?;
                 let b = board::get_board(conn, client_id, date).map_err(read_failure)?;
                 Ok(json!({
@@ -206,7 +215,8 @@ impl Call {
                     },
                 }))
             })?,
-            Self::OpenBoard(date) => core.api_read(|conn| {
+            Self::OpenBoard(date) => core.api_read(deadline, |conn| {
+                let client_id = resolve_client(conn, client)?;
                 let date = resolve(conn, date)?;
                 let b = board::open_board(conn, client_id, date).map_err(read_failure)?;
                 Ok(json!({
@@ -215,7 +225,8 @@ impl Call {
                     "blockers": b.blockers.iter().map(|i| item_json(i, ItemKind::Blocker)).collect::<Vec<_>>(),
                 }))
             })?,
-            Self::GetNote(date, heading) => core.api_read(|conn| {
+            Self::GetNote(date, heading) => core.api_read(deadline, |conn| {
+                let client_id = resolve_client(conn, client)?;
                 let date = resolve(conn, date)?;
                 let read = text_doc::get_note(conn, client_id, date, heading.as_deref())
                     .map_err(note_read_failure)?;
@@ -234,34 +245,34 @@ impl Call {
                     }),
                 })
             })?,
-            Self::AddTodo(date, text) => write(core, client_id, |conn, agent| {
+            Self::AddTodo(date, text) => write(core, deadline, client, |conn, agent, tz, at| {
                 let date = resolve(conn, date)?;
-                let i = item::add_todo(conn, agent, date, &text, &tz, at).map_err(item_failure)?;
+                let i = item::add_todo(conn, agent, date, &text, tz, at).map_err(item_failure)?;
                 Ok(added_json(&i))
             })?,
-            Self::AddBlocker(date, text) => write(core, client_id, |conn, agent| {
+            Self::AddBlocker(date, text) => write(core, deadline, client, |conn, agent, tz, at| {
                 let date = resolve(conn, date)?;
                 let i =
-                    item::add_blocker(conn, agent, date, &text, &tz, at).map_err(item_failure)?;
+                    item::add_blocker(conn, agent, date, &text, tz, at).map_err(item_failure)?;
                 Ok(added_json(&i))
             })?,
-            Self::EditTodo(id, text) => write(core, client_id, |conn, agent| {
+            Self::EditTodo(id, text) => write(core, deadline, client, |conn, agent, _, at| {
                 let o = item::edit_todo(conn, agent, id, &text, at).map_err(item_failure)?;
                 Ok(json!({"updated": o.updated, "id": o.item.id.to_string(), "text": o.item.text}))
             })?,
-            Self::EditBlocker(id, text) => write(core, client_id, |conn, agent| {
+            Self::EditBlocker(id, text) => write(core, deadline, client, |conn, agent, _, at| {
                 let o = item::edit_blocker(conn, agent, id, &text, at).map_err(item_failure)?;
                 Ok(json!({"updated": o.updated, "id": o.item.id.to_string(), "text": o.item.text}))
             })?,
-            Self::CompleteTodo(id) => write(core, client_id, |conn, agent| {
+            Self::CompleteTodo(id) => write(core, deadline, client, |conn, agent, _, at| {
                 let o = item::complete_todo(conn, agent, id, at).map_err(item_failure)?;
                 Ok(status_json(o.updated, &o.item))
             })?,
-            Self::ReopenTodo(id) => write(core, client_id, |conn, agent| {
+            Self::ReopenTodo(id) => write(core, deadline, client, |conn, agent, _, at| {
                 let o = item::reopen_todo(conn, agent, id, at).map_err(item_failure)?;
                 Ok(status_json(o.updated, &o.item))
             })?,
-            Self::ResolveBlocker(id, note) => write(core, client_id, |conn, agent| {
+            Self::ResolveBlocker(id, note) => write(core, deadline, client, |conn, agent, _, at| {
                 let r = item::resolve_blocker(conn, agent, id, note.as_deref(), at)
                     .map_err(item_failure)?;
                 Ok(json!({
@@ -273,21 +284,21 @@ impl Call {
                     "resolution_note": r.item.resolution_note,
                 }))
             })?,
-            Self::AppendNote(date, text, heading) => write(core, client_id, |conn, agent| {
+            Self::AppendNote(date, text, heading) => write(core, deadline, client, |conn, agent, tz, at| {
                 let date = resolve(conn, date)?;
-                let w = text_doc::append_note(conn, date, &text, heading.as_deref(), agent, &tz, at)
+                let w = text_doc::append_note(conn, date, &text, heading.as_deref(), agent, tz, at)
                     .map_err(text_doc_failure)?;
                 Ok(written_json(&w))
             })?,
-            Self::AppendReflection(date, text) => write(core, client_id, |conn, agent| {
+            Self::AppendReflection(date, text) => write(core, deadline, client, |conn, agent, tz, at| {
                 let date = resolve(conn, date)?;
-                let w = text_doc::append_reflection(conn, date, &text, agent, &tz, at)
+                let w = text_doc::append_reflection(conn, date, &text, agent, tz, at)
                     .map_err(text_doc_failure)?;
                 Ok(written_json(&w))
             })?,
-            Self::EditNote(date, edit) => write(core, client_id, |conn, agent| {
+            Self::EditNote(date, edit) => write(core, deadline, client, |conn, agent, tz, at| {
                 let date = resolve(conn, date)?;
-                let w = text_doc::edit_note(conn, date, &edit, agent, &tz, at)
+                let w = text_doc::edit_note(conn, date, &edit, agent, tz, at)
                     .map_err(text_doc_failure)?;
                 Ok(written_json(&w))
             })?,
@@ -296,13 +307,26 @@ impl Call {
 }
 
 /// 書き込みの依頼を `AppCore::api_write` に渡す。成功の JSON は、変えたかを `updated` で持つ。
+///
+/// 書き込む時刻とタイムゾーンは、錠を取ってから（待った後に）求めて `f` に渡す。待つ間に時刻が
+/// 進んでも、記録の時刻と日付の求め方がずれないようにする。
 fn write(
     core: &AppCore,
-    client_id: Ulid,
-    f: impl FnOnce(&rusqlite::Connection, &agent::Agent<'_>) -> Result<Value, Failure>,
+    deadline: Instant,
+    client: Option<&str>,
+    f: impl FnOnce(
+        &rusqlite::Connection,
+        &agent::Agent<'_>,
+        &TimeZone,
+        Timestamp,
+    ) -> Result<Value, Failure>,
 ) -> Result<Result<Value, Failure>, Busy> {
     // `api_write` は、変えたかを `Changes` で求める。JSON の `updated` を見る
-    let result = core.api_write(client_id, |conn, agent| f(conn, agent).map(Changed))?;
+    let result = core.api_write(
+        deadline,
+        |conn| resolve_client(conn, client),
+        |conn, agent| f(conn, agent, &system_tz(), now()).map(Changed),
+    )?;
     Ok(result.map(|Changed(v)| v))
 }
 

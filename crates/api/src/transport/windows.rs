@@ -89,6 +89,8 @@ pub struct Listener {
     name: String,
     dir: PathBuf,
     sd: SecurityDescriptor,
+    /// 書いたトークン。消すときに、自分のものかを確かめる。
+    token: String,
     /// 次の接続を待つ実体（接続を渡した直後に作り直す）。
     pending: Mutex<Option<File>>,
 }
@@ -127,6 +129,7 @@ impl Listener {
             name,
             dir: dir.to_owned(),
             sd,
+            token: token.to_owned(),
             pending: Mutex::new(None),
         };
         // 最初の実体。同じ名前がすでにあれば失敗する（先取り）
@@ -246,7 +249,7 @@ impl Waker {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        let _ = token::remove_in(&self.dir);
+        token::remove_own_in(&self.dir, &self.token);
     }
 }
 
@@ -315,10 +318,12 @@ impl Stream {
         Ok(())
     }
 
-    /// 書くときの待ちの上限。パイプには設けない（緩衝に収まる大きさしか書かず、応答の後に
-    /// [`Stream::finish`] で相手が読み終えるのを待つ）。
-    pub fn set_write_timeout(&self, _timeout: Option<Duration>) -> io::Result<()> {
-        Ok(())
+    /// 書くときの待ちの上限。同期のパイプの書きにも時間切れが無いので、読みと同じ見張りを使う
+    /// （[`Stream::set_read_timeout`]。同時に読みの見張りは置けないが、応答を書くときは読みを
+    /// 待っていない）。応答の後の [`Stream::finish`] の待ちは、この見張りでは中断できないことがあり、
+    /// 実機で確かめる（テスト計画書 4.5）。
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.set_read_timeout(timeout)
     }
 
     /// 別のスレッドから、読み待ちを中断する道具。

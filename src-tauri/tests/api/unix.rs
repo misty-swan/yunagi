@@ -402,6 +402,21 @@ fn hello_checks_the_version_the_token_and_the_form(dir: &DefaultDir) {
     let (stream, _) = h.raw();
     assert!(read_reply(&stream).is_none());
 
+    // 1 バイトずつ送って時間切れを延ばし続けても、1 行の合計が期限を超えれば閉じられる
+    let (stream, _) = h.raw();
+    let started = std::time::Instant::now();
+    for _ in 0..30 {
+        if (&stream).write_all(b"a").is_err() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the trickling connection was kept open"
+    );
+    assert!(read_reply(&stream).is_none());
+
     // `hello` の後で依頼を送らずに黙っている接続は、何も反映していないことを伝える `busy` を
     // 返されて閉じられる（後から依頼を送った側が、反映されたか分からない `result_unknown` と取り違えない）
     let (stream, token) = h.raw();

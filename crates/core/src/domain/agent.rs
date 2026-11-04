@@ -68,13 +68,27 @@ pub fn client_for(
     Ok(Some(id))
 }
 
-/// クライアント `client_id` の最後に接続した時刻を `now` にする。
+/// 最後に接続した時刻を、これより新しければ更新しない間隔（依頼のたびに書き込みが増えないように）。
+pub const TOUCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// クライアント `client_id` の最後に接続した時刻を `now` にする。前の時刻から [`TOUCH_INTERVAL`] たって
+/// いなければ書かない（設定画面に出す「最後の接続」は分の精度で足り、読み取りのたびに書き込みを
+/// 増やさないため）。
 pub fn touch_client(
     conn: &Connection,
     client_id: Ulid,
     now: jiff::Timestamp,
 ) -> Result<(), StorageError> {
-    agent_client::update_last_seen(conn, client_id, now)?;
+    let recent = agent_client::get(conn, client_id)?
+        .and_then(|c| c.last_seen_at)
+        .is_some_and(|seen| {
+            now.duration_since(seen)
+                .try_into()
+                .is_ok_and(|d: std::time::Duration| d < TOUCH_INTERVAL)
+        });
+    if !recent {
+        agent_client::update_last_seen(conn, client_id, now)?;
+    }
     Ok(())
 }
 
@@ -400,6 +414,53 @@ mod tests {
             check(conn, CLI_ID, Scope::Read),
             Err(Failure::Storage)
         ));
+    }
+
+    #[test]
+    fn clients_are_looked_up_and_registered_with_read_only() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let now = jiff::Timestamp::from_second(1_000_000).unwrap();
+        // 識別子なしは unknown、固定の cli は既存の行、使えない形は登録しない
+        assert_eq!(
+            client_for(conn, None, now).unwrap(),
+            Some(agent_client::UNKNOWN_ID)
+        );
+        assert_eq!(client_for(conn, Some("cli"), now).unwrap(), Some(CLI_ID));
+        assert_eq!(client_for(conn, Some("Bad Name"), now).unwrap(), None);
+        assert_eq!(agent_client::get_by_name(conn, "Bad Name").unwrap(), None);
+        // 初めての識別子は read だけで登録され、2 回目は同じ id
+        let id = client_for(conn, Some("claude-code"), now).unwrap().unwrap();
+        let row = agent_client::get(conn, id).unwrap().unwrap();
+        assert_eq!(row.scopes, vec![Scope::Read]);
+        assert_eq!(
+            client_for(conn, Some("claude-code"), now).unwrap(),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn touch_client_writes_only_when_the_last_time_is_old() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let t0 = jiff::Timestamp::from_second(1_000_000).unwrap();
+        let seen = |conn: &Connection| {
+            agent_client::get(conn, CLI_ID)
+                .unwrap()
+                .unwrap()
+                .last_seen_at
+        };
+        assert_eq!(seen(conn), None);
+        touch_client(conn, CLI_ID, t0).unwrap();
+        assert_eq!(seen(conn), Some(t0));
+        // 間隔の中なら書かない
+        let soon = t0 + TOUCH_INTERVAL - std::time::Duration::from_secs(1);
+        touch_client(conn, CLI_ID, soon).unwrap();
+        assert_eq!(seen(conn), Some(t0));
+        // 間隔を過ぎたら書く
+        let later = t0 + TOUCH_INTERVAL + std::time::Duration::from_secs(1);
+        touch_client(conn, CLI_ID, later).unwrap();
+        assert_eq!(seen(conn), Some(later));
     }
 
     #[test]

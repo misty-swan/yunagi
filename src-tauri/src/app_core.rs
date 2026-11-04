@@ -67,6 +67,8 @@ pub struct Busy;
 
 /// データベースの使用を待つ間に、取り直しを試みる間隔（[`AppCore::api_write`]）。
 const DB_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+/// 取り直しの間隔の上限。
+const DB_RETRY_MAX_INTERVAL: Duration = Duration::from_millis(50);
 
 /// ローカル API の待ち受けの状態（[`AppCore`] が持つ）。
 enum ApiSlot {
@@ -123,6 +125,8 @@ pub struct AppCore {
     /// だけ動く。
     api: Mutex<ApiSlot>,
     api_options: Mutex<ApiOptions>,
+    /// 閉じ始めた（[`AppCore::close`]）。以後、ローカル API の待ち受けを始めない。
+    closing: AtomicBool,
     notify: Notify,
 }
 
@@ -272,6 +276,7 @@ impl AppCore {
             maintenance: AtomicBool::new(false),
             api: Mutex::new(ApiSlot::Stopped),
             api_options: Mutex::new(ApiOptions::default()),
+            closing: AtomicBool::new(false),
             notify,
         })
     }
@@ -718,40 +723,67 @@ impl AppCore {
     /// [`ApiOptions::db_wait`]（既定 5 秒）までで、待っても使えなければ（保存先の変更・復元の最中、
     /// またはデータベースを開いていない）何も反映せずに [`Busy`]（CLI・MCP には `busy`）。
     /// それ以外は [`AppCore::agent_write`] と同じ（変えたら `changed`（`by: agent`）を知らせる）。
+    ///
+    /// `deadline` は依頼ごとに [`AppCore::api_deadline`] で 1 回だけ求める。呼び出し元のクライアントを
+    /// 求める処理 `client` も、同じ錠を持つ間に（`f` の前に）行う（錠を 2 回取って待ちが 2 倍になり、
+    /// 5 秒を超えないように）。`client` が失敗したら `f` は行わない。
     pub fn api_write<T: Changes, E>(
         &self,
-        client_id: Ulid,
+        deadline: Instant,
+        client: impl FnOnce(&Connection) -> Result<Ulid, E>,
         f: impl FnOnce(&Connection, &Agent<'_>) -> Result<T, E>,
     ) -> Result<Result<T, E>, Busy> {
-        let agent = Agent {
-            client_id,
-            ui: &self.screen,
-        };
-        let result =
-            self.with_db_within(self.api_options().db_wait, |db| f(db.connection(), &agent))?;
+        let result = self.with_db_within(deadline, |db| {
+            let client_id = client(db.connection())?;
+            let agent = Agent {
+                client_id,
+                ui: &self.screen,
+            };
+            f(db.connection(), &agent)
+        })?;
         self.notify_agent_write(&result);
         Ok(result)
     }
 
     /// ローカル API の読み取り。待ちは [`AppCore::api_write`] と同じ。
-    pub fn api_read<T>(&self, f: impl FnOnce(&Connection) -> T) -> Result<T, Busy> {
-        self.with_db_within(self.api_options().db_wait, |db| f(db.connection()))
+    pub fn api_read<T>(
+        &self,
+        deadline: Instant,
+        f: impl FnOnce(&Connection) -> T,
+    ) -> Result<T, Busy> {
+        self.with_db_within(deadline, |db| f(db.connection()))
     }
 
-    /// 開いたデータベースで `f` を行う。ロックを待つのは最大 `wait` まで。待っても取れないか、開いて
+    /// 依頼がデータベースを使えるまで待つ期限（いまから [`ApiOptions::db_wait`] 後）。
+    pub fn api_deadline(&self) -> Instant {
+        let now = Instant::now();
+        now.checked_add(self.api_options().db_wait)
+            .unwrap_or_else(|| now + Duration::from_secs(60 * 60 * 24 * 365))
+    }
+
+    /// 開いたデータベースで `f` を行う。ロックを待つのは `deadline` まで。待っても取れないか、開いて
     /// いなければ [`Busy`]（`f` は行わない）。ロックを離す前の待ち受けの停止が、ここで待つ依頼を
     /// 巻き込んで止まらないよう、ロックの待ちに期限を付ける。
-    fn with_db_within<T>(&self, wait: Duration, f: impl FnOnce(&Database) -> T) -> Result<T, Busy> {
-        let deadline = Instant::now().checked_add(wait);
+    ///
+    /// 標準の錠には期限付きの取得が無いので、取り直しで待つ。間隔は 5 ミリ秒から 50 ミリ秒まで
+    /// 倍々に延ばす（長い作業の間に多くの依頼が待っても、起きる回数を抑えるため）。
+    fn with_db_within<T>(
+        &self,
+        deadline: Instant,
+        f: impl FnOnce(&Database) -> T,
+    ) -> Result<T, Busy> {
+        let mut interval = DB_RETRY_INTERVAL;
         loop {
             let guard = match self.db.try_lock() {
                 Ok(guard) => guard,
                 Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
                 Err(TryLockError::WouldBlock) => {
-                    if deadline.is_some_and(|d| Instant::now() >= d) {
+                    let now = Instant::now();
+                    if now >= deadline {
                         return Err(Busy);
                     }
-                    thread::sleep(DB_RETRY_INTERVAL);
+                    thread::sleep(interval.min(deadline - now));
+                    interval = (interval * 2).min(DB_RETRY_MAX_INTERVAL);
                     continue;
                 }
             };
@@ -800,9 +832,10 @@ impl AppCore {
         if matches!(*slot, ApiSlot::Running(_)) {
             return;
         }
-        // 開き終えてから始めるまでの間に閉じられていたら（アプリの終了）、始めない。ロックを離した
-        // 後で待ち受けが始まらないようにする（`close` は、待ち受けを止めてからデータベースを閉じる）
-        if !matches!(*lock(&self.db), Slot::Open(_)) {
+        // 開き終えてから始めるまでの間に閉じ始めていたら（アプリの終了）、始めない。ロックを離した
+        // 後で待ち受けが始まらないようにする。`close` は、先に `closing` を立ててから待ち受けを止める
+        // （この `api` の錠を取る）ので、ここの確かめと止めるのが行き違わない
+        if self.closing.load(Ordering::Acquire) || !matches!(*lock(&self.db), Slot::Open(_)) {
             return;
         }
         *slot = match data_dir::default_dir()
@@ -916,7 +949,8 @@ impl AppCore {
     /// ため。閉じた後のコマンドは [`CommandError::NotReady`]。
     pub fn close(&self) {
         // ロックを離す前に、ローカル API を止める（4.4）。処理中の依頼は、データベースが開いている
-        // うちに最後まで行って応答を返す
+        // うちに最後まで行って応答を返す。先に印を立てて、止めた後に待ち受けが始まらないようにする
+        self.closing.store(true, Ordering::Release);
         self.stop_api();
         // 先に閉じた状態にして、次のバックアップが始まらないようにしてから待つ。データベース
         // （ロック）は、待ち終わるまで手元に持つ

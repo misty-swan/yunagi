@@ -145,6 +145,14 @@ pub fn remove(dir: &DefaultDir) -> io::Result<()> {
     remove_in(dir.path())
 }
 
+/// トークンのファイルが、自分の書いたトークン `token` のときだけ消す。自分が止まるのが遅れて、
+/// 次の待ち受け（新しいアプリ）が書き直した後なら、そのファイルを消さない。
+pub(crate) fn remove_own_in(dir: &Path, token: &str) {
+    if read_in(dir).is_ok_and(|info| info.token == token) {
+        let _ = remove_in(dir);
+    }
+}
+
 pub(crate) fn remove_in(dir: &Path) -> io::Result<()> {
     match fs::remove_file(dir.join(TOKEN_FILE_NAME)) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),

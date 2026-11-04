@@ -30,6 +30,10 @@ pub struct Listener {
     inner: UnixListener,
     dir: PathBuf,
     path: PathBuf,
+    /// 書いたトークン。消すときに、自分のものかを確かめる。
+    token: String,
+    /// 作ったソケットのファイルの（デバイス, i-node）。消すときに、自分のものかを確かめる。
+    identity: Option<(u64, u64)>,
 }
 
 impl Listener {
@@ -62,6 +66,8 @@ impl Listener {
                 inner,
                 dir: dir.to_owned(),
                 path: path.clone(),
+                token: token.to_owned(),
+                identity: identity(&path),
             };
             // bind の後に権限を狭める。失敗したら使わない（Drop が消す）
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
@@ -92,8 +98,14 @@ impl Listener {
     /// ソケットのファイルを消す（新しいクライアントが「待ち受けが無い」と分かるように）。
     /// 何度呼んでもよい。
     pub fn unlink(&self) {
-        remove_socket(&self.path);
+        remove_socket(&self.path, self.identity);
     }
+}
+
+/// ソケットのファイルの（デバイス, i-node）。
+fn identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 /// 待ち受けを起こす道具（[`Listener::waker`]）。
@@ -109,14 +121,18 @@ impl Waker {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        remove_socket(&self.path);
-        let _ = token::remove_in(&self.dir);
+        remove_socket(&self.path, self.identity);
+        token::remove_own_in(&self.dir, &self.token);
     }
 }
 
-fn remove_socket(path: &Path) {
-    // ほかのファイルを消さないよう、ソケットのときだけ消す
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket()) {
+/// 自分が作ったソケットのときだけ消す。止まるのが遅れて、次の待ち受け（新しいアプリ）が作り直した
+/// 後なら、そのソケットを消さない。
+fn remove_socket(path: &Path, own: Option<(u64, u64)>) {
+    if own.is_some()
+        && identity(path) == own
+        && fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_socket())
+    {
         let _ = fs::remove_file(path);
     }
 }
@@ -269,6 +285,22 @@ mod tests {
         assert!(path.exists());
         let _listener = Listener::open_in(tmp.path(), &token()).unwrap();
         assert!(UnixStream::connect(&path).is_ok());
+    }
+
+    #[test]
+    fn a_late_listener_does_not_remove_a_newer_ones_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = Listener::open_in(tmp.path(), &token()).unwrap();
+        // 古い待ち受けの止まりが遅れる間に、次の待ち受け（新しいアプリ）がソケットとトークンを作り直す
+        let newer_token = token();
+        let newer = Listener::open_in(tmp.path(), &newer_token).unwrap();
+        old.unlink();
+        drop(old);
+        assert!(UnixStream::connect(tmp.path().join(SOCKET_FILE_NAME)).is_ok());
+        assert_eq!(token::read_in(tmp.path()).unwrap().token, newer_token);
+        drop(newer);
+        assert!(!tmp.path().join(SOCKET_FILE_NAME).exists());
+        assert!(!tmp.path().join(crate::TOKEN_FILE_NAME).exists());
     }
 
     #[test]
