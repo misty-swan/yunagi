@@ -166,7 +166,8 @@ pub fn get_archive(
                 let heading = section.heading.clone()?;
                 let lines = section
                     .lines_in(&note_body)
-                    .filter(|line| !line.trim().is_empty())
+                    // 空白だけの行と、箇条書きの印だけの行（`-` `*`）は飛ばす
+                    .filter(|line| !matches!(line.trim(), "" | "-" | "*"))
                     .take(NOTE_PREVIEW_LINES)
                     .map(|line| line.trim_end().to_owned())
                     .collect();
@@ -286,7 +287,7 @@ mod tests {
         todo(conn, "2026-11-03", "火曜");
         todo(conn, "2026-11-07", "土曜");
         let note =
-            "前置き\n## 10:00 定例\n\n議事1\n議事2\n議事3\n## 9:30\n## 14:00　設計 \n- 案  \n";
+            "前置き\n## 10:00 定例\n\n- \n議事1\n議事2\n議事3\n## 9:30\n## 14:00　設計 \n- 案  \n";
         write(conn, TextDoc::Note, "2026-11-03", note);
         write(
             conn,

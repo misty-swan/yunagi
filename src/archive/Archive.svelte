@@ -45,6 +45,8 @@
   const hasToday = $derived(data !== null && data.week.some((d) => d.date === data.today));
   $effect(() => {
     if (!hasToday) return;
+    // 今日のカードが出るとき、前に動かしてから時間が経っていても、いまの時刻にする
+    now = new Date();
     const timer = setInterval(() => (now = new Date()), CLOCK_MS);
     return () => clearInterval(timer);
   });
@@ -91,7 +93,8 @@
     } else if (e.key === "Enter") {
       // ボタンの上でも、選んだ日を開く（カードの Enter は日を選ぶのではなく開く）
       e.preventDefault();
-      if (!e.repeat) open(selected);
+      // 移った直後で読み終えていなくても、選んだ日（sel）を開く
+      if (!e.repeat) open(archive.sel ?? selected);
     } else if (e.key === "Escape") {
       e.preventDefault();
       onClose();
