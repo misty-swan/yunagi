@@ -19,8 +19,13 @@ fn main() -> ExitCode {
     {
         Ok(args) => yunagi_cli::run(&args, &yunagi_cli::Env::default(), &mut io),
         Err(_) => {
-            let json = std::env::args_os().any(|a| a == "--json");
-            yunagi_cli::invalid_utf8_argument(json, &mut io)
+            // 誤りの出し方は、読み取りの規則（`--` の後ろや値は指定ではない）で決める。UTF-8 でない
+            // 引数は読み替えて（`--json` の判定にしか使わない）
+            let lossy: Vec<String> = std::env::args_os()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            yunagi_cli::invalid_utf8_argument(yunagi_cli::json_requested(&lossy), &mut io)
         }
     };
     ExitCode::from(u8::try_from(code).unwrap_or(1))

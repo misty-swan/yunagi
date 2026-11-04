@@ -73,6 +73,14 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
     }
 }
 
+/// 引数 `args` で `--json` が指定されているか（引数の読み取りと同じ規則。誤りがあっても読み終えて決める）。
+pub fn json_requested(args: &[String]) -> bool {
+    match args::parse(args) {
+        Ok(parsed) => parsed.json,
+        Err(e) => e.json,
+    }
+}
+
 /// 引数が UTF-8 でないときの失敗（`invalid_argument`、終了コード 2）。`json` は、引数から `--json` を
 /// 読めなかったときは `false`。
 pub fn invalid_utf8_argument(json: bool, io: &mut Io<'_>) -> i32 {

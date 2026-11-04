@@ -169,7 +169,11 @@ fn search(value: &Value) -> String {
             _ => {
                 let matches = hit["matches"].as_array().map_or(&[][..], Vec::as_slice);
                 if matches.is_empty() {
-                    let _ = writeln!(out, "{date} {kind}");
+                    // 行を切り出せなかった（検索語が複数の行にまたがる、など）。全文は note get
+                    let _ = writeln!(
+                        out,
+                        "{date} {kind}  (no single matching line; read it with note get)"
+                    );
                 }
                 for m in matches {
                     let _ = writeln!(

@@ -509,8 +509,9 @@ pub(crate) fn connect_in(dir: &Path) -> Result<(Stream, Option<ConnectionInfo>),
             io::ErrorKind::PermissionDenied,
             "the pipe is owned by another user",
         ))),
-        // 持ち主を確かめられないパイプには、トークンを渡さない
-        Err(e) => Err(ConnectError::Denied(e)),
+        // 持ち主を確かめられないパイプには、トークンを渡さない（権限が無いのではなく、確かめる操作の
+        // 失敗なので `denied` にはしない。クライアントは `unexpected` にする）
+        Err(e) => Err(ConnectError::Io(e)),
     }
 }
 

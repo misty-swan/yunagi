@@ -99,7 +99,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
             _ => {
                 let Some(rest) = arg.strip_prefix("--") else {
                     first_error.get_or_insert_with(|| {
-                        error::invalid_argument(format!("unknown option {arg}"))
+                        error::invalid_argument(format!(
+                            "unknown option {arg} (to search for text that starts with '-', write it after --, for example: yunagi search -- {arg})"
+                        ))
                     });
                     continue;
                 };

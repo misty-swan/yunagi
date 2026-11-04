@@ -79,12 +79,11 @@ impl Candidate {
             LockState::Held => CandidateStatus::InUse,
             LockState::Unknown => CandidateStatus::Unknown,
             LockState::Free | LockState::NoFile => {
-                let has_data = data_dir
-                    .as_deref()
-                    .unwrap_or(&self.dir)
-                    .join(data_dir::DATABASE_FILE_NAME)
-                    .metadata()
-                    .is_ok_and(|m| m.is_file() && m.len() > 0);
+                // 自分の側（`own_storage`）と同じ「使えるデータベースがある」の判定を使う
+                let has_data = db_files::has_database(&data_dir::database_path(
+                    data_dir.as_deref().unwrap_or(&self.dir),
+                ))
+                .unwrap_or(false);
                 // 設定を読めないときは、データがあるとも無いとも言えない
                 if data_dir.is_none() && lock_state == LockState::NoFile {
                     CandidateStatus::Unknown
@@ -103,16 +102,23 @@ impl Candidate {
     }
 }
 
+/// `yunagi.lock` を調べた結果（[`lock_state_of`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LockState {
+pub enum LockState {
     /// 別のプロセスが持っている。
     Held,
     /// 取れた（すぐ離した）。
     Free,
     /// ファイルもフォルダも無い。
     NoFile,
-    /// 調べられない。
+    /// 調べられない（権限が無いなど）。
     Unknown,
+}
+
+/// 既定ディレクトリ `dir` の `yunagi.lock` を、作らずに調べる（既存のものだけ開いて 1 回だけ取ってみて、
+/// すぐ離す）。`doctor` が自分の側のロックを調べるのに使う（`DbLock::acquire` はファイルを作るため）。
+pub fn lock_state_of(dir: &DefaultDir) -> LockState {
+    lock_state(&dir.path().join(LOCK_FILE_NAME))
 }
 
 fn lock_state(path: &Path) -> LockState {

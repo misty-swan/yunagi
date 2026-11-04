@@ -12,8 +12,7 @@ use serde_json::{Value, json};
 use yunagi_api::PROTOCOL_VERSION;
 use yunagi_api::client::{self, HelloError};
 use yunagi_core::storage::data_dir::Platform;
-use yunagi_core::storage::dir_mismatch::{self, CandidateStatus, Judgement};
-use yunagi_core::storage::{DbLock, LockError};
+use yunagi_core::storage::dir_mismatch::{self, CandidateStatus, Judgement, LockState};
 
 use crate::connect::Connector;
 
@@ -114,9 +113,9 @@ fn local_api_status(connector: &Connector, judgement: Judgement) -> (&'static st
             Err(HelloError::Io(_)) => return ("starting_or_unresponsive", None),
         }
     }
-    // 待ち受けが無い：ロックを 1 回だけ取ってみて、すぐ離す
-    match DbLock::acquire(connector.default_dir(), Duration::ZERO) {
-        Err(LockError::Busy { .. }) => (
+    // 待ち受けが無い：ロックを 1 回だけ取ってみて、すぐ離す（ファイルは作らない）
+    match dir_mismatch::lock_state_of(connector.default_dir()) {
+        LockState::Held => (
             if too_long {
                 "socket_path_too_long"
             } else {
@@ -124,8 +123,8 @@ fn local_api_status(connector: &Connector, judgement: Judgement) -> (&'static st
             },
             None,
         ),
-        // 取れた（既定ディレクトリが無くて取れなかったときも、ロックを持つ者はいない）
-        Ok(_) | Err(LockError::Io { .. }) => (
+        // 取れた、またはファイルもフォルダも無い（ロックを持つ者はいない）
+        LockState::Free | LockState::NoFile => (
             if matches!(judgement, Judgement::Mismatch { .. }) {
                 "default_dir_mismatch"
             } else {
@@ -133,6 +132,8 @@ fn local_api_status(connector: &Connector, judgement: Judgement) -> (&'static st
             },
             None,
         ),
+        // 権限が無いなどでロックファイルを調べられない：待ち受けが無いとは言えない
+        LockState::Unknown => ("unknown", None),
     }
 }
 

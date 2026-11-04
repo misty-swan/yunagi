@@ -76,8 +76,9 @@ pub struct Connector {
 
 impl Connector {
     /// 既定ディレクトリ `dir` で、クライアントの識別子 `client`（CLI は `cli`、MCP は `--client` の値。
-    /// 無ければ `unknown`）として接続する。`warn` は、環境を分けている形（4.5 の 3）のときの警告を
-    /// 出す先（プロセスごとに 1 回）。
+    /// 無ければ `unknown`）として接続する。`warn` は、環境を分けている形（4.5 の 3）のときの警告
+    /// （プロセスごとに 1 回）と、応答の `message` に含めない内部の失敗の診断の行を出す先（1 行ずつ。
+    /// CLI は標準エラー、MCP サーバーは標準エラーのログ）。
     pub fn new(
         dir: DefaultDir,
         client: impl Into<String>,
@@ -102,8 +103,14 @@ impl Connector {
     ) -> Result<Self, ErrorObject> {
         match data_dir::default_dir() {
             Ok(dir) => Ok(Self::new(dir, client, AltHome::Os, warn)),
-            Err(e) => Err(default_dir_failure(&e)),
+            Err(e) => Err(default_dir_failure(&e, &warn)),
         }
+    }
+
+    /// 診断の行（内部の失敗の原因など。応答の `message` には含めない）を、`warn` の出し先に出す。
+    /// CLI は標準エラー、MCP サーバーは標準エラーのログ。
+    fn log(&self, line: &str) {
+        (self.warn)(&format!("yunagi: {line}"));
     }
 
     /// 別の候補を求めるホームを変える（試験）。
@@ -186,7 +193,7 @@ impl Connector {
                             Attempt::Done(Err(error::busy()))
                         }
                         Err(CallError::Protocol(message)) => {
-                            eprintln!("yunagi: unexpected response from Yunagi: {message}");
+                            self.log(&format!("unexpected response from Yunagi: {message}"));
                             Attempt::Done(Err(error::api_error(
                                 "unexpected",
                                 "Yunagi's response could not be understood. Ask the user to update Yunagi and the yunagi command to the same version.",
@@ -209,10 +216,10 @@ impl Connector {
                     return Attempt::Done(Err(error::version_mismatch()));
                 }
                 Err(HelloError::Io(e)) => {
-                    eprintln!(
-                        "yunagi: could not talk to the local API: {}",
+                    self.log(&format!(
+                        "could not talk to the local API: {}",
                         ErrorChain(&e)
-                    );
+                    ));
                     return Attempt::Done(Err(error::api_error(
                         "unexpected",
                         "Could not talk to Yunagi's local API. Nothing was changed. Ask the user to restart Yunagi.",
@@ -256,7 +263,10 @@ impl Connector {
             io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
         ) && !self.dir.path().is_dir();
         if !missing {
-            eprintln!("yunagi: could not lock yunagi.lock: {}", ErrorChain(source));
+            self.log(&format!(
+                "could not lock yunagi.lock: {}",
+                ErrorChain(source)
+            ));
             return error::storage_failed();
         }
         match self.judge() {
@@ -302,7 +312,10 @@ impl Connector {
         let Some(data_dir) = &own.data_dir else {
             drop(lock);
             if let Err(e) = data_dir::resolve_data_dir(&self.dir) {
-                eprintln!("yunagi: could not find the data folder: {}", ErrorChain(&e));
+                self.log(&format!(
+                    "could not find the data folder: {}",
+                    ErrorChain(&e)
+                ));
             }
             return Err(error::storage_failed());
         };
@@ -316,7 +329,7 @@ impl Connector {
             Ok(db) => db,
             Err(OpenError::NotFound(nf)) => return Err(error::database_not_found(&nf.path)),
             Err(e) => {
-                eprintln!("yunagi: could not open the database: {}", ErrorChain(&e));
+                self.log(&format!("could not open the database: {}", ErrorChain(&e)));
                 return Err(error::storage_failed());
             }
         };
@@ -325,7 +338,7 @@ impl Connector {
         match (result, closed) {
             (Ok(value), Ok(())) => Ok(value),
             (Ok(_), Err(e)) => {
-                eprintln!("yunagi: could not close the database: {}", ErrorChain(&e));
+                self.log(&format!("could not close the database: {}", ErrorChain(&e)));
                 Err(error::storage_failed())
             }
             (Err(e), _) => Err(e),
@@ -376,12 +389,12 @@ fn rpc_failure(e: &client::RpcError) -> ErrorObject {
 }
 
 /// 既定ディレクトリを求められなかった。
-fn default_dir_failure(e: &DataDirError) -> ErrorObject {
+fn default_dir_failure(e: &DataDirError, warn: &dyn Fn(&str)) -> ErrorObject {
     let vars = dir_mismatch::default_dir_vars(Platform::current());
     match e {
         DataDirError::NoDefaultDir { .. } => error::default_dir_unset(vars),
         _ => {
-            eprintln!("yunagi: {}", ErrorChain(e));
+            warn(&format!("yunagi: {}", ErrorChain(e)));
             error::storage_failed()
         }
     }
