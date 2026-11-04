@@ -81,6 +81,7 @@ To look back at past days, press **Mod+Shift+L** to open Archive. It shows each 
 | Note mode ⇄ Board mode | Mod+J |
 | Send line to TODOs / Blockers | Mod+Shift+T / Mod+Shift+B |
 | Toggle done / resolved | Mod+Enter |
+| Copy the selected TODO as a request | Mod+Shift+A |
 | Reorder items | Alt+↑ / Alt+↓ |
 | Previous / next day / today | Mod+[ / Mod+] / Mod+T |
 | Undo / redo | Mod+Z / Mod+Shift+Z (Ctrl+Y also works on Windows and Linux) |
@@ -125,6 +126,12 @@ yunagi todo add "Reply to review comments"
 yunagi board get
 git log -1 --format=%s | yunagi reflection append -
 ```
+
+### Requests for agents
+
+In Board mode, select a TODO and press **Mod+Shift+A** to copy a Markdown request for an agent to the clipboard. It contains the TODO's text and, if you sent the TODO from a line of your note, the notes under the same timestamped heading and the unresolved blockers sent from that section. Paste it straight into the agent's input. The request includes your notes, so check where you paste it.
+
+In a terminal, `yunagi handoff export <TODO ID>` prints the same text (find the ID with `yunagi board get`). An agent with read permission can get it with `export_handoff`.
 
 ## 7. Your data
 

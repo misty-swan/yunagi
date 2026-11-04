@@ -14,6 +14,7 @@
 - アプリが前面になくても、ショートカット（既定は Mod+Shift+D）で Yunagi を呼び出す（Wayland では効かないことがあります）
 - コマンド `yunagi show [--note]` で Yunagi を前面に出す（動いていなければ起動します。Wayland でショートカットが効かないときに、キーボード設定から呼べます）
 - CLI と MCP サーバーによる AI エージェント連携
+- 選んだ TODO を、元のノートの区間と未解消の障害を添えた依頼文としてコピーする（Mod+Shift+A。CLI の `yunagi handoff export`、MCP の `export_handoff` でも取得できます）
 - 日本語・英語の UI
 
 <!--

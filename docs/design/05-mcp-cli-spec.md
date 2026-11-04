@@ -28,7 +28,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 - エージェントの識別：`yunagi agent setup` は、登録するコマンドを `yunagi mcp --client claude-code` のように識別子付きで書き込む。識別子のない接続は `unknown` クライアントとして `read` のみを与える。`unknown` には `read` より多くのスコープを足せない（名乗らないすべての接続が書けるようになってしまうため。`agent permissions` が `invalid_argument` で断る。2026-11-04 決定。YUN-94）。
 - 振り返りの既存の文章を書き換える操作は、どのスコープでも提供しない。
 - 許可されていない操作は、エラーコード `permission_denied` と必要なスコープ名を返す。
-- 権限はコアが確かめる（アーキテクチャ設計書 4章 5）ので、アプリ経由（ローカル API）でも直接モードでも同じになる。書き込みだけでなく読み取りも同じで、いま作ってある `get_board`・`open_board`・`get_note` は、コアの関数が呼び出し元のクライアントを受け取り、はじめに `read` を確かめる（2026-11-04 決定。コアの `domain::board`・`domain::text_doc`）。画面が使う読み取り（`get_screen_board`、`text_doc::get`）はエージェントの操作ではないので確かめない。登録されていないクライアントには何も許可しない（`read` も含む）。`search` の入り口（コアの `domain::search::search`）も同じ形（呼び出し元を受け取り、はじめに `read` を確かめる。2026-11-04 決定、YUN-90 で作った）。`export_handoff` の入り口は、依頼文の書き出し（5章）を作るときに同じ形で足す（YUN-70 の完了の条件に書き足した）。
+- 権限はコアが確かめる（アーキテクチャ設計書 4章 5）ので、アプリ経由（ローカル API）でも直接モードでも同じになる。書き込みだけでなく読み取りも同じで、いま作ってある `get_board`・`open_board`・`get_note` は、コアの関数が呼び出し元のクライアントを受け取り、はじめに `read` を確かめる（2026-11-04 決定。コアの `domain::board`・`domain::text_doc`）。画面が使う読み取り（`get_screen_board`、`text_doc::get`）はエージェントの操作ではないので確かめない。登録されていないクライアントには何も許可しない（`read` も含む）。`search` の入り口（コアの `domain::search::search`）も同じ形（呼び出し元を受け取り、はじめに `read` を確かめる。2026-11-04 決定、YUN-90 で作った）。`export_handoff` の入り口（コアの `domain::handoff::export`。5章）も同じ形で、呼び出し元を受け取り、はじめに `read` を確かめる（2026-11-05 決定、YUN-70 で作った）。画面の書き出し（Mod+Shift+A。`handoff::build`）はエージェントの操作ではないので確かめない。
 
 ## 3. 操作一覧（MVP：A-01〜A-08）
 
@@ -49,7 +49,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | A-05 | `append_reflection` | `yunagi reflection append TEXT [--date D]` | `yunagi reflect append` | append |
 | A-05 | `append_note` | `yunagi note append TEXT [--date D] [--heading [TITLE]]` | — | append |
 | A-05 | `edit_note` | `yunagi note edit --line N --expect TEXT (--replace TEXT \| --delete \| --move-to M) [--date D]` | — | note_edit |
-| A-06 | `export_handoff` | `yunagi handoff export ID` | `yunagi handoff ID` | read |
+| A-06 | `export_handoff` | `yunagi handoff export ID`（TODO の ID。動きは 5章） | `yunagi handoff ID` | read |
 | A-07 | —（MCP には出さない） | `yunagi agent setup [--claude-code] [--codex]` | — | — |
 | A-08 | —（MCP には出さない） | `yunagi agent permissions [CLIENT] [--allow S]... [--deny S]...` / `yunagi agent history [--client NAME] [--unseen] [--limit N] [--before ID]` / `yunagi agent revert CHANGE_ID [--force]` | — | 閲覧は不要。変更・取り消しは 2章の確認が必要。動きは 7章 |
 
@@ -162,6 +162,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 - テキスト出力の形（2026-11-04 決定。YUN-90。元にするのは、アプリ経由でも直接モードでも同じ返り値の JSON なので、どちらの経路でも出力は同じ）：
   - `board get`・`board open`：`# 日付`、`## TODO`、`## Blockers`、（`get` だけ）`## Reflection`、`## Note (N characters)` と見出しの一覧。項目は `[ ] ID  本文`（完了・解消は `[x]`、取りやめた TODO は `[-]`）で、後ろに `(closed: 理由, carried 2x, carried over to 日付 as ID)` の注記を付け、障害の解消メモは次の行に `    -> メモ`。項目が無い節は `(none)`。
   - `note get`：全文は本文、見出し指定は区間の `text`（3章）。
+  - `handoff export`：依頼文（5章）をそのまま出す（貼り付けやパイプで使うため。末尾は改行 1 つ）。`--json` は `{"id", "markdown"}`（4.2）。何も書かず、`--date` は受けつけない（ID の項目が属する日が対象）。
   - `search`：項目は `日付 種類 ID  本文`、ノート・振り返りは一致した行ごとに `日付 種類:行番号  行の本文`。0 件は `No results.`。
   - `doctor`：`key: value` の行（3.1）。
   - 書き込み（2026-11-04 決定。YUN-91）：成功は 1 行で、3章の文（`Resolved.`・`Note added.`・`Already resolved. Nothing changed.`・`Completed.`・`Already done. Nothing changed.`・`Reopened.`・`Already open. Nothing changed.`・`Edited.`・`Same text. Nothing changed.`）に次を足す。`add_todo`・`add_blocker` は `Added TODO ID (日付).`・`Added blocker ID (日付).`（あとで編集や完了に使う ID を出す）。`append_note`・`append_reflection` は `Appended.`、`edit_note` は `Edited.`、どちらも何も変えなかったとき（`updated: false`）は `Nothing changed.`。`resolve_blocker` が解消と解消メモの両方を行ったときは `Resolved. Note added.`。`--note` を付けずに解消した障害に前の解消メモが残っていたら、次の行に `Existing resolution note: 本文` を出す（3章。エージェントが利用者に伝えられるように）。
@@ -240,6 +241,15 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 - `query` は前後の空白を除いた検索語。`hits` は検索の並び（日付の新しい順。同じ日は TODO・障害・ノート・振り返りの順）で、`limit` 件まで。項目の形は `get_board` の項目と同じ欄のうち `id`・`text`・（障害の）`resolution_note`・`carried_to_id`・`carried_to_date` を返す（`status` などは `get_board` で読む）。持ち越し済みでなければ `carried_to_id`・`carried_to_date` は `null`（3章の持ち越しの読み取り）。
 - ノート・振り返りは、本文すべてを返すと大きいので、検索語を含む行（`matches`。比べ方は検索と同じ：3 文字以上は大文字・小文字を区別せず、2 文字以下は ASCII の英字だけ区別しない。上から 5 行まで）だけを返す。`line` は本文の行の番号（1 始まり。`edit_note` の `--line` と同じ数え方）で、`text` は行の本文。検索語が複数の行にまたがるとき、または検索の比べ方と文字の大小の扱いが一致しない文字（Unicode の特殊な大文字・小文字など）のときは `matches` が空になりうる（CLI のテキスト出力は `(no single matching line; read it with note get)` と出す）。全文は `get_note` で読む。
 - 権限は `read`。結果が 0 件でも成功（`hits` は空）。
+
+`export_handoff`（2026-11-05 決定。YUN-70。5章。コアの `domain::handoff`）：
+
+```json
+{"id": "01J...", "markdown": "## Task\nAPI のレート制限を調査\n\n## Context (from today's notes)\n- 10:00 定例: …\n\n(Exported from Yunagi on 2026-11-02)\n"}
+```
+
+- `id` は対象の TODO の ID、`markdown` は依頼文（5章の形。末尾は改行 1 つ）。権限は `read`。何も変えないので、同じ操作を何度送ってもよい。
+- エラー（判定の順）：ID の形の誤りは引数を読む段階で `invalid_argument`（3.2 の例外と同じく、権限より先）。続けて `permission_denied`（`read`。項目を見る前）、`not_found`（ID の項目が無いか、削除されている）、`invalid_argument`（ID が障害を指す。3.2 の種類の違いと同じ形で `item_kind: "blocker"`・`use_operation: null`、`message` は書き出せるのは TODO だけと伝える）。完了した TODO・取りやめた TODO・持ち越し済みの TODO は、読み取りだけなので断らずに書き出す（`carried_over` は返さない）。画面の保存の失敗中でも書き出せる（読み取りは `storage_unavailable` を返さない。4.3）。
 
 返り値の細部（2026-11-03 決定。コアの `domain::board`）：
 
@@ -324,6 +334,7 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 | `append_note` | `text`、`date?`、`heading?` | `{updated, rev}` |
 | `append_reflection` | `text`、`date?` | `{updated, rev}` |
 | `edit_note` | `line`、`expected_text`、`replace`・`delete`（`true`）・`move_to` のうちちょうど 1 つ、`date?` | `{updated, rev}` |
+| `export_handoff` | `id`（TODO の ID） | `{id, markdown}`（4.2。読み取り） |
 
 **窓の操作**（`show_app`。2026-11-04 決定。YUN-88）：`yunagi show`（3.3）が頼む。データの操作ではないので、上の表にも管理の操作にも入れず、MCP には出さない。データベースの錠も、呼び出し元のクライアントの登録（`agent_client`）も、スコープの判定も使わない（トークンの認証だけ）。そのため、保存先の変更・復元で開き直している最中でも、5 秒待たずに効き、画面にデータの変更（`changed`）も知らせない。
 
@@ -350,7 +361,7 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 - `append_note` の `heading` は、あれば現在時刻の見出しを入れてから追記する（CLI の `--heading [TITLE]`。`""` は件名なしの `## HH:MM`）。省略か `null` なら見出しを入れない。
 - `edit_note` の `replace`・`delete`・`move_to` が 0 個か 2 個以上なら `-32602`。`line`・`move_to` は 0 以上の整数（0 の意味はコアが `invalid_argument` にする）。
 - `updated` は 3.2 の意味（実際に何かを変えたか）。`updated: false` の成功では、画面への `changed` を出さない。
-- `search` は上の表のとおり（4.2 に返り値）。`export_handoff` は、依頼文の書き出しを作るとき（YUN-70）に、コアの入口と一緒に同じ形で足す。
+- `search` は上の表のとおり（4.2 に返り値）。`export_handoff` も同じ（4.2。コアの `domain::handoff::export`。2026-11-05 決定。YUN-70）。読み取りの操作なので、アプリ経由でも `changed` を出さず、依頼を送った後に接続が切れても 1 回だけ自動でやり直す（4.3 の `result_unknown`）。
 - 権限・入力中・持ち越し・保存の失敗中の判定とエラーは、3章・3.2 のとおり（コアが行う。直接モードと同じ）。内部のエラーの文は応答に出さず（4.3）、読み書きの失敗は `storage_unavailable`（`message` は、何も変えていないことと、アプリを確かめるよう伝える）にする。
 - データベースを使えるまで待つのは最大 5 秒。保存先の変更・復元の最中などで使えなければ、何も反映せずに `busy`（4.3）。アプリが止め始めていて始めなかった依頼も `busy`。`hello` の後で依頼が時間切れになった接続・止めるときに閉じる接続には、依頼を待たずに `busy`（`id` が `null` の失敗の応答）を 1 行返してから閉じる（後から依頼を送ったクライアントが `result_unknown` と取り違えず、そのまま送り直せるため。アーキテクチャ設計書 4.6）。
 
@@ -387,11 +398,11 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 - 依頼の `params._meta` に `io.modelcontextprotocol/protocolVersion` があるものは最新の仕様の依頼で、結果に `resultType: "complete"` を付ける。値が `2026-07-28` 以外なら `-32022`（`data.supported`・`data.requested`）。ない依頼（旧い仕様）の結果には、`resultType` もキャッシュの案内も付けない。`_meta` の版が旧い仕様の版（`2025-11-25` 以前の 4 つ）の依頼は、断らず、旧い仕様の依頼として答える。
 - `instructions`（エージェントへの案内。英語）：Yunagi は利用者の日次の作業ノートであること、先に `get_board`・`open_board` で項目の ID を得ること、権限は利用者が Yunagi で決めるので `permission_denied` は利用者に伝えること、エラーの次の動き（4.3 の表：`busy` はそのまま送り直す、`user_editing` はしばらくして、`changed` は読み直して、`result_unknown` は読んで確かめてから、そのほかの `api_error` は送り直さず利用者に伝える）。
 
-**ツール**：`tools/list` は次の 14 個（3章の表のうち A-07・A-08 を除いたもの。A-06 の `export_handoff` は、コアの入口を作るとき（YUN-70）に足す）。この順に返す。
+**ツール**：`tools/list` は次の 15 個（3章の表のうち A-07・A-08 を除いたもの。A-06 の `export_handoff` は YUN-70 で足した）。この順に返す。
 
-`get_board`・`open_board`・`get_note`・`search`・`add_todo`・`edit_todo`・`complete_todo`・`reopen_todo`・`add_blocker`・`edit_blocker`・`resolve_blocker`・`append_reflection`・`append_note`・`edit_note`
+`get_board`・`open_board`・`get_note`・`search`・`add_todo`・`edit_todo`・`complete_todo`・`reopen_todo`・`add_blocker`・`edit_blocker`・`resolve_blocker`・`append_reflection`・`append_note`・`edit_note`・`export_handoff`
 
-- 各ツールに、`name`・`title`・`description`（英語。必要なスコープ、エラーの次の動き、やり直してよいかを書く）・`inputSchema`（引数は 4.4 の表と同じ名前で、`additionalProperties: false`。`edit_note` の「ちょうど 1 つ」は `description` に書く。`line`・`move_to` はスキーマでは 1 以上とし、0 はコアが `invalid_argument` にする）・`annotations.readOnlyHint`（読み取りの 4 つだけ `true`）を付ける。スキーマは手で書く。引数の読み取りと判定は `ops::Call::parse` とコアが行い、スキーマから作り直したり検査したりしない（決まりを 2 か所に書き写さないため）。名前が食い違わないことは試験で確かめる（スキーマの名前を `Call::parse` が断らないこと、スキーマに無い名前を断ること）。
+- 各ツールに、`name`・`title`・`description`（英語。必要なスコープ、エラーの次の動き、やり直してよいかを書く）・`inputSchema`（引数は 4.4 の表と同じ名前で、`additionalProperties: false`。`edit_note` の「ちょうど 1 つ」は `description` に書く。`line`・`move_to` はスキーマでは 1 以上とし、0 はコアが `invalid_argument` にする）・`annotations.readOnlyHint`（読み取りの 5 つ（`get_board`・`open_board`・`get_note`・`search`・`export_handoff`）だけ `true`）を付ける。スキーマは手で書く。引数の読み取りと判定は `ops::Call::parse` とコアが行い、スキーマから作り直したり検査したりしない（決まりを 2 か所に書き写さないため）。名前が食い違わないことは試験で確かめる（スキーマの名前を `Call::parse` が断らないこと、スキーマに無い名前を断ること）。
 - 後からローカル API の操作が増えても、この一覧に足すまでは MCP に出ない（呼ぶと `-32602`）。
 
 **`tools/call` の結果**
@@ -425,7 +436,25 @@ API のレート制限を調査
 
 「Related blockers」には、同じ見出しの区間の行からノートで送った障害のうち、未解消のものを載せる。該当する障害がない場合と、ノートから送られていない TODO では、この節を省略する。
 
-区間と障害の求め方の細部（2026-11-03 決定。コアの `domain::note_send::request_context`）：区間は送り元のノートの日（持ち越した TODO では元の日）の、いまの本文で求める。「同じ見出しの区間の行から送った障害」は、区間の行に送信済みの印を付けている障害（データモデル設計書 3章 note_send）で、行の順に並べ、同じ障害は1件にする。持ち越した障害は、最後の持ち越し先の項目の状態で未解消かを決め、その項目を載せる（持ち越し元の状態は持ち越した後に変わらないため）。コアは区間の行を空白だけの行も含めてそのまま返し、上の例のような行の整え方（見出しの付け方、空行の扱い）は書き出しを作るときに決める。
+区間と障害の求め方の細部（2026-11-03 決定。コアの `domain::note_send::request_context`）：区間は送り元のノートの日（持ち越した TODO では元の日）の、いまの本文で求める。「同じ見出しの区間の行から送った障害」は、区間の行に送信済みの印を付けている障害（データモデル設計書 3章 note_send）で、行の順に並べ、同じ障害は1件にする。持ち越した障害は、最後の持ち越し先の項目の状態で未解消かを決め、その項目を載せる（持ち越し元の状態は持ち越した後に変わらないため）。持ち越した障害の元の日の項目を削除しても、持ち越し先が未解消なら載せる（2026-11-05 決定。YUN-70。削除された項目の記録の行は、生きている記録の後に照合する。データモデル設計書 3章 note_send）。持ち越し先を持たない削除済みの障害は載せない。同じ項目を指す記録が複数あっても、障害は項目ごとに1件にする（持ち越し先を重ねて調べない）。コアは区間の行を空白だけの行も含めてそのまま返し、行の整え方は次のとおり。
+
+形式の細部（2026-11-05 決定。YUN-70。コアの `domain::handoff`）：
+
+- 対象は TODO だけ。障害の ID は `invalid_argument`（4.2）。完了・取りやめ・持ち越し済みの TODO も書き出せる。
+- 見出し（`## Task`・`## Context`・`## Related blockers`）と末尾の注記は、画面の言語の設定にかかわらず英語に固定する（貼り付けた先のエージェントへ同じ形で渡すため。アーキテクチャ設計書 6.4 の書き出しと同じ）。中身の無い節は出さない。節の間と注記の前は空行 1 行。末尾は改行 1 つ。
+- Task：ID で指した TODO のいまの本文（持ち越した TODO を指せば、その持ち越し先の本文。持ち越し済みの元の TODO を指せば、元の本文）。
+- Context：区間の行を、次のとおり整えて 1 行ずつ `- ` で並べる。区間に時刻付き見出しがあれば、各行の前に `<見出しの文字>: `（例：`10:00 定例: `）を付ける（見出しの無い前置きの区間では付けない）。
+  - 除く行：空白だけの行、見出しの行（時刻付きでない `## 良かったこと` など）、区切り線、コードの囲みの印の行、項目へ送った行（送信済みの印の付いた行。送り元の行を含む。送り先の項目の種類・削除の有無を問わない）。送った行は Task や Related blockers にすでに出る（またはほかの TODO として扱われる）ので、文脈に重ねない。
+  - 整える：行頭の空白、リストの印（`-`・`*`・`+`・`1.`・`1)`）、チェック欄（`[ ]`・`[x]`）、前後の空白を除く（項目の本文を作るときと同じ。データモデル設計書 3章 note_send）。字下げの深さは残さない。
+  - コードの囲みの中の行（囲みの印の行は除く）は、前後の空白を除いてそのまま載せる（ログなどを、リストの印のように見える行も含めて崩さないため）。囲みは区間の中だけで数える（区間をまたぐ囲みは考えない）。
+  - 見出しの文字・行の長さ・行数に上限は設けない（ノートの区間は人が書く量のため）。
+- 見出しの日付：送り元のノートの日が書き出す日（呼び出しの時点の論理日付の今日）と同じなら `## Context (from today's notes)`、違えば `## Context (from notes on YYYY-MM-DD)`（持ち越した TODO や過去の日の TODO で、「today's」と書くと誤るため）。
+- Related blockers：未解消の障害のいまの本文を `- ` で並べる（行の順）。
+- 末尾の注記の日付：書き出す日の論理日付の今日（`today`・設定の切り替わり時刻で求める。`get_board` の日付の既定と同じ）。
+- ノートから送られていない TODO（送り元の行が見つからない場合を含む）は、Task と末尾の注記だけ。
+- 1つの項目に note_send の記録が複数ある壊れたデータ（通常は項目1件につき記録1件）：送り元は id の最も小さい記録とする（`source_line` と同じ。最初に作った記録）。印は記録ごとに付くので、依頼文の Context から除く行には、すべての記録の行を数える。
+
+出力先：CLI は標準出力（4.1）、MCP は `export_handoff` の返り値（4.2）、アプリは Mod+Shift+A でクリップボード（操作仕様書 2章。Rust 側で書く。アーキテクチャ設計書 4.3）。クリップボードの書き込みは、3 OS で実機の確認が要る（未確認。テスト計画書 4.2 の実機の項目）。
 
 ## 6. 導入（A-07）
 

@@ -800,7 +800,11 @@ pub fn source_refs<'a>(
             let index = line_index(keys);
             let marks = day.marks(keys, &index);
             let gone = day.gone_marks(keys, &index, &marks);
-            let lines = marks.iter().chain(&gone).map(|m| (m.send_id, m.line)).collect();
+            let lines = marks
+                .iter()
+                .chain(&gone)
+                .map(|m| (m.send_id, m.line))
+                .collect();
             (date, lines)
         })
         .collect();

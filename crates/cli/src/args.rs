@@ -406,9 +406,7 @@ fn command(
         },
         // `handoff export ID`。`handoff ID` も同じ（別名。05 3章）
         "handoff" => match rest {
-            ["export", id] | [id] if *id != "export" => {
-                item_id(&mut opts, "export_handoff", id)?
-            }
+            ["export", id] | [id] if *id != "export" => item_id(&mut opts, "export_handoff", id)?,
             _ => return Err(unknown_or_usage(positionals, rest)),
         },
         "search" => {

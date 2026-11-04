@@ -26,8 +26,8 @@ use yunagi_cli::{Env, Io};
 use yunagi_core::domain::agent::Agent;
 use yunagi_core::domain::{item, note_send, text_doc};
 use yunagi_core::storage::data_dir::{self, DefaultDir};
-use yunagi_core::storage::table::item::ItemKind;
 use yunagi_core::storage::table::agent_client::{self, CLI_ID, Scope};
+use yunagi_core::storage::table::item::ItemKind;
 use yunagi_core::storage::{Database, DbLock};
 
 /// 試験用の短い待ち（本番は 5 秒・50 ミリ秒・1 秒）。

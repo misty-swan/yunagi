@@ -289,7 +289,10 @@ mod tests {
             .find(|i| i.carried_from_id == Some(todo))
             .unwrap();
         let h = build(conn, carried.id, date("2026-11-03")).unwrap();
-        assert!(h.markdown.contains("(from notes on 2026-11-02)\n- 10:00 定例: 背景の話\n"));
+        assert!(
+            h.markdown
+                .contains("(from notes on 2026-11-02)\n- 10:00 定例: 背景の話\n")
+        );
     }
 
     #[test]

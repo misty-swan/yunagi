@@ -516,7 +516,8 @@ mod tests {
 
     #[test]
     fn export_handoff_prints_the_markdown_as_it_is() {
-        let value = json!({"id": "T1", "markdown": "## Task\nx\n\n(Exported from Yunagi on 2026-11-03)\n"});
+        let value =
+            json!({"id": "T1", "markdown": "## Task\nx\n\n(Exported from Yunagi on 2026-11-03)\n"});
         assert_eq!(
             render("export_handoff", &value),
             "## Task\nx\n\n(Exported from Yunagi on 2026-11-03)\n"

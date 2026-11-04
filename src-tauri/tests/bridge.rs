@@ -671,10 +671,7 @@ fn copy_handoff_command(_: &Path) {
     let copy = |id: &Value| h.invoke("copy_handoff", json!({ "id": id }));
 
     // 書き込む先が無い（プラグインを入れていない）あいだは、依頼文を作っても書けない
-    assert_eq!(
-        copy(&todo["id"]).unwrap_err()["kind"],
-        "clipboard_failed"
-    );
+    assert_eq!(copy(&todo["id"]).unwrap_err()["kind"], "clipboard_failed");
 
     let capture = Arc::new(Capture(Default::default()));
     h._app

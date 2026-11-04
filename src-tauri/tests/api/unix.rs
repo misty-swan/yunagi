@@ -556,7 +556,11 @@ fn export_handoff_goes_through_the_app_as_a_read(dir: &DefaultDir) {
     assert!(markdown.ends_with(")\n"));
     h.assert_no_changed();
     // 障害の ID は断る（種類の違いの形）。無い ID は not_found、形の誤りは invalid_argument
-    let bad = h.err("claude-code", "export_handoff", json!({"id": blocker["id"]}));
+    let bad = h.err(
+        "claude-code",
+        "export_handoff",
+        json!({"id": blocker["id"]}),
+    );
     assert_eq!(bad["code"], "invalid_argument");
     assert_eq!(bad["item_kind"], "blocker");
     assert_eq!(bad["use_operation"], Value::Null);

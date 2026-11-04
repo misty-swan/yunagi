@@ -81,6 +81,7 @@ Linux の Wayland 環境では、このショートカットが効かないこ�
 | ノートモード ⇄ 整理モード | Mod+J |
 | 行を TODO へ／障害へ送る | Mod+Shift+T ／ Mod+Shift+B |
 | 完了・解消の切替 | Mod+Enter |
+| 選んだ TODO を依頼文としてコピー | Mod+Shift+A |
 | 項目の並べ替え | Alt+↑ ／ Alt+↓ |
 | 前日・翌日 ／ 今日へ戻る | Mod+[ ／ Mod+] ／ Mod+T |
 | 取り消し ／ やり直し | Mod+Z ／ Mod+Shift+Z（Windows・Linux は Ctrl+Y も可） |
@@ -125,6 +126,12 @@ yunagi todo add "レビューのコメントに返信"
 yunagi board get
 git log -1 --format=%s | yunagi reflection append -
 ```
+
+### エージェントへの依頼文
+
+整理モードで TODO を選んで **Mod+Shift+A** を押すと、その TODO をエージェントに頼むための文章（Markdown）がクリップボードにコピーされます。TODO の本文に加えて、その TODO をノートの行から送った場合は、元の行がある時刻付き見出しの区間のメモと、同じ区間から送った未解消の障害が入ります。エージェントの入力欄にそのまま貼り付けてください。依頼文にはノートの内容が入るので、貼り付ける先を確かめてからお使いください。
+
+ターミナルからは `yunagi handoff export <TODO の ID>` で同じ文章を表示します（ID は `yunagi board get` で分かります）。エージェントからは、読み取りの権限があれば `export_handoff` で取得できます。
 
 ## 7. データについて
 
