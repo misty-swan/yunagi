@@ -388,7 +388,7 @@ fn failure_error(failure: Failure) -> ErrorObject {
 
 /// サーバーが返した失敗（JSON-RPC の `error`）をエラーのオブジェクトにする。アプリのエラー
 /// （`data.error`）はそのまま返す。
-fn rpc_failure(e: &client::RpcError) -> ErrorObject {
+pub(crate) fn rpc_failure(e: &client::RpcError) -> ErrorObject {
     match e.app_error() {
         Some(app) => app.clone(),
         None => error::internal(format!("Yunagi rejected the request: {}", e.message)),

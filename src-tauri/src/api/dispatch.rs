@@ -10,6 +10,7 @@ use std::cell::Cell;
 
 use serde_json::Value;
 use yunagi_api::ops::{self, AdminCall, Call, Failure, ReadCall, Reply, WriteCall};
+use yunagi_api::show;
 use yunagi_api::wire::{self, Request};
 
 use crate::app_core::{AppCore, Busy, now, system_tz};
@@ -18,6 +19,11 @@ pub use yunagi_api::ops::busy_error;
 
 /// 依頼を処理し、応答の 1 行（改行付き）を返す。
 pub fn handle(core: &AppCore, client: Option<&str>, request: &Request) -> String {
+    // 窓を前面に出す依頼は、データの操作ではない：データベースの錠も、クライアントの登録も、スコープも
+    // 使わない（保存先の変更・復元の最中でも、待たずに効く）。トークンの認証は、接続の `hello` で済んでいる
+    if request.method == show::METHOD {
+        return show_app(core, request);
+    }
     match run(core, client, request) {
         Ok(result) => wire::result_line(&request.id, &result),
         Err(Failure::NoMethod) => wire::error_line(
@@ -33,6 +39,22 @@ pub fn handle(core: &AppCore, client: Option<&str>, request: &Request) -> String
             None,
         ),
         Err(Failure::App(error)) => wire::app_error_line(&request.id, &error),
+    }
+}
+
+/// `show_app`：窓を前面に出すよう頼む（`yunagi show`。05 3.1・4.4）。
+fn show_app(core: &AppCore, request: &Request) -> String {
+    match show::parse_params(&request.params) {
+        Ok(note) => {
+            core.request_show(note);
+            wire::result_line(&request.id, &show::result())
+        }
+        Err(message) => wire::error_line(
+            &request.id,
+            wire::INVALID_PARAMS,
+            &format!("Invalid params: {message}"),
+            None,
+        ),
     }
 }
 

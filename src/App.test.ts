@@ -304,6 +304,40 @@ test("押し続けたときの繰り返しでは動かさない", async () => {
   expect($("main.content")?.dataset.mode).toBe("note");
 });
 
+test("窓を前面に出したとき（show-requested）、ノートモードの指定があるときだけノートモードにして、ノートにフォーカスを移す", async () => {
+  await start();
+  const mode = () => $("main.content")?.dataset.mode;
+  // 指定が無ければ、モードは変えない
+  await emit(EVENTS.showRequested, { note: false });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(mode()).toBe("board");
+  // ノートモードの指定で、ノートモードにして、ノートにフォーカスを移す
+  await emit(EVENTS.showRequested, { note: true });
+  await until(() => mode() === "note");
+  await until(() => document.activeElement?.closest(".cm-editor") != null);
+  // すでにノートモードなら、そのまま（フォーカスだけをノートに移す）
+  (document.activeElement as HTMLElement).blur();
+  await emit(EVENTS.showRequested, { note: true });
+  await until(() => document.activeElement?.closest(".cm-editor") != null);
+  expect(mode()).toBe("note");
+  // 指定が無ければ、ノートモードのまま
+  await emit(EVENTS.showRequested, { note: false });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(mode()).toBe("note");
+});
+
+test("データベースを開く前の起動時の画面の間は、ノートモードの指定があっても前面に出すだけで、画面は変わらない", async () => {
+  mockIPC((cmd) => (cmd === "startup_status" ? { state: "opening" } : undefined), {
+    shouldMockEvents: true,
+  });
+  app = mount(App, { target: document.body });
+  await until(() => $(".startup")?.dataset.startup === "opening");
+  await emit(EVENTS.showRequested, { note: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect($(".startup")?.dataset.startup).toBe("opening");
+  expect($("main.content")).toBeNull();
+});
+
 test("ほかの日を見ている間に日付が変わったら、その日のまま。Mod+T で新しい今日へ移る", async () => {
   await start();
   press({ key: "[", code: "BracketLeft", ctrlKey: true });

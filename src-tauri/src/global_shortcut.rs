@@ -107,8 +107,9 @@ fn classify(message: &str) -> RegisterError {
 }
 
 /// 窓を前面に出す（最小化を解き、隠れていれば表示し、フォーカスを移す）。窓が無い・操作できないときは
-/// ログに出すだけ。
-fn bring_to_front<R: Runtime>(app: &AppHandle<R>) {
+/// ログに出すだけ。OS 全体のショートカットと、`yunagi show`（ローカル API の `show_app`）・2 つ目の起動の
+/// 引き渡しが、同じものを使う（`crate::show_window`）。
+pub(crate) fn bring_to_front<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         eprintln!("yunagi: the main window was not found");
         return;

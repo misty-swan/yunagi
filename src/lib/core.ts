@@ -33,6 +33,7 @@ import {
   type SearchHit,
   type SendResult,
   type Settings,
+  type ShowRequested,
   type SettingsPatch,
   type Snapshot,
   type SplitResult,
@@ -219,4 +220,6 @@ export const coreEvents = {
     listen<TodayChanged>(EVENTS.todayChanged, (e) => cb(e.payload)),
   onBackupFailed: (cb: (p: BackupFailed) => void): Promise<UnlistenFn> =>
     listen<BackupFailed>(EVENTS.backupFailed, (e) => cb(e.payload)),
+  onShowRequested: (cb: (p: ShowRequested) => void): Promise<UnlistenFn> =>
+    listen<ShowRequested>(EVENTS.showRequested, (e) => cb(e.payload)),
 };

@@ -37,7 +37,7 @@ use crate::api::{ApiOptions, ApiServer, ApiState, ApiUnavailable};
 use crate::screen::ScreenState;
 use crate::types::{
     BackupEntry, BackupFailed, ChangeSource, Changed, CommandError, ItemOutcome, RejectReason,
-    SplitResult, Startup, StartupFailure, TextSave, TodayChanged,
+    ShowRequested, SplitResult, Startup, StartupFailure, TextSave, TodayChanged,
 };
 
 /// コアから画面への知らせ（Tauri のイベントになる。`crate::run`）。
@@ -51,6 +51,9 @@ pub enum Notice {
     TodayChanged(TodayChanged),
     /// 定期バックアップを作れなかった（`backup-failed`）。
     BackupFailed(BackupFailed),
+    /// 窓を前面に出す頼み（ローカル API の `show_app`。`yunagi show`）。受けた側（`crate::run`）が、窓を
+    /// 前面に出し（最小化を解き、表示し、フォーカスを移す）、画面に `show-requested` を知らせる。
+    ShowRequested(ShowRequested),
 }
 
 /// 知らせ先。どのスレッドからも呼ばれる。
@@ -720,6 +723,13 @@ impl AppCore {
     /// 書き込みではないので、`changed` の `by` はエージェント。
     pub fn notify_agent_registered(&self) {
         self.notify_changed(ChangeSource::Agent);
+    }
+
+    /// 窓を前面に出すよう頼む（ローカル API の `show_app`。`note` が真ならノートモードで）。データベース
+    /// にも錠にも触れないので、保存先の変更・復元の最中でも待たずに効く。窓を操作する部分は、知らせの
+    /// 受け手（`crate::run`）が持つ（窓の無い試験では知らせを受け取るだけ）。
+    pub fn request_show(&self, note: bool) {
+        self.notify(Notice::ShowRequested(ShowRequested { note }));
     }
 
     /// [`AppCore::agent_write`] の、ローカル API 用の版。データベースを使うのを待つのは最大

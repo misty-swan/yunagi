@@ -117,10 +117,41 @@
       if (!stopped) notice.show(t().backupFailed, LONG_NOTICE_MS);
     })
     .catch(() => undefined);
+  // 窓を前面に出した（`yunagi show`・2つ目の起動の引き渡し。窓を前面に出すのはコア側）。`--note` で
+  // 呼ばれたときだけ、ノートモードにする（操作仕様書 1章「OS 全体の操作」）
+  const unlistenShow = coreEvents
+    .onShowRequested((p) => {
+      if (!stopped && p.note) showNote();
+    })
+    .catch(() => undefined);
   onDestroy(() => {
     stopped = true;
     void unlistenBackup.then((u) => u?.());
+    void unlistenShow.then((u) => u?.());
   });
+
+  /**
+   * ノートモードにして、ノートにフォーカスを移す。起動時の画面（データベースを開く前・戻した結果の確認）と
+   * 持ち越し（S-03。利用者が決めるまで閉じない）の間は、前面に出すだけで何もしない。ふりかえり・検索
+   * パレット・設定は、ノートを隠す・背後を操作できなくするので閉じる。ノートは、いま見ている日のもの
+   * （今日に移さない。ほかの日を見ていたのなら、その日のノートを開く）。
+   */
+  function showNote() {
+    if (!shown || carry.open) return;
+    if (palette.open) {
+      palette.returnFocus = null;
+      palette.close();
+    }
+    if (settingsPanel.open) {
+      settingsPanel.returnFocus = null;
+      settingsPanel.close();
+    }
+    closeArchive(false);
+    shell.setMode("note");
+    // 隠していたノートを出し終えてからフォーカスを移す（すでにノートモードのときも移す）
+    flushSync();
+    noteView?.focus();
+  }
 
   $effect(() => applyPrefs(prefs.theme, prefs.lang, prefs.fontSize));
 

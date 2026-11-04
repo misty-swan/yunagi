@@ -11,11 +11,14 @@
 //! - [`client`]：接続して認証し、依頼を 1 つ送る（接続の手順 4.4 の 1 回分）。
 //! - [`ops`]：操作（`get_board`・`add_todo` など）の引数を読み、コアの入口を呼び、応答とエラーを
 //!   05 の JSON にする。アプリの待ち受けと、直接モードの CLI・MCP が同じものを使う。
+//! - [`show`]：操作 `show_app`（アプリの窓を前面に出す。`yunagi show`）。データには触れず、直接モードも
+//!   MCP も無いので、[`ops`] とは別にしている。
 //!
 //! ネットワークのポートは開かない（docs/release/SECURITY.md 4.2）。
 
 pub mod client;
 pub mod ops;
+pub mod show;
 pub mod token;
 pub mod transport;
 pub mod wire;

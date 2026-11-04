@@ -29,6 +29,9 @@ pub enum Command {
     Operation(Operation),
     /// `doctor`：診断情報を出す。
     Doctor,
+    /// `show [--note]`：アプリの窓を前面に出す。動いていなければ起動する。`note` はノートモードで出す
+    /// （05 3.1）。
+    Show { note: bool },
     /// `mcp [--client ID]`：MCP サーバー（stdio）を動かす（05 4.5）。`client` は識別子で、無ければ
     /// `unknown` クライアントになる。形は読む段階で確かめてある。
     Mcp { client: Option<String> },
@@ -105,6 +108,8 @@ Commands:
                                     Append to the note (with a time heading)
   note edit --line N --expect TEXT (--replace TEXT | --delete | --move-to M) [--date D]
                                     Change a line of the note
+  show [--note]                     Bring the Yunagi window to the front (starts Yunagi
+                                    if it is not running; --note opens Note mode)
   doctor                            Show diagnostic information (no work data)
   mcp [--client ID]                 Run the MCP server on standard input and output
                                     (for AI agents; ID is for example claude-code)
@@ -183,6 +188,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
                         "delete" | "claude-code" | "codex" | "force" | "unseen"
                     ) =>
                     {
+                        options.push((rest.to_owned(), None));
+                    }
+                    // `show --note` は値を取らない（`blocker resolve --note TEXT` は値を取る）。コマンドを
+                    // 読む前に区別するので、`show` の後ろに書く
+                    None if rest == "note" && positionals.first() == Some(&"show") => {
                         options.push((rest.to_owned(), None));
                     }
                     // 値を省略できる指定。次の引数が `-` で始まらなければ件名として読む
@@ -421,6 +431,14 @@ fn command(
             }
             opts.finish()?;
             Command::Doctor
+        }
+        "show" => {
+            if !rest.is_empty() {
+                return Err(unknown(positionals));
+            }
+            let note = opts.take_flag("note")?;
+            opts.finish()?;
+            Command::Show { note }
         }
         "mcp" => {
             if !rest.is_empty() {
@@ -810,6 +828,37 @@ mod tests {
         assert_eq!(search.params["from"], "2026-11-01");
         assert_eq!(search.params["kinds"], json!(["todo", "note"]));
         assert_eq!(search.params["limit"], 10);
+    }
+
+    #[test]
+    fn show_takes_the_note_flag_but_blocker_resolve_takes_a_value() {
+        assert_eq!(
+            parse_args(&["show"]).unwrap().command,
+            Command::Show { note: false }
+        );
+        assert_eq!(
+            parse_args(&["show", "--note"]).unwrap().command,
+            Command::Show { note: true }
+        );
+        assert_eq!(
+            parse_args(&["--json", "show", "--note"]).unwrap().command,
+            Command::Show { note: true }
+        );
+        // `--note` は、`blocker resolve` では値を取る
+        assert!(matches!(
+            parse_args(&["blocker", "resolve", "ID1", "--note", "x"])
+                .unwrap()
+                .command,
+            Command::Operation(_)
+        ),);
+        for bad in [
+            &["show", "extra"][..],
+            &["show", "--nte"],
+            &["show", "--note=1"],
+            &["show", "--date", "today"],
+        ] {
+            assert!(parse_args(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

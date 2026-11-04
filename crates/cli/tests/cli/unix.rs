@@ -21,6 +21,7 @@ use serde_json::{Map, Value, json};
 use yunagi_api::transport::Listener;
 use yunagi_api::{token, wire};
 use yunagi_cli::connect::{AltHome, Connector, Timing};
+use yunagi_cli::show::{self, Launch};
 use yunagi_cli::{Env, Io};
 use yunagi_core::domain::agent::Agent;
 use yunagi_core::domain::{item, text_doc};
@@ -77,6 +78,8 @@ impl World {
             alt_home: AltHome::Fixed(Some(self.path("althome"))),
             timing: TIMING,
             setup: Env::default().setup,
+            // 本物のアプリが起動しないよう、起動先は存在しないものにしておく（`show` の試験が差し替える）
+            show: show_options(Launch::Program(PathBuf::from("/nonexistent/yunagi-app"))),
         }
     }
 }
@@ -104,11 +107,15 @@ fn exec(w: &World, args: &[&str]) -> Out {
 
 /// 標準入力 `input` を渡して動かす（`TEXT` の `-`。05 4.1）。
 fn exec_with_stdin(w: &World, args: &[&str], input: &[u8]) -> Out {
+    exec_env(&w.env(), args, input)
+}
+
+fn exec_env(env: &Env, args: &[&str], input: &[u8]) -> Out {
     let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
     let (mut stdin, mut stdout, mut stderr) = (input, Vec::new(), Vec::new());
     let code = yunagi_cli::run(
         &args,
-        &w.env(),
+        env,
         &mut Io {
             stdin: &mut stdin,
             stdout: &mut stdout,
@@ -292,7 +299,21 @@ fn change_id(w: &World, operation: &str) -> String {
 type Test = fn(&World);
 
 pub fn main() {
-    let tests: [(&str, Test); 28] = [
+    let tests: [(&str, Test); 33] = [
+        ("show_asks_the_running_app", show_asks_the_running_app),
+        (
+            "show_starts_the_app_and_waits_for_its_listener",
+            show_starts_the_app,
+        ),
+        ("show_says_why_it_could_not_start_the_app", show_no_app),
+        (
+            "show_does_not_start_the_app_when_one_answers",
+            show_app_answers_with_an_error,
+        ),
+        (
+            "show_relies_on_the_handover_when_the_socket_path_is_too_long",
+            show_too_long,
+        ),
         (
             "agent_permissions_and_history_are_read_without_confirmation",
             agent_admin_reads,
@@ -1116,6 +1137,12 @@ impl FakeApp {
         Self { requests, handle }
     }
 
+    /// 受け取った依頼そのもの（`method` と `params`）。
+    fn finish_requests(self) -> Vec<Value> {
+        self.handle.join().unwrap();
+        self.requests.lock().unwrap().clone()
+    }
+
     /// 受け取った依頼（`method` の一覧）。
     fn finish(self) -> Vec<String> {
         self.handle.join().unwrap();
@@ -1922,4 +1949,238 @@ fn mcp_via_app(w: &World) {
     assert_eq!(run.responses[2]["result"], json!({}));
     assert_eq!(tool_outcome(&run.responses[3]).1["date"], "2026-11-02");
     assert_eq!(app.finish(), ["add_todo", "add_todo", "get_board"]);
+}
+
+// ---- yunagi show（アプリを前面に出す。05 3.1） ----
+
+fn show_options(launch: Launch) -> show::Options {
+    show::Options {
+        launch,
+        start_wait: Duration::from_secs(5),
+    }
+}
+
+/// `show` の設定を差し替えて動かす。
+fn exec_show(w: &World, args: &[&str], launch: Launch, start_wait: Duration) -> Out {
+    let env = Env {
+        show: show::Options { launch, start_wait },
+        ..w.env()
+    };
+    exec_env(&env, args, b"")
+}
+
+/// 偽のアプリ（起動されると `body` のシェルを動かす実行ファイル）。
+fn app_script(w: &World, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = w.path(name);
+    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+fn show_asks_the_running_app(w: &World) {
+    let own = seed(w);
+    // 動いているアプリがあれば、起動せずに（存在しない起動先のまま）頼む。直接モードは無い（ロックを
+    // 持っていても、データベースを開かない）
+    let app = FakeApp::start(
+        &own,
+        vec![
+            Conn::Answer(json!({"requested": true})),
+            Conn::Answer(json!({"requested": true})),
+            Conn::Answer(json!({"requested": true})),
+        ],
+    );
+    let held = DbLock::acquire(&own, Duration::ZERO).unwrap();
+    let out = exec(w, &["show"]);
+    assert_eq!((out.code, out.stderr.as_str()), (0, ""));
+    assert_eq!(out.stdout, "Asked Yunagi to come to the front.\n");
+    let out = exec(w, &["show", "--note"]);
+    assert_eq!((out.code, out.stderr.as_str()), (0, ""));
+    let out = exec(w, &["--json", "show"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.json(), json!({"requested": true, "launched": false}));
+    drop(held);
+    let requests = app.finish_requests();
+    let sent: Vec<(&str, &Value)> = requests
+        .iter()
+        .map(|r| (r["method"].as_str().unwrap(), &r["params"]))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("show_app", &json!({})),
+            ("show_app", &json!({"note": true})),
+            ("show_app", &json!({})),
+        ]
+    );
+    // 引数の誤り
+    for args in [
+        &["show", "extra"][..],
+        &["show", "--nte"],
+        &["show", "--note=1"],
+    ] {
+        let out = exec(w, args);
+        assert_eq!(out.code, 2, "{args:?}: {}", out.stderr);
+    }
+}
+
+fn show_starts_the_app(w: &World) {
+    let own = seed(w);
+    // 動いていなければ起動する（1 回だけ）。起動の後、待ち受けが開くまで試し直す。偽のアプリは、
+    // 起動されたのを見てから待ち受けを始める
+    let marker = w.path("launched");
+    let script = app_script(
+        w,
+        "fake-app",
+        &format!("echo started >> {}", marker.display()),
+    );
+    let starter = {
+        let (marker, own) = (marker.clone(), own.clone());
+        thread::spawn(move || {
+            let begun = Instant::now();
+            while !marker.exists() {
+                assert!(begun.elapsed() < Duration::from_secs(10), "never launched");
+                thread::sleep(Duration::from_millis(10));
+            }
+            // 起動してから待ち受けが開くまで、少しかかる
+            thread::sleep(Duration::from_millis(300));
+            FakeApp::start(&own, vec![Conn::Answer(json!({"requested": true}))]).finish_requests()
+        })
+    };
+    let started = Instant::now();
+    let out = exec_show(
+        w,
+        &["show", "--note"],
+        Launch::Program(script),
+        Duration::from_secs(8),
+    );
+    assert_eq!((out.code, out.stderr.as_str()), (0, ""));
+    assert_eq!(
+        out.stdout,
+        "Started Yunagi and asked it to come to the front.\n"
+    );
+    // 待ち受けが開くのを待った（接続の手順の期限 600 ミリ秒より長く）
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    let requests = starter.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["method"], "show_app");
+    assert_eq!(requests[0]["params"], json!({"note": true}));
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "started\n");
+}
+
+fn show_no_app(w: &World) {
+    seed(w);
+    // 起動先が実行できない
+    let out = exec_show(
+        w,
+        &["show"],
+        Launch::Program(PathBuf::from("/nonexistent/yunagi-app")),
+        Duration::from_millis(400),
+    );
+    assert_eq!(out.code, 8, "{}", out.stderr);
+    assert!(out.stderr.contains("launch_failed"), "{}", out.stderr);
+    // アプリが見つからない（環境変数が存在しない場所を指す）：何も起動しない
+    // SAFETY: 試験は 1 つのスレッドで順に走る
+    unsafe { std::env::set_var(show::APP_ENV, "/nonexistent/Yunagi.AppImage") };
+    let out = exec_show(
+        w,
+        &["--json", "show"],
+        Launch::Os,
+        Duration::from_millis(400),
+    );
+    unsafe { std::env::remove_var(show::APP_ENV) };
+    assert_eq!(out.code, 8, "{}", out.stderr);
+    assert_eq!(out.json()["error"]["reason"], "app_not_found");
+    assert!(
+        out.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("YUNAGI_APP")
+    );
+    // 起動したが、すぐに異常終了した：期限を待たずに伝える
+    let crash = app_script(w, "crash", "exit 3");
+    let started = Instant::now();
+    let out = exec_show(w, &["show"], Launch::Program(crash), Duration::from_secs(5));
+    assert_eq!(out.code, 8, "{}", out.stderr);
+    assert!(out.stderr.contains("launch_failed"), "{}", out.stderr);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    // 起動したが、待ち受けが開かない：期限で、起動はしたことが分かる
+    let silent = app_script(w, "silent", "exit 0");
+    let started = Instant::now();
+    let out = exec_show(
+        w,
+        &["show"],
+        Launch::Program(silent),
+        Duration::from_millis(500),
+    );
+    assert_eq!(out.code, 8, "{}", out.stderr);
+    assert!(out.stderr.contains("start_timeout"), "{}", out.stderr);
+    assert!(started.elapsed() >= Duration::from_millis(500));
+}
+
+fn show_app_answers_with_an_error(w: &World) {
+    let own = seed(w);
+    let marker = w.path("launched");
+    let script = app_script(
+        w,
+        "fake-app",
+        &format!("echo started >> {}", marker.display()),
+    );
+    // 待ち受けはあるが使えない（認証・版）：アプリはそこにいるので、起動しない
+    for reason in ["auth_failed", "version_mismatch"] {
+        let app = FakeApp::start(&own, vec![Conn::HelloError(reason)]);
+        let out = exec_show(
+            w,
+            &["show"],
+            Launch::Program(script.clone()),
+            Duration::from_secs(1),
+        );
+        assert_eq!(out.code, 8, "{}", out.stderr);
+        assert!(out.stderr.contains(reason), "{}", out.stderr);
+        assert!(app.finish().is_empty());
+    }
+    // アプリが返したエラーは、そのまま返す
+    let error = json!({"code": "busy", "message": "no"});
+    let app = FakeApp::start(&own, vec![Conn::AppError(error)]);
+    let out = exec_show(
+        w,
+        &["show"],
+        Launch::Program(script),
+        Duration::from_secs(1),
+    );
+    assert_eq!(out.code, 7, "{}", out.stderr);
+    assert_eq!(app.finish(), ["show_app"]);
+    assert!(!marker.exists(), "the app must not be started");
+}
+
+fn show_too_long(w: &World) {
+    // ソケットのパスが長すぎて、アプリに API で頼めない：起動の引き渡し（アプリ側の単一インスタンス）が
+    // 頼り。起動したプロセスが、引き渡して成功で終われば成功
+    let long = "a".repeat(120);
+    w.use_data_home(&long);
+    assert!(yunagi_api::socket_path(&w.own()).as_os_str().len() > 107);
+    let marker = w.path("launched");
+    let handover = app_script(
+        w,
+        "handover",
+        &format!("echo started >> {}\nexit 0", marker.display()),
+    );
+    let out = exec_show(
+        w,
+        &["--json", "show"],
+        Launch::Program(handover),
+        Duration::from_secs(5),
+    );
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.json(), json!({"requested": true, "launched": true}));
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "started\n");
+    // 起動に失敗したら失敗
+    let crash = app_script(w, "crash", "exit 1");
+    let out = exec_show(w, &["show"], Launch::Program(crash), Duration::from_secs(5));
+    assert_eq!(out.code, 8, "{}", out.stderr);
+    assert!(out.stderr.contains("launch_failed"), "{}", out.stderr);
 }

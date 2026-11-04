@@ -50,6 +50,12 @@ tauri-plugin-dialog = "=2.8.4"
 # src-tauri/src/global_shortcut.rs）。登録は Rust 側だけで行い、画面側のパッケージは入れない。
 # 3.x は alpha なので 2.x の最新に固定する
 tauri-plugin-global-shortcut = "=2.4.1"
+# 2 つ目のアプリの起動を、動いているアプリに引き渡して終わる（`yunagi show` が、データベースを開く前の
+# 画面の間にもう 1 つアプリを起動してしまわないようにする。docs/design/01-architecture.md 3.5、
+# src-tauri/src/lib.rs）。Linux は D-Bus、macOS は UNIX ドメインソケット、Windows は名前付きの
+# ミューテックスで見つける。3.x は alpha なので 2.x の最新（2026-10-28 公開。2.5.5 は引き渡しが
+# 受け入れられてから終了する修正を含む）に固定する
+tauri-plugin-single-instance = "=2.5.5"
 # SQLite（docs/design/01-architecture.md 3章）。bundled で SQLite 本体（FTS5 を含む）を
 # 同梱してビルドし、OS ごとの SQLite の版の違いに左右されないようにする。
 # backup はマイグレーション前のバックアップと失敗時の復元に使う（SQLite のオンラインバックアップ）

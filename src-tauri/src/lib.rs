@@ -34,6 +34,8 @@ pub const EVENT_CHANGED: &str = "changed";
 pub const EVENT_TODAY_CHANGED: &str = "today-changed";
 /// 定期バックアップを作れなかった（[`types::BackupFailed`]）。
 pub const EVENT_BACKUP_FAILED: &str = "backup-failed";
+/// 窓を前面に出した（[`types::ShowRequested`]）。`yunagi show` と、2 つ目の起動の引き渡し。
+pub const EVENT_SHOW_REQUESTED: &str = "show-requested";
 
 /// 画面から呼べるコマンドの一覧。
 pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
@@ -101,15 +103,32 @@ fn emit<R: Runtime>(app: &AppHandle<R>, notice: Notice) {
         Notice::Changed(p) => app.emit(EVENT_CHANGED, p),
         Notice::TodayChanged(p) => app.emit(EVENT_TODAY_CHANGED, p),
         Notice::BackupFailed(p) => app.emit(EVENT_BACKUP_FAILED, p),
+        Notice::ShowRequested(p) => show_window(app, p),
     };
     if let Err(e) = result {
         eprintln!("yunagi: failed to notify the screen: {e}");
     }
 }
 
+/// 窓を前面に出し（OS 全体のショートカットと同じ部品。[`global_shortcut::bring_to_front`]）、画面に
+/// `show-requested` を知らせる。窓が無くても、画面への知らせは出す（窓の操作の失敗はログに出るだけ）。
+fn show_window<R: Runtime>(app: &AppHandle<R>, request: types::ShowRequested) -> tauri::Result<()> {
+    global_shortcut::bring_to_front(app);
+    app.emit(EVENT_SHOW_REQUESTED, request)
+}
+
 /// アプリを起動する。画面のスレッドを止めないよう、データベースは別のスレッドで開く。
 pub fn run() {
     let app = tauri::Builder::default()
+        // 2 つ目の起動は、動いているアプリに引き渡して終わる（先に入れる。データベースを開く前に判定する
+        // ため）。動いているアプリは窓を前面に出す。データベースを見つけられない・開けない間の起動時の
+        // 画面は、ロックも待ち受けも持たないので、`yunagi show` はこの引き渡しで前面に出す
+        // （アーキテクチャ設計書 3.5）。D-Bus が使えないなど、見つけられない環境では、そのまま起動する
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Err(e) = show_window(app, types::ShowRequested { note: false }) {
+                eprintln!("yunagi: failed to notify the screen: {e}");
+            }
+        }))
         // フォルダを選ぶ OS のダイアログ（画面から使う。capabilities/default.json）
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(invoke_handler())
