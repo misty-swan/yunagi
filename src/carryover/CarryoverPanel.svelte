@@ -139,7 +139,7 @@
       return;
     }
     // ボタンの上の Enter はそのボタンを押す。修飾キー付きの Enter（Mod+Enter など）では確定しない
-    // （まだ取り消せないため。画面設計書 11章）
+    // （確定は Mod+Z で取り消せず、押し間違いを防ぐため。操作仕様書 2章「取り消し・やり直し」）
     if (e.key === "Enter" && plain && !e.shiftKey && target.tagName !== "BUTTON") {
       e.preventDefault();
       if (!e.repeat) void carry.confirm("selected");
