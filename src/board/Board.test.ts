@@ -313,10 +313,24 @@ test("持ち越し済みの項目と取りやめた TODO は、本文を変え�
       expect(e.defaultPrevented).toBe(true);
       expect(notice.text).toBe(expected[i]);
     }
-    // Mod との組み合わせ（コピーなど）は知らせない
+    // Option+Backspace も拒む。Mod との組み合わせ（コピーなど）と、Windows・Linux の Alt+文字は知らせず、止めない
     notice.text = "";
-    tryKey(row, { key: "c", code: "KeyC", ctrlKey: true });
-    expect(notice.text).toBe("");
+    expect(tryKey(row, { key: "Backspace", altKey: true })).toBe(true);
+    expect(notice.text).toBe(expected[i]);
+    for (const init of [{ key: "c", code: "KeyC", ctrlKey: true }, { key: "f", altKey: true }]) {
+      notice.text = "";
+      expect(tryKey(row, init)).toBe(false);
+      expect(notice.text).toBe("");
+    }
+    // 落とせる場所にして、ドロップを受ける（dragover を止めないと drop が届かない）
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    row.dispatchEvent(over);
+    expect(over.defaultPrevented).toBe(true);
+    // 行の中のボタンのキーは、行が奪わない
+    const btn = row.querySelector<HTMLElement>(".chk")!;
+    const inner = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    btn.dispatchEvent(inner);
+    expect(inner.defaultPrevented).toBe(false);
   }
   expect(calls.some((c) => c.cmd === "save_item" || c.cmd === "add_item")).toBe(false);
   expect(rows.map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "やめた"]);
@@ -326,6 +340,25 @@ test("持ち越し済みの項目と取りやめた TODO は、本文を変え�
   expect(notice.text).toBe("");
   await until(() => $$(".r-todo .item").length === 3);
   expect($$(".r-todo .item").map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "", "やめた"]);
+});
+
+test("持ち越し済みの障害の解消メモを押しても、入力欄を開かず知らせる", async () => {
+  const { notice } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        blockers: [
+          bi(item(A, "詰まり", { kind: "blocker", status: "resolved", resolutionNote: "聞いた" }), {
+            carriedTo: { id: D, date: "2026-11-04" },
+          }),
+        ],
+      },
+    },
+  });
+  $(".r-blk .item .memo")!.click();
+  flushSync();
+  expect($(".r-blk .memo-edit")).toBeNull();
+  expect(notice.text).toBe("11.04 Wed へ持ち越し済みです");
 });
 
 test("空の TODO で Enter を押して入力すると項目を作り、チェック欄で完了にする", async () => {

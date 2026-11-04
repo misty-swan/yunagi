@@ -140,6 +140,8 @@
   function onTextKey(e: KeyboardEvent) {
     // IME の変換中のキー（候補を選ぶ ↑↓ など）は、IME に任せる（操作仕様書 3章）
     if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+    // 変えられない行では、行そのもの（li）へのキーだけを扱う（行の中のボタンのキーは、そのボタンに任せる）
+    if (lock !== null && e.target !== li) return;
     if (justComposed && e.key === "Enter") {
       justComposed = false;
       e.preventDefault();
@@ -197,9 +199,13 @@
 
   /** 文字を打つキーか（Mod・Ctrl との組み合わせは除く。AltGr は Ctrl+Alt として届くので文字を打つ）。 */
   function isTyping(e: KeyboardEvent): boolean {
-    if (e.key === "Backspace" || e.key === "Delete") return !e.ctrlKey && !e.metaKey && !e.altKey;
+    // Mod との組み合わせ（Mod+Backspace の削除など）は、呼ぶ前に操作として扱い終えている
+    if (e.key === "Backspace" || e.key === "Delete") return true;
     if (e.key.length !== 1) return false;
-    return !(e.ctrlKey || e.metaKey) || e.getModifierState?.("AltGraph") === true;
+    if (e.getModifierState?.("AltGraph") === true) return true;
+    if (e.ctrlKey || e.metaKey) return false;
+    // Windows・Linux の Alt+文字はメニューなどのキー。文字を打つのは macOS の Option だけ
+    return mac || !e.altKey;
   }
 
   // 変えられない行への貼り付け・切り取り・文のドロップ（入力欄が無いので何も起きないが、知らせる）
@@ -268,6 +274,7 @@
   onkeydown={lock !== null ? onTextKey : undefined}
   onpaste={lock !== null ? onLockedEdit : undefined}
   oncut={lock !== null ? onLockedEdit : undefined}
+  ondragover={lock !== null ? (e) => e.preventDefault() : undefined}
   ondrop={lock !== null ? onLockedEdit : undefined}
 >
   {#if row.unseen}
