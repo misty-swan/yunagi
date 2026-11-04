@@ -101,6 +101,17 @@ impl Section {
             .take(self.lines.len())
     }
 
+    /// 見出しの行から区間の終わりまでの行を改行でつないだもの（見出しの無い区間では [`Self::text`]
+    /// と同じ）。`get_note --heading` が返す区間の本文。
+    pub fn text_with_heading(&self, body: &str) -> String {
+        let start = self.heading.as_ref().map_or(self.lines.start, |h| h.line);
+        lines(body)
+            .skip(start - 1)
+            .take(self.lines.end - start)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// 区間の中身の行を改行でつないだもの。
     pub fn text(&self, body: &str) -> String {
         self.lines_in(body).collect::<Vec<_>>().join("\n")

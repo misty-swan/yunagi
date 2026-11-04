@@ -4,6 +4,9 @@
 //! はじめに [`require_scope`] で権限を確かめる（アーキテクチャ設計書 4章 5。どの経路でも
 //! 同じ判定を通す）。画面の状態（保存の失敗中か、利用者が入力中か。アーキテクチャ設計書 4.1）は
 //! [`UiState`] で受け取る。
+//!
+//! 読み取り（`get_board`・`open_board`・`get_note`）も同じく、呼び出し元のクライアントを受け取り、
+//! はじめに `read` を確かめる（[`read_as`]、失敗は [`ReadError`]。MCP・CLI 仕様書 2章）。
 
 use rusqlite::Connection;
 
@@ -147,6 +150,71 @@ where
         }
         .into())
     }
+}
+
+/// エージェント・CLI の読み取りに共通の失敗：権限が無いか、読み取りに失敗した。読み取りは画面の
+/// 保存の失敗中でも受け付けるので、`storage_unavailable` は無い（MCP・CLI 仕様書 4.3）。引数の
+/// 誤りや対象なしがある読み取りは、これを含む自分のエラーの型を持つ（`get_note` の
+/// [`NoteReadError`](crate::domain::text_doc::NoteReadError)）。
+#[derive(Debug)]
+pub enum ReadError {
+    /// `read` スコープが許可されていない（`permission_denied`）。何も読んでいない。
+    PermissionDenied(PermissionDenied),
+    /// 読み取りに失敗した。
+    Storage(StorageError),
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionDenied(e) => e.fmt(f),
+            Self::Storage(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PermissionDenied(_) => None,
+            Self::Storage(e) => Some(e),
+        }
+    }
+}
+
+impl From<PermissionDenied> for ReadError {
+    fn from(e: PermissionDenied) -> Self {
+        Self::PermissionDenied(e)
+    }
+}
+
+impl From<StorageError> for ReadError {
+    fn from(e: StorageError) -> Self {
+        Self::Storage(e)
+    }
+}
+
+impl From<rusqlite::Error> for ReadError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Storage(e.into())
+    }
+}
+
+/// エージェント・CLI の読み取りの共通の手順：読み取りのトランザクションの中で、`client_id` に
+/// `read` が許可されているかをはじめに確かめてから `f` を行う。読み取りの入り口は、これを通す
+/// （確かめ忘れを防ぐため）。
+pub fn read_as<T, E>(
+    conn: &Connection,
+    client_id: Ulid,
+    f: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<PermissionDenied> + From<StorageError> + From<rusqlite::Error>,
+{
+    crate::storage::in_read_transaction(conn, || {
+        require_scope::<E>(conn, client_id, Scope::Read)?;
+        f()
+    })
 }
 
 /// 画面の保存の失敗中なら [`StorageUnavailable`]（アーキテクチャ設計書 4.1）。
