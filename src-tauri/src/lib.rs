@@ -8,6 +8,7 @@
 //!   （[`AppCore::agent_write`]）。
 //! - 起動・データベースを開く・定期バックアップ・日付の切り替わり：[`AppCore`]。
 
+pub mod api;
 pub mod app_core;
 #[cfg(test)]
 mod bindings;

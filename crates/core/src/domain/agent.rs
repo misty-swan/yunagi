@@ -15,6 +15,105 @@ use crate::storage::table::agent_client::{self, Scope};
 use crate::storage::table::text_doc::TextDoc;
 use crate::storage::{StorageError, Ulid};
 
+/// クライアントの識別子（`yunagi mcp --client <name>`）の長さの上限（バイト数）。設定画面と
+/// change_log に出るので、長すぎるものは断る。
+pub const MAX_CLIENT_NAME_LEN: usize = 64;
+
+/// 識別子 `name` が使える形か：1〜[`MAX_CLIENT_NAME_LEN`] 文字の、英小文字・数字で始まり、英小文字・
+/// 数字・`-`・`_`・`.` だけでできたもの（`claude-code`・`codex` など）。
+pub fn is_valid_client_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= MAX_CLIENT_NAME_LEN
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
+}
+
+/// 識別子 `name` の呼び出し元（agent_client）の id を求める。
+///
+/// - `name` が無い（識別子のない接続）なら `unknown`（[`agent_client::UNKNOWN_ID`]）。
+/// - すでに登録された識別子（固定の `cli`・`unknown` を含む）ならその行。
+/// - 初めての識別子は `read` だけの権限で登録する（MCP・CLI 仕様書 2章。権限を足すのは利用者）。
+///
+/// 識別子は名乗るだけのもので、本人であることは確かめない（SECURITY.md 4.2）。使えない形の識別子は
+/// [`ClientLookup::InvalidName`]、登録の数が [`MAX_CLIENTS`] に達していれば [`ClientLookup::TooMany`]
+/// （どちらも何も登録しない）。最後に接続した時刻の更新は [`touch_client`]（失敗しても依頼を
+/// 失敗させないよう、別にしてある）。
+pub fn client_for(
+    conn: &Connection,
+    name: Option<&str>,
+    now: jiff::Timestamp,
+) -> Result<ClientLookup, StorageError> {
+    let Some(name) = name else {
+        return Ok(ClientLookup::Known(agent_client::UNKNOWN_ID));
+    };
+    if !is_valid_client_name(name) {
+        return Ok(ClientLookup::InvalidName);
+    }
+    if let Some(client) = agent_client::get_by_name(conn, name)? {
+        return Ok(ClientLookup::Known(client.id));
+    }
+    // 識別子は名乗るだけなので、トークンを持つ相手が名前を変えて登録を増やし続けられないよう、
+    // 登録の数に上限を付ける
+    if agent_client::list(conn)?.len() >= MAX_CLIENTS {
+        return Ok(ClientLookup::TooMany);
+    }
+    let id = Ulid::generate();
+    agent_client::insert(
+        conn,
+        &agent_client::AgentClient {
+            id,
+            name: name.to_owned(),
+            scopes: vec![Scope::Read],
+            created_at: now,
+            last_seen_at: Some(now),
+        },
+    )?;
+    Ok(ClientLookup::Registered(id))
+}
+
+/// 登録できるクライアント（agent_client の行）の数の上限（固定の `cli`・`unknown` を含む）。
+pub const MAX_CLIENTS: usize = 64;
+
+/// [`client_for`] の結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientLookup {
+    /// すでにある（識別子なしの `unknown`、固定の `cli`、登録済みの識別子）。
+    Known(Ulid),
+    /// 初めての識別子を、`read` だけの権限で登録した（設定画面のエージェントの一覧が変わる）。
+    Registered(Ulid),
+    /// 識別子の形が誤っている。何も登録していない。
+    InvalidName,
+    /// 登録の数が [`MAX_CLIENTS`] に達していて、新しい識別子は登録できない。
+    TooMany,
+}
+
+/// 最後に接続した時刻を、これより新しければ更新しない間隔（依頼のたびに書き込みが増えないように）。
+pub const TOUCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// クライアント `client_id` の最後に接続した時刻を `now` にする。前の時刻から [`TOUCH_INTERVAL`] たって
+/// いなければ書かない（設定画面に出す「最後の接続」は分の精度で足り、読み取りのたびに書き込みを
+/// 増やさないため）。
+pub fn touch_client(
+    conn: &Connection,
+    client_id: Ulid,
+    now: jiff::Timestamp,
+) -> Result<(), StorageError> {
+    let recent = agent_client::get(conn, client_id)?
+        .and_then(|c| c.last_seen_at)
+        .is_some_and(|seen| {
+            now.duration_since(seen)
+                .try_into()
+                .is_ok_and(|d: std::time::Duration| d < TOUCH_INTERVAL)
+        });
+    if !recent {
+        agent_client::update_last_seen(conn, client_id, now)?;
+    }
+    Ok(())
+}
+
 /// エージェント・CLI の呼び出し元。
 #[derive(Clone, Copy)]
 pub struct Agent<'a> {
@@ -337,6 +436,87 @@ mod tests {
             check(conn, CLI_ID, Scope::Read),
             Err(Failure::Storage)
         ));
+    }
+
+    #[test]
+    fn clients_are_looked_up_and_registered_with_read_only() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let now = jiff::Timestamp::from_second(1_000_000).unwrap();
+        // 識別子なしは unknown、固定の cli は既存の行、使えない形は登録しない
+        assert_eq!(
+            client_for(conn, None, now).unwrap(),
+            ClientLookup::Known(agent_client::UNKNOWN_ID)
+        );
+        assert_eq!(
+            client_for(conn, Some("cli"), now).unwrap(),
+            ClientLookup::Known(CLI_ID)
+        );
+        assert_eq!(
+            client_for(conn, Some("Bad Name"), now).unwrap(),
+            ClientLookup::InvalidName
+        );
+        assert_eq!(agent_client::get_by_name(conn, "Bad Name").unwrap(), None);
+        // 初めての識別子は read だけで登録され、2 回目は同じ id
+        let ClientLookup::Registered(id) = client_for(conn, Some("claude-code"), now).unwrap()
+        else {
+            panic!("not registered");
+        };
+        let row = agent_client::get(conn, id).unwrap().unwrap();
+        assert_eq!(row.scopes, vec![Scope::Read]);
+        assert_eq!(
+            client_for(conn, Some("claude-code"), now).unwrap(),
+            ClientLookup::Known(id)
+        );
+    }
+
+    #[test]
+    fn the_number_of_registered_clients_is_capped() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let now = jiff::Timestamp::from_second(1_000_000).unwrap();
+        let existing = agent_client::list(conn).unwrap().len();
+        for i in existing..MAX_CLIENTS {
+            let result = client_for(conn, Some(&format!("agent-{i}")), now).unwrap();
+            assert!(matches!(result, ClientLookup::Registered(_)), "{i}");
+        }
+        assert_eq!(
+            client_for(conn, Some("one-too-many"), now).unwrap(),
+            ClientLookup::TooMany
+        );
+        // 登録済みの識別子と、固定の 2 つは、上限に関係なく使える
+        assert!(matches!(
+            client_for(conn, Some("agent-2"), now).unwrap(),
+            ClientLookup::Known(_)
+        ));
+        assert_eq!(
+            client_for(conn, Some("cli"), now).unwrap(),
+            ClientLookup::Known(CLI_ID)
+        );
+    }
+
+    #[test]
+    fn touch_client_writes_only_when_the_last_time_is_old() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let t0 = jiff::Timestamp::from_second(1_000_000).unwrap();
+        let seen = |conn: &Connection| {
+            agent_client::get(conn, CLI_ID)
+                .unwrap()
+                .unwrap()
+                .last_seen_at
+        };
+        assert_eq!(seen(conn), None);
+        touch_client(conn, CLI_ID, t0).unwrap();
+        assert_eq!(seen(conn), Some(t0));
+        // 間隔の中なら書かない
+        let soon = t0 + TOUCH_INTERVAL - std::time::Duration::from_secs(1);
+        touch_client(conn, CLI_ID, soon).unwrap();
+        assert_eq!(seen(conn), Some(t0));
+        // 間隔を過ぎたら書く
+        let later = t0 + TOUCH_INTERVAL + std::time::Duration::from_secs(1);
+        touch_client(conn, CLI_ID, later).unwrap();
+        assert_eq!(seen(conn), Some(later));
     }
 
     #[test]

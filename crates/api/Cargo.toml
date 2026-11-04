@@ -1,0 +1,29 @@
+[package]
+name = "yunagi-api"
+description = "Yunagi のローカル API の取り決め（プロトコル・トークン・UNIX ソケット／名前付きパイプ）。アプリ（待ち受け）と yunagi（接続）が共有する"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+yunagi-core.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# 名前付きパイプ（Windows。src/transport/windows.rs）。Tauri がすでに使っている版にそろえ、
+# 新しく取り込むコードを増やさない
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true

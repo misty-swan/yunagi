@@ -10,12 +10,12 @@
 //!
 //! Tauri には依存しない（知らせ先は [`Notify`] で受け取る）。Tauri とのつなぎは `crate::run`。
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
-use std::{fs, io};
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -33,6 +33,7 @@ use yunagi_core::storage::{
     StorageError, Ulid, data_dir,
 };
 
+use crate::api::{ApiOptions, ApiServer, ApiState, ApiUnavailable};
 use crate::screen::ScreenState;
 use crate::types::{
     BackupEntry, BackupFailed, ChangeSource, Changed, CommandError, ItemOutcome, RejectReason,
@@ -58,6 +59,25 @@ pub type Notify = Box<dyn Fn(Notice) + Send + Sync>;
 /// 今日の論理日付が変わったかを確かめる間隔（[`AppCore::start`]）。切り替わりを知るのは最大でこれだけ
 /// 遅れる。時計を見るだけでなく設定の切り替わり時刻も読み直すので、設定の変更にも追いつく。
 pub const TODAY_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+/// ローカル API の依頼を、待っても処理できなかった（保存先の変更・復元の最中、またはデータベースを
+/// 開いていない）。何も反映していない（CLI・MCP には `busy`。CLI・MCP 仕様書 4.3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Busy;
+
+/// データベースの使用を待つ間に、取り直しを試みる間隔（[`AppCore::api_write`]）。
+const DB_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+/// 取り直しの間隔の上限。
+const DB_RETRY_MAX_INTERVAL: Duration = Duration::from_millis(50);
+
+/// ローカル API の待ち受けの状態（[`AppCore`] が持つ）。
+enum ApiSlot {
+    /// 待ち受けていない（データベースを開いていない間、閉じた後）。
+    Stopped,
+    Running(ApiServer),
+    /// 待ち受けようとして、始められなかった。
+    Unavailable(ApiUnavailable),
+}
 
 /// データベースの状態。
 enum Slot {
@@ -101,6 +121,12 @@ pub struct AppCore {
     /// 動いている間の保存先の変更・選び直し・復元の最中か（[`AppCore::begin_maintenance`]）。
     /// 最中は、定期バックアップを始めない。
     maintenance: AtomicBool,
+    /// ローカル API の待ち受け（アーキテクチャ設計書 4.4・4.6）。データベースを開き終えている間
+    /// だけ動く。
+    api: Mutex<ApiSlot>,
+    api_options: Mutex<ApiOptions>,
+    /// 閉じ始めた（[`AppCore::close`]）。以後、ローカル API の待ち受けを始めない。
+    closing: AtomicBool,
     notify: Notify,
 }
 
@@ -248,6 +274,9 @@ impl AppCore {
             backup: Mutex::new(BackupState::default()),
             restored: Mutex::new(None),
             maintenance: AtomicBool::new(false),
+            api: Mutex::new(ApiSlot::Stopped),
+            api_options: Mutex::new(ApiOptions::default()),
+            closing: AtomicBool::new(false),
             notify,
         })
     }
@@ -435,6 +464,9 @@ impl AppCore {
         *slot = reopened;
         drop(slot);
         if !opened {
+            // 開き直せず、ロックも離れた。待ち受けを止める（待っていた依頼は、データベースが開いて
+            // いないので何も反映せずに `busy` で終わる）
+            self.stop_api();
             self.notify(Notice::Startup(self.startup()));
         }
         match result {
@@ -567,6 +599,10 @@ impl AppCore {
             }
             *current = slot;
         }
+        // ロックを持ち、データベースを開き終えた：ここから待ち受ける（4.4）
+        if ready {
+            self.start_api();
+        }
         self.notify(Notice::Startup(self.startup()));
         if ready {
             self.check_today(now());
@@ -674,15 +710,160 @@ impl AppCore {
         client_id: Ulid,
         f: impl FnOnce(&Connection, &Agent<'_>) -> Result<T, E>,
     ) -> Result<Result<T, E>, CommandError> {
-        let agent = Agent {
-            client_id,
-            ui: &self.screen,
-        };
-        let result = self.with_db(|db| Ok(f(db.connection(), &agent)))?;
+        // ローカル API の書き込み（`api_write`）と同じ経路。待つ期限だけが無い（ほぼ無期限）
+        let far = Instant::now() + Duration::from_secs(60 * 60 * 24 * 365);
+        self.api_write(far, |_| Ok(client_id), f)
+            .map_err(|Busy| CommandError::NotReady)
+    }
+
+    /// 初めての識別子の登録（設定画面のエージェントの一覧が変わる）を画面に知らせる。データの
+    /// 書き込みではないので、`changed` の `by` はエージェント。
+    pub fn notify_agent_registered(&self) {
+        self.notify_changed(ChangeSource::Agent);
+    }
+
+    /// [`AppCore::agent_write`] の、ローカル API 用の版。データベースを使うのを待つのは最大
+    /// [`ApiOptions::db_wait`]（既定 5 秒）までで、待っても使えなければ（保存先の変更・復元の最中、
+    /// またはデータベースを開いていない）何も反映せずに [`Busy`]（CLI・MCP には `busy`）。
+    /// それ以外は [`AppCore::agent_write`] と同じ（変えたら `changed`（`by: agent`）を知らせる）。
+    ///
+    /// `deadline` は依頼ごとに [`AppCore::api_deadline`] で 1 回だけ求める。呼び出し元のクライアントを
+    /// 求める処理 `client` も、同じ錠を持つ間に（`f` の前に）行う（錠を 2 回取って待ちが 2 倍になり、
+    /// 5 秒を超えないように）。`client` が失敗したら `f` は行わない。
+    pub fn api_write<T: Changes, E>(
+        &self,
+        deadline: Instant,
+        client: impl FnOnce(&Connection) -> Result<Ulid, E>,
+        f: impl FnOnce(&Connection, &Agent<'_>) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Busy> {
+        let result = self.with_db_within(deadline, |db| {
+            let client_id = client(db.connection())?;
+            let agent = Agent {
+                client_id,
+                ui: &self.screen,
+            };
+            f(db.connection(), &agent)
+        })?;
+        self.notify_agent_write(&result);
+        Ok(result)
+    }
+
+    /// ローカル API の読み取り。待ちは [`AppCore::api_write`] と同じ。
+    pub fn api_read<T>(
+        &self,
+        deadline: Instant,
+        f: impl FnOnce(&Connection) -> T,
+    ) -> Result<T, Busy> {
+        self.with_db_within(deadline, |db| f(db.connection()))
+    }
+
+    /// 依頼がデータベースを使えるまで待つ期限（いまから [`ApiOptions::db_wait`] 後）。
+    pub fn api_deadline(&self) -> Instant {
+        let now = Instant::now();
+        now.checked_add(self.api_options().db_wait)
+            .unwrap_or_else(|| now + Duration::from_secs(60 * 60 * 24 * 365))
+    }
+
+    /// 開いたデータベースで `f` を行う。ロックを待つのは `deadline` まで。待っても取れないか、開いて
+    /// いなければ [`Busy`]（`f` は行わない）。ロックを離す前の待ち受けの停止が、ここで待つ依頼を
+    /// 巻き込んで止まらないよう、ロックの待ちに期限を付ける。
+    ///
+    /// 標準の錠には期限付きの取得が無いので、取り直しで待つ。間隔は 5 ミリ秒から 50 ミリ秒まで
+    /// 倍々に延ばす（長い作業の間に多くの依頼が待っても、起きる回数を抑えるため）。
+    fn with_db_within<T>(
+        &self,
+        deadline: Instant,
+        f: impl FnOnce(&Database) -> T,
+    ) -> Result<T, Busy> {
+        let mut interval = DB_RETRY_INTERVAL;
+        loop {
+            let guard = match self.db.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(Busy);
+                    }
+                    thread::sleep(interval.min(deadline - now));
+                    interval = (interval * 2).min(DB_RETRY_MAX_INTERVAL);
+                    continue;
+                }
+            };
+            return match &*guard {
+                Slot::Open(db) => Ok(f(db)),
+                _ => Err(Busy),
+            };
+        }
+    }
+
+    /// エージェントの書き込みが変えていたら `changed`（`by: agent`）を知らせる。
+    fn notify_agent_write<T: Changes, E>(&self, result: &Result<T, E>) {
         if result.as_ref().is_ok_and(Changes::changed) {
             self.notify_changed(ChangeSource::Agent);
         }
-        Ok(result)
+    }
+
+    /// ローカル API の待ち受けの設定（待ち時間など）。
+    pub fn api_options(&self) -> ApiOptions {
+        *lock(&self.api_options)
+    }
+
+    /// ローカル API の待ち受けの設定を変える（試験で待ち時間を短くする）。次に待ち受けを始めるときと、
+    /// 以後の依頼から効く。
+    pub fn set_api_options(&self, options: ApiOptions) {
+        *lock(&self.api_options) = options;
+    }
+
+    /// ローカル API の状態（動作中か、接続中のクライアント数。設定画面のエージェント区分が使う。
+    /// アーキテクチャ設計書 4.6）。
+    pub fn api_state(&self) -> ApiState {
+        match &*lock(&self.api) {
+            ApiSlot::Stopped => ApiState::Stopped,
+            ApiSlot::Running(server) => ApiState::Listening {
+                connections: server.connections(),
+            },
+            ApiSlot::Unavailable(u) => ApiState::Unavailable(u.clone()),
+        }
+    }
+
+    /// ローカル API の待ち受けを始める（ロックを持ち、データベースを開き終えた直後。4.4）。すでに
+    /// 動いていれば何もしない。始められなければ、理由を標準エラーと [`AppCore::api_state`] に残す
+    /// （アプリは止めない。CLI・MCP は待ち受けが無いものとして直接モードを試す）。
+    fn start_api(self: &Arc<Self>) {
+        let mut slot = lock(&self.api);
+        if matches!(*slot, ApiSlot::Running(_)) {
+            return;
+        }
+        // 開き終えてから始めるまでの間に閉じ始めていたら（アプリの終了）、始めない。ロックを離した
+        // 後で待ち受けが始まらないようにする。`close` は、先に `closing` を立ててから待ち受けを止める
+        // （この `api` の錠を取る）ので、ここの確かめと止めるのが行き違わない
+        if self.closing.load(Ordering::Acquire) || !matches!(*lock(&self.db), Slot::Open(_)) {
+            return;
+        }
+        *slot = match data_dir::default_dir()
+            .map_err(|e| ApiUnavailable::other(&e))
+            .and_then(|dir| ApiServer::start(self, &dir))
+        {
+            Ok(server) => ApiSlot::Running(server),
+            Err(unavailable) => {
+                eprintln!(
+                    "yunagi: the local API did not start: {}",
+                    unavailable.detail
+                );
+                ApiSlot::Unavailable(unavailable)
+            }
+        };
+    }
+
+    /// ローカル API の待ち受けを止める：新しい接続を受け付けなくし、処理中の依頼を最後まで行って
+    /// 応答を返し、接続を閉じて、ソケットとトークンのファイルを消す。止め終えてから返る。
+    /// ロックを離す前（アプリの終了、開けなかった状態に移るとき）に呼ぶ。動いていなければ何もしない。
+    fn stop_api(&self) {
+        let slot = std::mem::replace(&mut *lock(&self.api), ApiSlot::Stopped);
+        if let ApiSlot::Running(server) = slot {
+            server.stop();
+        }
     }
 
     /// 画面の入力中の状態。画面から知らされたものを [`ScreenState::report`] で置き換える。
@@ -770,6 +951,10 @@ impl AppCore {
     /// 終了時）。待たずに離すと、写している途中で CLI・MCP がロックを取ってデータベースを書き換えうる
     /// ため。閉じた後のコマンドは [`CommandError::NotReady`]。
     pub fn close(&self) {
+        // ロックを離す前に、ローカル API を止める（4.4）。処理中の依頼は、データベースが開いている
+        // うちに最後まで行って応答を返す。先に印を立てて、止めた後に待ち受けが始まらないようにする
+        self.closing.store(true, Ordering::Release);
+        self.stop_api();
         // 先に閉じた状態にして、次のバックアップが始まらないようにしてから待つ。データベース
         // （ロック）は、待ち終わるまで手元に持つ
         let slot = std::mem::replace(&mut *lock(&self.db), Slot::Closed);
@@ -834,7 +1019,8 @@ fn acquire_lock() -> Result<DbLock, Box<Slot>> {
     let dir = data_dir::default_dir().map_err(|e| failed(StartupFailure::DefaultDir, &e))?;
     // 既定ディレクトリはアプリの置き場所で、データの保存先ではない（ロック・config.json を置く）。
     // 初めて起動したときは無いので作る（保存先を作らない決まり（6.3）とは別。6章）
-    fs::create_dir_all(dir.path()).map_err(|e| {
+    // UNIX 系では本人だけが入れる権限（0700）で作る（ローカル API のソケットとトークンを置くため）
+    data_dir::create_default_dir(&dir).map_err(|e| {
         failed(
             StartupFailure::DefaultDir,
             &io::Error::new(

@@ -101,7 +101,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - `--heading H`（MCP では `heading`）の `H` は、`get_board` の `headings` の1つ（例：`10:00 定例`）をそのまま渡す。照合は、`H` の前後の空白を除いた文字列と、見出しの文字（`## ` の後ろ。前後の空白を除いたもの。データモデル設計書 3章 note）の完全一致。時刻だけ（`10:00`）で件名つきの見出しには当たらず、`9:05` と `09:05` は別の見出し、件名の中の空白（全角を含む）も書いたとおりに比べる。`get_board` が返す文字をそのまま使えば必ず当たり、時刻の書き方を正規化する規則を増やさないため。件名だけでの照合や部分一致は設けない（当たる見出しが曖昧になるため）。
   - 同じ見出しが複数あるときは、当たった区間をすべて本文の順に返す。読み取りは何も変えないので、エラーにしない（`headings` に番号が無く、エージェントが区別する手段もないため）。見出しの無い区間（最初の見出しより前）は見出しでは選べない。全文は `--heading` を付けずに読む。時刻の付かない `## 良かったこと` は区間を区切らないので、直前の時刻付き見出しの区間に含まれる。
   - 区間の本文は、見出しの行から次の時刻付き見出しの前まで（末尾の空行も含む）を LF でつないだもの。それぞれに `heading` と、見出しの行のノート全体での行番号 `start_line`（1始まり）を付ける。`text` の行は本文に保存してある行のとおり（CR は行の文字なので、CRLF のノートでは各行の末尾に CR が残る。`edit_note` の `--expect` に渡す行の本文と同じ形で、`text` を LF で分けた行をそのまま渡せる）。`text` の n 行目は全体の `start_line + n - 1` 行目で、`edit_note` の `--line` はノート全体の行番号なので、エージェントは区間だけを読んでも書き換える行を求められる。
-  - 判定の順：`permission_denied`（`read`）、`invalid_argument`（`H` が前後の空白を除くと空、または途中に改行を含む）、`not_found`（当たる見出しがない。まだ書いていない日も）。読み取りなので `storage_unavailable` は返さない（4.3）。`not_found` の `message` は、見出しが無いことと、`get_board` の `headings` の文字をそのまま渡すことを伝える。
+  - 判定の順：`permission_denied`（`read`）、`invalid_argument`（`H` が前後の空白を除くと空、または途中に改行を含む）、`not_found`（当たる見出しがない。まだ書いていない日も）。読み取りは、画面の保存の失敗中を理由に `storage_unavailable` を返さない（4.3）。データベースの読み取り自体が失敗したときだけ `storage_unavailable`（4.3）。`not_found` の `message` は、見出しが無いことと、`get_board` の `headings` の文字をそのまま渡すことを伝える。
   - 応答は 4.2。CLI のテキスト出力は、全文なら本文、見出し指定なら当たった区間の `text` を順に出す（複数のときは見出しの文字と `start_line` が分かる区切りを付ける。形は CLI を作るときに決める）。
 
 ### 3.1 その他の CLI コマンド
@@ -109,7 +109,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | CLI | 内容 |
 | --- | --- |
 | `yunagi show [--note]` | アプリを前面に表示する（Wayland 環境でのショートカット割当にも使う。操作仕様書 1章「OS 全体の操作」、ビルド・配布手順書 4.1 の案内がこのコマンドを前提にしている。まだ作っていない） |
-| `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない。ローカル API の状態は、アーキテクチャ設計書 4.4 の接続の試し方で1回だけ調べて（待たない）、次のどれかで示す：`connected`（つながり認証も通った）、`no_listener`（待ち受けが無く、ロックも取れた。アプリが動いていない場合のほか、動いていてもデータベースを開いていない「見つからない」「開けなかった」の状態を含む。ここからは区別できないので、「動いていない」とは言わない）、`starting_or_unresponsive`（待ち受けが無く、ロックを別のプロセスが持っている。アプリの起動中、または待ち受けが動いていない。直接モードの操作が長引いているだけのこともある）、`listener_busy`（待ち受けはあるが一時的につながらない。パイプが全部ふさがっている・待ち行列が満杯など。4.4 の試し直しの対象で、`doctor` は1秒だけ試し直してからこれを示す。ロックは取らない）、`auth_failed`・`version_mismatch`・`denied`・`default_dir_mismatch`（4.3 の `api_error` の `reason` と同じ。`default_dir_mismatch` は、待ち受けが無く、別の候補の既定ディレクトリを使っているプロセスがいて、直接モードに入れない場合。アーキテクチャ設計書 4.5）。取ったロックはすぐ離す。あわせて、自分の既定ディレクトリ（パスと、求めた環境変数の名前。値は出さない）と、別の候補の既定ディレクトリの状態（`absent`（無い）・`has_data`（データだけある）・`in_use`（使っているプロセスがいる。自分の保存先に別のデータベースがあり、環境を分けている形のときは `in_use_separate`）・`unknown`（調べられない）。アーキテクチャ設計書 4.5）を、ローカル API の状態とは別の欄で出す（ローカル API の状態は、環境を分けている形のときは `no_listener` のまま）。状態を決める順：自分の既定ディレクトリのロックを別のプロセスが持っていれば `starting_or_unresponsive`（ずれは調べない）、ロックが取れて、アーキテクチャ設計書 4.5 の判定 2 に当たれば `default_dir_mismatch`、それ以外は `no_listener`。ずれの手がかりを、業務データを含めずに利用者へ示すため |
+| `yunagi doctor` | 診断情報（版、OS、保存先、ローカル API の状態）を出力する。業務データの内容は含めない。ローカル API の状態は、アーキテクチャ設計書 4.4 の接続の試し方で1回だけ調べて（待たない）、次のどれかで示す：`connected`（つながり認証も通った）、`no_listener`（待ち受けが無く、ロックも取れた。アプリが動いていない場合のほか、動いていてもデータベースを開いていない「見つからない」「開けなかった」の状態を含む。ここからは区別できないので、「動いていない」とは言わない）、`starting_or_unresponsive`（待ち受けが無く、ロックを別のプロセスが持っている。アプリの起動中、または待ち受けが動いていない。直接モードの操作が長引いているだけのこともある）、`listener_busy`（待ち受けはあるが一時的につながらない。パイプが全部ふさがっている・待ち行列が満杯など。4.4 の試し直しの対象で、`doctor` は1秒だけ試し直してからこれを示す。ロックは取らない）、`auth_failed`・`version_mismatch`・`denied`・`socket_path_too_long`・`default_dir_mismatch`（4.3 の `api_error` の `reason` と同じ。`socket_path_too_long` は、ソケットのパスが長すぎて（UNIX 系）、ロックを別のプロセスが持っているとき。ロックが取れれば `no_listener`。`default_dir_mismatch` は、待ち受けが無く、別の候補の既定ディレクトリを使っているプロセスがいて、直接モードに入れない場合。アーキテクチャ設計書 4.5）。取ったロックはすぐ離す。あわせて、自分の既定ディレクトリ（パスと、求めた環境変数の名前。値は出さない）と、別の候補の既定ディレクトリの状態（`absent`（無い）・`has_data`（データだけある）・`in_use`（使っているプロセスがいる。自分の保存先に別のデータベースがあり、環境を分けている形のときは `in_use_separate`）・`unknown`（調べられない）。アーキテクチャ設計書 4.5）を、ローカル API の状態とは別の欄で出す（ローカル API の状態は、環境を分けている形のときは `no_listener` のまま）。状態を決める順：自分の既定ディレクトリのロックを別のプロセスが持っていれば `starting_or_unresponsive`（ソケットのパスが長すぎるときは `socket_path_too_long`。ずれは調べない）、ロックが取れて、アーキテクチャ設計書 4.5 の判定 2 に当たれば `default_dir_mismatch`、それ以外は `no_listener`。ずれの手がかりを、業務データを含めずに利用者へ示すため |
 | `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータも削除 |
 | `yunagi --version` | 版を表示する |
 
@@ -125,6 +125,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   5. `carried_over`：持ち越し済みの項目（3章）。
   6. `user_editing`：その操作が書く、利用者が入力する欄（`edit_todo`・`edit_blocker` は本文、`--note` 付きの `resolve_blocker` は解消メモ）を入力中のとき。状態だけを変える操作（`complete_todo`・`reopen_todo`、`--note` の無い `resolve_blocker`）は返さない。
   7. `note_exists`：`resolve_blocker` だけ（3章）。
+- 例外：ID の形の誤りと日付の指定（`date`）の形の誤りは、引数を読む段階で `invalid_argument` にするため、項目や権限を見る前に返る（ローカル API の層も CLI の引数の読み取りも同じ。`permission_denied` より先になる。2026-11-04 決定）。形の誤りは、スコープに関係なく、直してやり直さなければならないため。
 - この順のため、今と同じ本文やすでに目的の状態でも、取りやめた TODO と種類の違う ID なら `invalid_argument`、保存の再試行中は `storage_unavailable`、持ち越し済みの項目なら `carried_over`、入力中なら `user_editing` になる。
 - 何も変えない成功：今の値と比べて、送られた欄（状態・完了時刻・本文・解消メモ）がすべて同じなら、エラーにせず、何も書かずに成功を返す。エージェントは応答が届かなかったときなどに、同じ操作をそのままやり直してよい。エラーにすると、やり直したエージェントが、1回目が届いていたのか失敗したのかを区別できないため。一部の欄だけが違えば、違う欄だけを書く。
 - 応答と記録：成功の応答には、実際に何かを変えたかを示す `updated`（`true` / `false`）を含める。CLI では、`--json` のときに同じ `updated` を含む JSON を出し、テキスト出力は各操作の節の文を表示する。終了コードはどれも 0。何も変えなかった場合（`updated: false`）は、change_log に記録せず（7章）、item の `updated_at` も変えない（データモデル設計書 3章）。記録するときは、実際に変えた欄だけを `before` / `after` に入れる。
@@ -195,12 +196,12 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 {"error": {"code": "conflict", "reason": "user_editing", "message": "The user is editing this item. Try again later."}}
 ```
 
-エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`、`busy`、`api_error`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。`permission_denied`・`not_found`・`invalid_argument` は先に返す。3.2 の判定の順、アーキテクチャ設計書 4.1）。直接モードで保存先にデータベースが見つからないときも `storage_unavailable` を返す（読み取りを含むすべての操作。アーキテクチャ設計書 6.3）。CLI・MCP の既定ディレクトリが無いときも同じコードで、`message` に探した既定ディレクトリと求めた環境変数の名前を書き、アプリを別の環境変数で起動していないか確かめるよう伝える（アーキテクチャ設計書 4.5）。
+エラーコード：`permission_denied`、`not_found`、`invalid_argument`、`conflict`、`storage_unavailable`、`busy`、`api_error`。`storage_unavailable` は、画面での保存の書き込みに失敗して再試行している間、対象に関係なくすべての書き込みに返す（読み取りは受け付ける。`permission_denied`・`not_found`・`invalid_argument` は先に返す。3.2 の判定の順、アーキテクチャ設計書 4.1）。直接モードで保存先にデータベースが見つからないときも `storage_unavailable` を返す（読み取りを含むすべての操作。アーキテクチャ設計書 6.3）。データベースの読み書きそのものが失敗したとき（ディスクのエラー、壊れたデータベースなど。2026-11-04 決定）も、読み取りを含めて同じコードで返す。`message` は何も変えていないこととアプリを確かめるよう伝えるだけにし、内部の文は含めない（ログに残す）。読み取りが断られるのは、この読み書きの失敗のときだけである。CLI・MCP の既定ディレクトリが無いときも同じコードで、`message` に探した既定ディレクトリと求めた環境変数の名前を書き、アプリを別の環境変数で起動していないか確かめるよう伝える（アーキテクチャ設計書 4.5）。
 
 **接続の失敗（2026-11-04 決定。アーキテクチャ設計書 4.4）**：操作がコアに届く前、または届いたか分からないときに、CLI・MCP が返すエラー。どちらも項目の判定（3.2）には入らず、読み取りを含むすべての操作に返す。
 
 ```json
-{"error": {"code": "busy", "message": "Yunagi is using its data and did not respond within 5 seconds. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi."}}
+{"error": {"code": "busy", "message": "Yunagi is using its data and did not respond in time. Nothing was changed. Try the same request again. If it keeps failing, ask the user to restart Yunagi."}}
 {"error": {"code": "api_error", "reason": "result_unknown", "message": "The connection to Yunagi was lost after the request was sent. It may or may not have been applied. Read the data again before retrying."}}
 ```
 
@@ -211,7 +212,8 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
   - `denied`：ソケット・パイプを開く権限が無い（`EACCES`）。別の利用者のアプリが同じ場所を使っているときなど。
   - `default_dir_mismatch`（2026-11-04 決定。アーキテクチャ設計書 4.5）：アプリと CLI・MCP の環境変数が違い、既定ディレクトリが別の場所になっている。ローカル API には届かず、別の候補の既定ディレクトリを使っているプロセス（ふつうはアプリ）がいて、直接モードで開くと利用者の画面と別のデータに書くか、同じデータベースを別のロックで開いてしまう場合に返す。`message` に、このコマンドの既定ディレクトリと、使っているプロセスのいる既定ディレクトリを書き、環境変数（`XDG_DATA_HOME` など）をアプリと同じにするよう伝える（例：`Yunagi is running with a different data folder (/b/yunagi) than this command uses (/a/yunagi). Nothing was changed. Ask the user to run the agent with the same environment variables as Yunagi (for example XDG_DATA_HOME). If Yunagi is not running, the same request may be retried.`）。環境をそろえるまで直らないので、エージェントは送り直さず、利用者に伝える（アプリが動いていないとき、別の直接モードの操作が原因のときだけ、そのまま送り直してよい。アーキテクチャ設計書 4.5）。待ち受けが応答しているわけではないので「待ち受けはあるが」という上の定義の例外で、直接モードへ切り替えないところは同じ。
   - `result_unknown`：依頼を送った後、応答の前に接続が切れた。書き込みは送り直さず、すぐこのエラーを返す。読み取りは、接続の手順（アーキテクチャ設計書 4.4）から1回だけ自動でやり直し（必ず1回）、やり直しでも切れたら同じエラーを返す。エージェントは、読み取りで反映されたかを確かめてから、必要なら利用者に伝える。
-  - どれも何も反映していない（`result_unknown` を除く）。直接モードへは切り替えない。
+  - `socket_path_too_long`（2026-11-04 決定。アーキテクチャ設計書 4.4）：既定ディレクトリの下のソケットのパスが長すぎて（`sun_path` に収まらず。UNIX 系）、アプリが待ち受けられない。ロックが取れなければ（アプリが動いていれば）、5 秒待たずにすぐ返す。`message` は、既定ディレクトリが長すぎてローカル API を使えないことと、アプリを終了すれば同じ操作が使えること、環境変数（`XDG_DATA_HOME` など）で短い場所にすることを伝える。待っても直らず、`busy` の「再起動して」の案内では直らないため、送り直さず利用者に伝える。
+  - どれも何も反映していない（`result_unknown` を除く）。直接モードへは切り替えない（`socket_path_too_long` は、ロックが取れて直接モードで処理できるなら、そちらで処理する。上のとおり、取れなかったときだけ返す）。
 
 `conflict` には、エージェントが次の動きを決められるよう、理由を `reason` 欄で付ける。CLI の終了コードはどの理由でも 5 で、`--json` のときは同じ JSON を出し、テキスト出力では `message` を表示する。
 
@@ -225,6 +227,46 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | `user_editing` | 利用者が対象を入力中（画面から知らされた守る行が古い版のもので、知らせ直しを待っている場合を含む。アーキテクチャ設計書 4.1）。操作は何も反映していない | 同じ操作を、しばらくしてからそのままやり直す |
 
 `user_editing` の場合は、`message` でもその旨と、しばらくしてからやり直すよう伝える。文言は対象に合わせる（例：項目なら `The user is editing this item. Try again later.`、ノート・振り返りの行なら `The user is editing this line. Try again later.`）。`note_exists` の場合は、やり直しても成功しないことと次の動きを伝える（例：`This blocker already has a different resolution note. It was not changed. To resolve it, send the request without a note.`）。`carried_over` の場合は、持ち越し先へ送り直すことを伝える（例：`This item was carried over to 2026-11-03. It was not changed. Send the request to carried_to_id instead.`）。`message` の言語は未決（9章）。
+
+### 4.4 ローカル API（アプリとの通信。2026-11-04 決定）
+
+CLI・MCP サーバーがアプリに依頼する入口。通信路・トークン・待ち受けの作り方は、アーキテクチャ設計書 4.6。ここは、流す JSON と操作の中身。MCP のツールの返り値（4.2）と同じ形を返すので、MCP サーバーは返り値をそのまま MCP に載せられる。
+
+**メッセージ**：JSON-RPC 2.0 を、1 行 1 メッセージの JSON（改行区切り）で送る。1 つの接続で `hello` → 依頼 1 つ → 応答 1 つを行い、閉じる。まとめての依頼（配列）と通知（`id` の無い依頼）は受け付けない。
+
+```json
+{"jsonrpc":"2.0","id":0,"method":"hello","params":{"protocol":1,"token":"<64 桁の 16 進>","client":"claude-code"}}
+{"jsonrpc":"2.0","id":0,"result":{"protocol":1,"app_version":"0.0.0"}}
+{"jsonrpc":"2.0","id":1,"method":"add_todo","params":{"text":"レート制限を調べる","date":"today"}}
+{"jsonrpc":"2.0","id":1,"result":{"id":"01J...","date":"2026-11-04","text":"レート制限を調べる"}}
+{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"…","data":{"error":{"code":"permission_denied","required_scope":"todo","message":"…"}}}}
+```
+
+- `client` は識別子（`yunagi mcp --client claude-code` の `claude-code`。CLI は `cli`）。省略すると `unknown`（2章）。初めての識別子は `read` だけの権限で登録される（このとき画面に `changed` を出す。設定画面のエージェントの一覧が変わるため）。登録できる識別子は、固定の `cli`・`unknown` を含めて 64 までで、超えると新しい識別子の依頼は `invalid_argument`（登録の整理を利用者に頼む）。使える形は、英小文字か数字で始まり、英小文字・数字・`-`・`_`・`.` だけの 64 文字まで。誤っていれば `-32602`。`params` がオブジェクトでないときも `-32602`。
+- エラー：プロトコルの誤りは JSON-RPC の標準のコード（`-32700` JSON でない、`-32600` 依頼の形が誤り・`hello` より先に依頼を送った、`-32601` 知らない操作、`-32602` 引数が誤り・知らない引数名・必須の引数が無い）。4.3 のエラー（`permission_denied`・`not_found`・`invalid_argument`・`conflict`・`storage_unavailable`・`busy`・`api_error`）は、コード `-32000` で、`error.data.error` に 4.3 のオブジェクトをそのまま入れる。`hello` の失敗は `api_error` の `reason: auth_failed`（トークンが合わない）・`version_mismatch`（プロトコルの版が合わない。エラーにアプリの版 `server_protocol`）。
+- 引数の名前は MCP のツールの引数にそろえる。省略できるのは `date`（既定は今日。`today`・`yesterday`・`YYYY-MM-DD`。形の誤りや存在しない日付は `invalid_argument`）。知らない名前の引数は、綴りの誤りを黙って無視しないよう `-32602`。
+
+**操作**（名前は 3章のツール名）
+
+| 操作 | 引数 | 成功の返り値 |
+| --- | --- | --- |
+| `get_board` | `date?` | 4.2 の `get_board` |
+| `open_board` | `date?` | 4.2 の `open_board` |
+| `get_note` | `date?`、`heading?` | 4.2 の `get_note` |
+| `add_todo`・`add_blocker` | `text`、`date?` | `{id, date, text}`（追加した項目） |
+| `edit_todo`・`edit_blocker` | `id`、`text` | `{updated, id, text}` |
+| `complete_todo`・`reopen_todo` | `id` | `{updated, id, status}` |
+| `resolve_blocker` | `id`、`note?` | `{updated, resolved, note_written, id, status, resolution_note}` |
+| `append_note` | `text`、`date?`、`heading?` | `{updated, rev}` |
+| `append_reflection` | `text`、`date?` | `{updated, rev}` |
+| `edit_note` | `line`、`expected_text`、`replace`・`delete`（`true`）・`move_to` のうちちょうど 1 つ、`date?` | `{updated, rev}` |
+
+- `append_note` の `heading` は、あれば現在時刻の見出しを入れてから追記する（CLI の `--heading [TITLE]`。`""` は件名なしの `## HH:MM`）。省略か `null` なら見出しを入れない。
+- `edit_note` の `replace`・`delete`・`move_to` が 0 個か 2 個以上なら `-32602`。`line`・`move_to` は 0 以上の整数（0 の意味はコアが `invalid_argument` にする）。
+- `updated` は 3.2 の意味（実際に何かを変えたか）。`updated: false` の成功では、画面への `changed` を出さない。
+- `search`・`export_handoff` は、コアの入口を作るときに同じ形で足す。
+- 権限・入力中・持ち越し・保存の失敗中の判定とエラーは、3章・3.2 のとおり（コアが行う。直接モードと同じ）。内部のエラーの文は応答に出さず（4.3）、読み書きの失敗は `storage_unavailable`（`message` は、何も変えていないことと、アプリを確かめるよう伝える）にする。
+- データベースを使えるまで待つのは最大 5 秒。保存先の変更・復元の最中などで使えなければ、何も反映せずに `busy`（4.3）。アプリが止め始めていて始めなかった依頼も `busy`。`hello` の後で依頼が時間切れになった接続・止めるときに閉じる接続には、依頼を待たずに `busy`（`id` が `null` の失敗の応答）を 1 行返してから閉じる（後から依頼を送ったクライアントが `result_unknown` と取り違えず、そのまま送り直せるため。アーキテクチャ設計書 4.6）。
 
 ## 5. 依頼文の書き出し（A-06）
 
