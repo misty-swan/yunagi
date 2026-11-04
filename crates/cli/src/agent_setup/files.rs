@@ -9,10 +9,11 @@ use std::path::{Path, PathBuf};
 
 use yunagi_core::storage::data_dir::Platform;
 
-/// `PATH` の中から実行ファイル `name` を探す。Windows は `.exe`・`.cmd`・`.bat` も試す。
+/// `PATH` の中から実行ファイル `name` を探す。Windows は `.exe`・`.cmd`・`.bat` の順に試す（拡張子の
+/// 無いファイルは試さない：npm が `claude.cmd` の隣に置く sh 用の `claude` は、Windows では起動できないため）。
 pub fn find_in_path(name: &str, path: Option<&OsStr>, platform: Platform) -> Option<PathBuf> {
     let suffixes: &[&str] = if platform == Platform::Windows {
-        &["", ".exe", ".cmd", ".bat"]
+        &[".exe", ".cmd", ".bat"]
     } else {
         &[""]
     };
@@ -33,8 +34,19 @@ fn is_executable(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|m| m.is_file())
 }
 
+/// 新しいファイルを、本人だけが読み書きできる権限（UNIX 系は 0600）で作る（すでにあれば失敗する）。
+/// 設定ファイルにはトークンなどが入りうるので、中身を書く前から、ほかの利用者に読ませない。
+fn create_private(path: &Path) -> io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
+}
+
 /// `path` の隣に、`<ファイル名>.yunagi-backup-<日時>` として `bytes` を書く（05 6章）。すでにある
-/// ファイルは上書きせず、同じ名前があれば `-2`・`-3`… を付けて新しく作る。元のファイルの権限を引き継ぐ。
+/// ファイルは上書きせず、同じ名前があれば `-2`・`-3`… を付けて新しく作る。書き終えてから、元のファイルの
+/// 権限に合わせる（合わせられなくても、作ったときの 0600 のまま残るので、元より広くはならない）。
 /// 作ったバックアップのパスを返す。
 pub fn create_backup(path: &Path, bytes: &[u8], stamp: &str) -> io::Result<PathBuf> {
     let name = path
@@ -50,11 +62,7 @@ pub fn create_backup(path: &Path, bytes: &[u8], stamp: &str) -> io::Result<PathB
             format!("-{n}")
         };
         let backup = path.with_file_name(format!("{name}.yunagi-backup-{stamp}{suffix}"));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&backup)
-        {
+        match create_private(&backup) {
             Ok(mut file) => {
                 let written = file.write_all(bytes).and_then(|()| file.sync_all());
                 drop(file);
@@ -79,7 +87,8 @@ pub fn create_backup(path: &Path, bytes: &[u8], stamp: &str) -> io::Result<PathB
 
 /// `target` に `bytes` を書く。同じフォルダの一時ファイルに書いてから名前を変えるので、途中で失敗しても
 /// 元のファイルは壊れない。`target` がシンボリックリンクなら、リンクを置き換えず、指す先の実体に書く
-/// （dotfiles の管理でよくある形）。すでにあるファイルの権限を引き継ぐ。フォルダが無ければ作る。
+/// （dotfiles の管理でよくある形）。すでにあるファイルの権限を引き継ぎ、新しく作るファイルは本人だけが
+/// 読み書きできる権限（0600）にする。フォルダが無ければ作る。
 pub fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
     let real = match fs::canonicalize(target) {
         Ok(real) => real,
@@ -98,7 +107,7 @@ pub fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = dir.join(format!(".{name}.yunagi-tmp-{}", std::process::id()));
     let permissions = fs::metadata(&real).ok().map(|m| m.permissions());
     let result = (|| {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut file = create_private(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -198,6 +207,51 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, ["config.toml"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_never_picks_a_file_without_an_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        // npm は `claude.cmd` の隣に、sh 用の拡張子の無い `claude` も置く
+        fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
+        make_executable(&dir.path().join("claude"));
+        let path = std::env::join_paths([dir.path()]).unwrap();
+        assert_eq!(find_in_path("claude", Some(&path), Platform::Windows), None);
+        for name in ["claude.bat", "claude.cmd"] {
+            fs::write(dir.path().join(name), "@echo off\n").unwrap();
+            make_executable(&dir.path().join(name));
+        }
+        // `.exe`・`.cmd`・`.bat` の順
+        assert_eq!(
+            find_in_path("claude", Some(&path), Platform::Windows),
+            Some(dir.path().join("claude.cmd"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_ever_created_wider_than_the_original() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        // 元が 0600（トークンが入りうる）：バックアップも、書き換えた後のファイルも 0600
+        let secret = dir.path().join("secret.json");
+        fs::write(&secret, "token").unwrap();
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+        let backup = create_backup(&secret, b"token", "s").unwrap();
+        assert_eq!(mode(&backup), 0o600);
+        write_atomic(&secret, b"new").unwrap();
+        assert_eq!(mode(&secret), 0o600);
+        // 元が 0644：バックアップも 0644 に合わせる
+        let open = dir.path().join("open.toml");
+        fs::write(&open, "x").unwrap();
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(mode(&create_backup(&open, b"x", "s").unwrap()), 0o644);
+        // 新しく作るファイルは、umask に関わらず 0600（ゆるい umask でも）
+        let fresh = dir.path().join("new/config.toml");
+        write_atomic(&fresh, b"x").unwrap();
+        assert_eq!(mode(&fresh), 0o600);
     }
 
     #[test]

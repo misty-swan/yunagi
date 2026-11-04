@@ -98,6 +98,17 @@ fn current(doc: &DocumentMut, names: &[&str]) -> Result<Current, String> {
     Ok(Current::Different(shown))
 }
 
+/// `mcp_servers.yunagi` が `enabled = false` か。
+fn is_disabled(doc: &DocumentMut) -> bool {
+    doc.get("mcp_servers")
+        .and_then(Item::as_table_like)
+        .and_then(|servers| servers.get(SERVER_NAME))
+        .and_then(Item::as_table_like)
+        .and_then(|entry| entry.get("enabled"))
+        .and_then(Item::as_bool)
+        == Some(false)
+}
+
 /// `mcp_servers.yunagi` の `command`・`args`・`env_vars` を書く。ほかの表・コメント・欄は変えない。
 fn edit(doc: &mut DocumentMut, names: &[&str], blank_line_before: bool) -> Result<(), String> {
     let root = doc.as_table_mut();
@@ -209,8 +220,14 @@ pub fn prepare(setup: &SetupEnv) -> Prepared<Plan> {
     let names = setup.dir_vars();
     let old = match current(&doc, names) {
         Ok(Current::Same) => {
+            // 利用者が無効にしている（`enabled = false`）登録は変えない。ただし、使えないことは伝える
+            let disabled = if is_disabled(&doc) {
+                " It is turned off (enabled = false), so Codex does not start it; remove that line to use it."
+            } else {
+                ""
+            };
             return Prepared::Unchanged(format!(
-                "already registered in {} (same command and env_vars). Nothing to change.",
+                "already registered in {} (same command and env_vars). Nothing to change.{disabled}",
                 path.display()
             ));
         }
@@ -550,6 +567,19 @@ mod tests {
                 fs::read_to_string(&config).unwrap(),
                 "ok = 1\ntoken = \"sk-secret\nbroken = [\n"
             );
+        }
+
+        #[test]
+        fn a_disabled_registration_is_left_alone_but_reported() {
+            let dir = tempfile::tempdir().unwrap();
+            let setup = setup(dir.path());
+            let config = dir.path().join("codex/config.toml");
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            fs::write(&config, format!("{BLOCK}enabled = false\n")).unwrap();
+            let Prepared::Unchanged(line) = prepare(&setup) else {
+                panic!("expected no change");
+            };
+            assert!(line.contains("enabled = false"), "{line}");
         }
 
         #[test]
