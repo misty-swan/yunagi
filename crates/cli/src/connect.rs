@@ -298,9 +298,15 @@ impl Connector {
             _ => {}
         }
         // CLI・MCP は、データベースを新しく作らない（6.3。作るのはアプリだけ）
-        if let Some(data_dir) = &own.data_dir
-            && !own.has_database
-        {
+        // 保存先を求められないとき（`config.json` が壊れている・読めない）も、開かずに止める
+        let Some(data_dir) = &own.data_dir else {
+            drop(lock);
+            if let Err(e) = data_dir::resolve_data_dir(&self.dir) {
+                eprintln!("yunagi: could not find the data folder: {}", ErrorChain(&e));
+            }
+            return Err(error::storage_failed());
+        };
+        if !own.has_database {
             drop(lock);
             return Err(error::database_not_found(&data_dir::database_path(
                 data_dir,

@@ -514,13 +514,15 @@ pub(crate) fn connect_in(dir: &Path) -> Result<(Stream, Option<ConnectionInfo>),
     }
 }
 
-/// パイプ `file` の持ち主の SID が、この処理の利用者（プロセスのトークンのユーザー）の SID と同じか。
+/// パイプ `file` の持ち主の SID が、この処理の利用者（プロセスのトークンのユーザー、またはトークンの
+/// 既定の持ち主）の SID と同じか。サーバーはパイプに持ち主を明示しないので、持ち主は作ったプロセスの
+/// トークンで決まる（ふつうはユーザー。管理者権限なら Administrators）。
 fn owner_is_me(file: &File) -> io::Result<bool> {
     use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS};
     use windows::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
     use windows::Win32::Security::{
-        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, PSID, TOKEN_QUERY, TOKEN_USER,
-        TokenUser,
+        EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, PSID, TOKEN_OWNER, TOKEN_QUERY,
+        TOKEN_USER, TokenOwner, TokenUser,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -531,23 +533,24 @@ fn owner_is_me(file: &File) -> io::Result<bool> {
         let mut token = HANDLE::default();
         OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).map_err(io::Error::from)?;
         let mine = (|| {
-            let mut len = 0u32;
-            // 大きさを尋ねる（バッファが足りない失敗で `len` が入る）
-            let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
-            if len == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // TOKEN_USER の整列のために、u64 の並びで確保する
-            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-            GetTokenInformation(
-                token,
-                TokenUser,
-                Some(buf.as_mut_ptr().cast()),
-                len,
-                &mut len,
-            )
-            .map_err(io::Error::from)?;
-            let user = &*(buf.as_ptr().cast::<TOKEN_USER>());
+            // トークンの情報（大きさを尋ねてから読む。構造体の整列のために u64 の並びで確保する）
+            let info = |class| -> io::Result<Vec<u64>> {
+                let mut len = 0u32;
+                let _ = GetTokenInformation(token, class, None, 0, &mut len);
+                if len == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+                GetTokenInformation(token, class, Some(buf.as_mut_ptr().cast()), len, &mut len)
+                    .map_err(io::Error::from)?;
+                Ok(buf)
+            };
+            let user_buf = info(TokenUser)?;
+            let owner_buf = info(TokenOwner)?;
+            let user_sid = (*(user_buf.as_ptr().cast::<TOKEN_USER>())).User.Sid;
+            // 管理者権限で作られたオブジェクトの持ち主は、ユーザーではなくトークンの既定の持ち主
+            // （Administrators）になりうるので、これも自分として扱う
+            let token_owner_sid = (*(owner_buf.as_ptr().cast::<TOKEN_OWNER>())).Owner;
             let mut owner = PSID::default();
             let mut sd = PSECURITY_DESCRIPTOR::default();
             let status = GetSecurityInfo(
@@ -563,7 +566,8 @@ fn owner_is_me(file: &File) -> io::Result<bool> {
             if status != ERROR_SUCCESS {
                 return Err(io::Error::from_raw_os_error(status.0 as i32));
             }
-            let same = EqualSid(user.User.Sid, owner).is_ok();
+            let same =
+                EqualSid(user_sid, owner).is_ok() || EqualSid(token_owner_sid, owner).is_ok();
             LocalFree(Some(HLOCAL(sd.0)));
             Ok(same)
         })();

@@ -63,13 +63,22 @@ pub fn search(
     })
 }
 
-/// `body` の行のうち `needle` を含むもの（ASCII の英字は大文字・小文字を区別しない。検索の決まりと
-/// そろえる）。
+/// `body` の行のうち `needle` を含むもの。検索の決まり（`storage::search`）にそろえる：3 文字以上は
+/// 大文字・小文字を区別せず（索引の trigram の既定）、2 文字以下は ASCII の英字だけ区別しない
+/// （`LIKE` の動き）。文字数は Unicode の文字で数える。
 fn matched_lines(body: &str, needle: &str) -> Vec<MatchedLine> {
-    let needle = needle.to_ascii_lowercase();
+    let folded = needle.chars().count() >= 3;
+    let fold = |s: &str| {
+        if folded {
+            s.to_lowercase()
+        } else {
+            s.to_ascii_lowercase()
+        }
+    };
+    let needle = fold(needle);
     super::note_body::lines(body)
         .enumerate()
-        .filter(|(_, line)| line.to_ascii_lowercase().contains(&needle))
+        .filter(|(_, line)| fold(line).contains(&needle))
         .take(MAX_MATCHED_LINES)
         .map(|(i, line)| MatchedLine {
             line: i + 1,
@@ -114,6 +123,16 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn matching_follows_the_storage_search_rules() {
+        // 3 文字以上は ASCII 以外も大文字・小文字を区別しない
+        let lines = matched_lines("l'ÉCOLE du soir", "école");
+        assert_eq!(lines.len(), 1);
+        // 2 文字以下は ASCII の英字だけ区別しない
+        assert_eq!(matched_lines("Äb\näb", "äb").len(), 1);
+        assert_eq!(matched_lines("AB\nab", "ab").len(), 2);
     }
 
     #[test]

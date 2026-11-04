@@ -97,20 +97,27 @@ pub struct Session {
 }
 
 /// 既定ディレクトリ `dir` の待ち受けに接続して認証する。`client` はクライアントの識別子
-/// （無ければ `unknown`）。通信路への接続そのもの（UNIX 系の `connect`）にも、つながってから `hello` の
-/// 応答までにも、それぞれ `timeout` の上限をかける（4.4 の 1 秒。アーキテクチャ設計書 4.6）。
+/// （無ければ `unknown`）。通信路への接続そのもの（UNIX 系の `connect`）と、つながってから `hello` の
+/// 応答までの合計に、`timeout` の上限をかける（4.4 の 1 秒。アーキテクチャ設計書 4.6）。
 pub fn connect(
     dir: &DefaultDir,
     client: Option<&str>,
     timeout: Duration,
 ) -> Result<Session, HelloError> {
+    let started = std::time::Instant::now();
     let (stream, info) = transport::connect(dir, timeout)?;
     // つながったのにトークンが読めない：古い（消えた）待ち受けか、壊れている
     let info = info.or_else(|| token::read(dir).ok());
     let Some(info) = info else {
         return Err(HelloError::AuthFailed);
     };
-    hello(stream, &info.token, client, timeout)
+    // 接続に使った時間を引き、1 回の接続と認証の合計が `timeout` を超えないようにする
+    hello(
+        stream,
+        &info.token,
+        client,
+        timeout.saturating_sub(started.elapsed()),
+    )
 }
 
 /// つながった `stream` で `hello` を行う。

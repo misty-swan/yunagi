@@ -53,10 +53,10 @@ impl Default for Env {
 
 /// コマンドを行い、終了コード（05 4.1）を返す。`args` はコマンド名を除いた引数。
 pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
-    let json = args.iter().any(|a| a == "--json");
     let parsed = match args::parse(args) {
         Ok(parsed) => parsed,
-        Err(e) => return fail(&e, json, io),
+        // 誤りの出し方は、読み取りの規則で決めた `--json` の指定に従う
+        Err(e) => return fail(&e.error, e.json, io),
     };
     let json = parsed.json;
     match parsed.command {
@@ -68,9 +68,19 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
             let _ = io.stdout.write_all(args::USAGE.as_bytes());
             0
         }
-        Command::Operation(op) => operation(&op, json, env, io),
+        Command::Operation(op) => operation(op, json, env, io),
         Command::Doctor => run_doctor(json, env, io),
     }
+}
+
+/// 引数が UTF-8 でないときの失敗（`invalid_argument`、終了コード 2）。`json` は、引数から `--json` を
+/// 読めなかったときは `false`。
+pub fn invalid_utf8_argument(json: bool, io: &mut Io<'_>) -> i32 {
+    fail(
+        &error::invalid_argument("an argument is not valid UTF-8"),
+        json,
+        io,
+    )
 }
 
 /// 警告（環境を分けている形。4.5 の 3）をためておく入れ物。標準エラーには、操作の後にまとめて出す。
@@ -98,9 +108,10 @@ fn flush_warnings(warnings: &Warnings, io: &mut Io<'_>) {
     }
 }
 
-fn operation(op: &Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
+fn operation(op: Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
     let warnings = Warnings::default();
-    let result = connector(env, &warnings).and_then(|c| c.call(op.method, op.params.clone()));
+    let Operation { method, params } = op;
+    let result = connector(env, &warnings).and_then(|c| c.call(method, params));
     flush_warnings(&warnings, io);
     match result {
         Ok(value) => {
@@ -109,7 +120,7 @@ fn operation(op: &Operation, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
             } else {
                 let _ = io
                     .stdout
-                    .write_all(output::render(op.method, &value).as_bytes());
+                    .write_all(output::render(method, &value).as_bytes());
             }
             0
         }

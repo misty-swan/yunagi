@@ -390,6 +390,11 @@ fn missing_data(w: &World) {
     assert_eq!(out.code, 6);
     assert_eq!(out.json()["error"]["code"], "storage_unavailable");
     assert!(!own.path().join("yunagi.db").exists());
+    // `config.json` が壊れていて保存先を求められないときも、開かず、作らない
+    fs::write(own.path().join("config.json"), "not json").unwrap();
+    let out = exec(w, &["board"]);
+    assert_eq!(out.code, 6, "{}", out.stderr);
+    assert!(!own.path().join("yunagi.db").exists());
 }
 
 fn mismatch(w: &World) {
