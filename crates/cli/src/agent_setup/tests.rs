@@ -95,6 +95,7 @@ fn go(setup: SetupEnv, claude: bool, codex: bool, input: &str) -> Ran {
         alt_home: AltHome::Fixed(None),
         timing: Timing::default(),
         setup,
+        show: crate::show::Options::default(),
     };
     let (mut stdin, mut stdout, mut stderr) = (input.as_bytes(), Vec::new(), Vec::new());
     let code = run(

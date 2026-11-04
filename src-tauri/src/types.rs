@@ -1244,6 +1244,16 @@ pub struct TodayChanged {
     pub today: Date,
 }
 
+/// `show-requested` イベント：窓を前面に出した（`yunagi show`、2 つ目の起動の引き渡し）。画面は、
+/// `note` が真でノートモードに切り替えられる状態（データベースを開いていて、持ち越しの画面などを
+/// 出していない）なら、ノートモードにする（操作仕様書 1章「OS 全体の操作」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ShowRequested {
+    pub note: bool,
+}
+
 /// `backup-failed` イベント：定期バックアップを作れなかった。`detail` はログ用の文（英語）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(TS))]

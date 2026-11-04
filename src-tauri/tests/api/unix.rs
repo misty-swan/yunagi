@@ -44,7 +44,11 @@ pub fn main() {
     }
     let dir = data_dir::default_dir().unwrap();
     assert!(dir.path().starts_with(&home));
-    let tests: [(&str, Test); 12] = [
+    let tests: [(&str, Test); 13] = [
+        (
+            "show_app_asks_the_screen_without_touching_the_data",
+            show_app_asks_the_screen_without_touching_the_data,
+        ),
         (
             "admin_calls_go_through_the_app_and_respect_the_screen",
             admin_calls_go_through_the_app_and_respect_the_screen,
@@ -1065,6 +1069,93 @@ fn request_form_errors_use_the_standard_codes(dir: &DefaultDir) {
         wire::INVALID_REQUEST
     );
     let _ = Ulid::generate();
+}
+
+/// 次の `show-requested` の知らせ（窓を前面に出す頼み）の `note`。
+fn next_show(h: &Harness) -> bool {
+    loop {
+        match h.notices.recv_timeout(WAIT).expect("no notice") {
+            Notice::ShowRequested(s) => return s.note,
+            _ => continue,
+        }
+    }
+}
+
+/// `show_app`（`yunagi show`。05 3.1・4.4）：データにもスコープにも触れずに、窓を前面に出す知らせを出す。
+/// 窓そのもの（最小化を解く・表示・フォーカス）は、窓のある実機でしか確かめられない（テスト計画書 4.8）。
+fn show_app_asks_the_screen_without_touching_the_data(dir: &DefaultDir) {
+    let h = Harness::opened(dir);
+    // 識別子の登録もスコープの判定も要らない（初めての識別子でも、`read` が無い識別子でも通る）。
+    // 登録しないので、画面にデータの変更も知らせない
+    let result = h
+        .call(Some("window-opener"), "show_app", json!({}))
+        .unwrap();
+    assert_eq!(result, json!({"requested": true}));
+    assert!(!next_show(&h));
+    h.call(None, "show_app", json!({"note": true})).unwrap();
+    assert!(next_show(&h));
+    h.call(None, "show_app", json!({"note": null})).unwrap();
+    assert!(!next_show(&h));
+    h.assert_no_changed();
+    // ノートモードの頼みは、画面がまだ受け取っていなければコアが覚える（起動した直後は、頼みが画面の
+    // 準備より先に届く）。受け取ると忘れる。ノートモードの指定が無い頼みは覚えない
+    // ここまでの頼みの最後は、ノートモードの指定が無い
+    assert!(!h.core.take_show_note());
+    h.call(None, "show_app", json!({"note": true})).unwrap();
+    assert!(next_show(&h));
+    assert!(h.core.take_show_note());
+    assert!(!h.core.take_show_note());
+    h.call(None, "show_app", json!({})).unwrap();
+    assert!(!next_show(&h));
+    assert!(!h.core.take_show_note());
+    // 最後の頼みに従う：受け取られていないノートモードの頼みは、あとの通常の頼みで取り消される
+    h.call(None, "show_app", json!({"note": true})).unwrap();
+    assert!(next_show(&h));
+    h.call(None, "show_app", json!({})).unwrap();
+    assert!(!next_show(&h));
+    assert!(!h.core.take_show_note());
+    let agents = h.ok("cli", "list_agents", json!({}));
+    assert!(
+        agents["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["name"] != "window-opener"),
+        "{agents}"
+    );
+    // 引数の誤りは、窓を操作せずに断る
+    for params in [json!({"note": "yes"}), json!({"nte": true})] {
+        let e = h.call(None, "show_app", params).unwrap_err();
+        assert_eq!(e["rpc_code"], wire::INVALID_PARAMS, "{e}");
+    }
+    h.drain();
+    assert!(h.notices.recv_timeout(Duration::from_millis(100)).is_err());
+
+    // `yunagi show` は、ほかの操作と違ってロックを取らずに、アプリの待ち受けだけで済む。起動はしない
+    // （起動先は存在しないものにしてある）
+    let env = yunagi_cli::Env {
+        alt_home: yunagi_cli::connect::AltHome::Fixed(None),
+        show: yunagi_cli::show::Options {
+            launch: yunagi_cli::show::Launch::Program("/nonexistent/yunagi-app".into()),
+            start_wait: Duration::from_secs(1),
+        },
+        ..yunagi_cli::Env::default()
+    };
+    for (args, note) in [(&["show"][..], false), (&["show", "--note"], true)] {
+        let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+        let (mut stdin, mut stdout, mut stderr) = (&b""[..], Vec::new(), Vec::new());
+        let code = yunagi_cli::run(
+            &args,
+            &env,
+            &mut yunagi_cli::Io {
+                stdin: &mut stdin,
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+            },
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stderr));
+        assert_eq!(next_show(&h), note);
+    }
 }
 
 /// `yunagi`（CLI）を、同じプロセスの中で動かす。アプリが `yunagi.lock` を持っているので、直接モードでは

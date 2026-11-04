@@ -44,6 +44,19 @@ On Linux with Wayland, this shortcut may not work (Settings says so too). If so,
 - KDE Plasma: add it in System Settings → Keyboard → Shortcuts → Add Custom Shortcut.
 - Hyprland, Sway and similar: add a key binding (`bind`) that runs `yunagi show` to the configuration file.
 
+  ```
+  # Hyprland (~/.config/hypr/hyprland.conf)
+  bind = SUPER SHIFT, D, exec, ~/.local/bin/yunagi show
+  # Sway (~/.config/sway/config)
+  bindsym $mod+Shift+d exec ~/.local/bin/yunagi show
+  ```
+
+`yunagi show` brings the Yunagi window to the front (it restores it if minimized, shows it if hidden, and moves the focus to it). If Yunagi is not running, it starts Yunagi first. It can take a few seconds for the window to appear after starting.
+
+- If the key binding says the command can't be found, that key setting does not inherit your shell's `PATH`. Write the full location, like `~/.local/bin/yunagi show` in the examples above. Where `~` is not available, use the actual path of your home folder.
+- To open Yunagi in Note mode, assign `yunagi show --note` to another key (for example, to start taking notes right away in a meeting).
+- You can check the result by running `yunagi show` in a terminal. If Yunagi can't be found, set the environment variable `YUNAGI_APP` to the location of Yunagi.
+
 ## 3. A day with Yunagi
 
 1. **Morning**: Yunagi shows the TODOs left over from the last day you used it and blockers that are still open. Pick what you want to carry over. TODOs carried over three times or more (you can change the number in Settings) come with "Split" and "Drop" options, a good moment to rethink them.

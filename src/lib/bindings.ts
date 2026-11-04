@@ -637,6 +637,13 @@ export type TodayChanged = { today: LogicalDate, };
 export type BackupFailed = { detail: string, };
 
 /**
+ * `show-requested` イベント：窓を前面に出した（`yunagi show`、2 つ目の起動の引き渡し）。画面は、
+ * `note` が真でノートモードに切り替えられる状態（データベースを開いていて、持ち越しの画面などを
+ * 出していない）なら、ノートモードにする（操作仕様書 1章「OS 全体の操作」）。
+ */
+export type ShowRequested = { note: boolean, };
+
+/**
  * テーマ（画面設計書 7章「表示」）。
  */
 export type Theme = "system" | "light" | "dark";
@@ -790,4 +797,5 @@ export const EVENTS = {
   changed: "changed",
   todayChanged: "today-changed",
   backupFailed: "backup-failed",
+  showRequested: "show-requested",
 } as const;

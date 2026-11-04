@@ -10,6 +10,8 @@
 //! - [`agent_setup`]：`yunagi agent setup`（Claude Code・Codex への登録）。
 //! - [`agent_admin`]：`yunagi agent permissions`・`agent revert`（権限の変更と取り消し。端末での確認つき）。
 //!   `agent history` は読み取りなので、ふつうの操作として [`output`] が整える。
+//! - [`show`]：`yunagi show`（アプリの窓を前面に出す。動いていなければ起動する）。ローカル API だけを使い、
+//!   直接モードは無い。
 //! - [`error`]：エラー（05 4.3）と終了コード（05 4.1）。
 //!
 //! 実行ファイルの `main` は [`run`] を呼ぶだけにして、試験が同じプロセスの中で、入出力と環境を差し替えて
@@ -24,6 +26,7 @@ pub mod error;
 pub mod mcp;
 mod mcp_tools;
 pub mod output;
+pub mod show;
 
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -50,6 +53,8 @@ pub struct Env {
     pub timing: Timing,
     /// `agent setup` が見る環境（エージェントの設定の場所・`PATH`・端末か）。
     pub setup: agent_setup::SetupEnv,
+    /// `show` の、アプリの起動のしかたと、起動してから待つ上限。
+    pub show: show::Options,
 }
 
 impl Default for Env {
@@ -58,6 +63,7 @@ impl Default for Env {
             alt_home: AltHome::Os,
             timing: Timing::default(),
             setup: agent_setup::SetupEnv::from_process(),
+            show: show::Options::default(),
         }
     }
 }
@@ -81,6 +87,7 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
         }
         Command::Operation(op) => operation(op, json, env, io),
         Command::Doctor => run_doctor(json, env, io),
+        Command::Show { note } => run_show(note, json, env, io),
         Command::Mcp { client } => mcp::run(client.as_deref(), env, io),
         Command::AgentSetup { claude_code, codex } => agent_setup::run(claude_code, codex, env, io),
         Command::AgentPermissions {
@@ -216,6 +223,40 @@ fn run_doctor(json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
         let _ = io.stdout.write_all(doctor::render_text(&report).as_bytes());
     }
     0
+}
+
+/// `yunagi show [--note]`：アプリの窓を前面に出す（動いていなければ起動する）。ローカル API だけを使う。
+fn run_show(note: bool, json: bool, env: &Env, io: &mut Io<'_>) -> i32 {
+    let warnings = Warnings::default();
+    let result = match connector(env, &warnings, "cli") {
+        Ok(c) => {
+            let sink = Arc::clone(&warnings);
+            let warn = move |line: &str| {
+                sink.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(line.to_owned());
+            };
+            show::run(c.default_dir(), note, &env.show, c.timing(), &warn)
+        }
+        Err(e) => Err(e),
+    };
+    flush_warnings(&warnings, io);
+    match result {
+        Ok(value) => {
+            if json {
+                let _ = writeln!(io.stdout, "{value}");
+            } else {
+                let text = if value["launched"].as_bool() == Some(true) {
+                    "Started Yunagi and asked it to come to the front.\n"
+                } else {
+                    "Asked Yunagi to come to the front.\n"
+                };
+                let _ = io.stdout.write_all(text.as_bytes());
+            }
+            0
+        }
+        Err(e) => fail(&e, json, io),
+    }
 }
 
 /// エラーを出して、終了コードを返す。`--json` なら標準出力に `{"error": ...}`、そうでなければ標準エラーに文。
