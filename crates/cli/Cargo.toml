@@ -9,9 +9,18 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "yunagi_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "yunagi"
 path = "src/main.rs"
 
 [dependencies]
 yunagi-core.workspace = true
+yunagi-api.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

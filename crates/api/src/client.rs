@@ -97,15 +97,14 @@ pub struct Session {
 }
 
 /// 既定ディレクトリ `dir` の待ち受けに接続して認証する。`client` はクライアントの識別子
-/// （無ければ `unknown`）。つながってから `hello` の応答までを `timeout` までしか待たない。
-/// 通信路への接続そのものには上限がない（UNIX 系の標準の `connect` には時間切れを付けられず、待ち行列が
-/// 満杯のとき止まって待ちうる。1 秒の上限を接続にもかけるのは YUN-90。アーキテクチャ設計書 4.6）。
+/// （無ければ `unknown`）。通信路への接続そのもの（UNIX 系の `connect`）にも、つながってから `hello` の
+/// 応答までにも、それぞれ `timeout` の上限をかける（4.4 の 1 秒。アーキテクチャ設計書 4.6）。
 pub fn connect(
     dir: &DefaultDir,
     client: Option<&str>,
     timeout: Duration,
 ) -> Result<Session, HelloError> {
-    let (stream, info) = transport::connect(dir)?;
+    let (stream, info) = transport::connect(dir, timeout)?;
     // つながったのにトークンが読めない：古い（消えた）待ち受けか、壊れている
     let info = info.or_else(|| token::read(dir).ok());
     let Some(info) = info else {

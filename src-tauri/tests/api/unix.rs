@@ -205,7 +205,7 @@ impl Harness {
 
     /// 生の接続（`hello` はまだ送っていない）と、トークンのファイルのトークン。
     fn raw(&self) -> (Stream, String) {
-        let (stream, _) = transport::connect(&self.dir).unwrap();
+        let (stream, _) = transport::connect(&self.dir, CLIENT_CONNECT_TIMEOUT).unwrap();
         let info = yunagi_api::token::read(&self.dir).unwrap();
         (stream, info.token)
     }

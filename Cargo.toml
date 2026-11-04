@@ -33,6 +33,11 @@ yunagi-api = { path = "crates/api" }
 # Windows：IMM の呼び出し。macOS：入力ソース API が返す文字列・配列の扱い
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_Input_Ime", "Win32_UI_WindowsAndMessaging"] }
 core-foundation = "0.10"
+# 利用者のホームを OS に尋ねる（パスワードデータベース。別の候補の既定ディレクトリを求める。
+# crates/core/src/storage/dir_mismatch.rs）。Cargo.lock にすでにある版にそろえる
+libc = "=0.2.191"
+# UNIX ドメインソケットへの接続の時間切れ（crates/api/src/transport/unix.rs）。Cargo.lock にある版
+socket2 = "=0.6.5"
 # Tauri は正確な版で固定する。画面側の @tauri-apps/api・@tauri-apps/cli（package.json）と
 # 版の 2.12 系をそろえる（Tauri は major.minor が食い違うと警告する）
 tauri = { version = "=2.12.5", features = [] }
