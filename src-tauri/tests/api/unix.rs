@@ -44,7 +44,11 @@ pub fn main() {
     }
     let dir = data_dir::default_dir().unwrap();
     assert!(dir.path().starts_with(&home));
-    let tests: [(&str, Test); 13] = [
+    let tests: [(&str, Test); 14] = [
+        (
+            "export_handoff_goes_through_the_app_as_a_read",
+            export_handoff_goes_through_the_app_as_a_read,
+        ),
         (
             "show_app_asks_the_screen_without_touching_the_data",
             show_app_asks_the_screen_without_touching_the_data,
@@ -524,6 +528,63 @@ fn reads_need_the_read_scope_and_writes_need_theirs(dir: &DefaultDir) {
         .unwrap()
         .unwrap();
     assert!(seen.last_seen_at.is_some());
+}
+
+/// 依頼文の書き出し（`export_handoff`）はアプリ経由でも読み取り：`read` が要り、何も変えず（`changed` を
+/// 出さず、履歴にも残さず）、障害の ID・無い ID・形の誤りは直接モードと同じエラーになる。
+fn export_handoff_goes_through_the_app_as_a_read(dir: &DefaultDir) {
+    let h = Harness::opened(dir);
+    let date = "2031-03-04";
+    h.grant("claude-code", &[Scope::Read, Scope::Todo, Scope::Blocker]);
+    h.drain();
+    let todo = h.ok(
+        "claude-code",
+        "add_todo",
+        json!({"date": date, "text": "依頼する"}),
+    );
+    let blocker = h.ok(
+        "claude-code",
+        "add_blocker",
+        json!({"date": date, "text": "待ち"}),
+    );
+    h.drain();
+
+    let out = h.ok("claude-code", "export_handoff", json!({"id": todo["id"]}));
+    assert_eq!(out["id"], todo["id"]);
+    let markdown = out["markdown"].as_str().unwrap();
+    assert!(markdown.starts_with("## Task\n依頼する\n\n(Exported from Yunagi on "));
+    assert!(markdown.ends_with(")\n"));
+    h.assert_no_changed();
+    // 障害の ID は断る（種類の違いの形）。無い ID は not_found、形の誤りは invalid_argument
+    let bad = h.err("claude-code", "export_handoff", json!({"id": blocker["id"]}));
+    assert_eq!(bad["code"], "invalid_argument");
+    assert_eq!(bad["item_kind"], "blocker");
+    assert_eq!(bad["use_operation"], Value::Null);
+    assert_eq!(
+        h.err(
+            "claude-code",
+            "export_handoff",
+            json!({"id": "00000000000000000000000000"})
+        )["code"],
+        "not_found"
+    );
+    assert_eq!(
+        h.err("claude-code", "export_handoff", json!({"id": "nope"}))["code"],
+        "invalid_argument"
+    );
+    // read を外されると、項目を見る前に断る
+    h.core
+        .read(|conn| -> Result<(), StorageError> {
+            let c = agent_client::get_by_name(conn, "claude-code")?.unwrap();
+            agent_client::update_scopes(conn, c.id, &[Scope::Todo])?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        h.err("claude-code", "export_handoff", json!({"id": todo["id"]}))["required_scope"],
+        "read"
+    );
+    h.assert_no_changed();
 }
 
 /// 書き込みは `AppCore::api_write`（`agent_write` の API 用）を通り、画面と同じ `changed`（`by: agent`）を

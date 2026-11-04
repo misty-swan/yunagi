@@ -19,7 +19,7 @@ use tauri::test::{
     INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets,
 };
 use tauri::webview::InvokeRequest;
-use tauri::{App, Listener, WebviewWindow, WebviewWindowBuilder};
+use tauri::{App, Listener, Manager, WebviewWindow, WebviewWindowBuilder};
 use yunagi_app::AppCore;
 use yunagi_core::domain::agent::{ItemField, ProtectedLines, UiState};
 use yunagi_core::domain::item::{self, ItemError};
@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 22] = [
+    let tests: [(&str, Test); 23] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -54,6 +54,7 @@ fn main() {
         ("note_send_commands", note_send_commands),
         ("carryover_commands", carryover_commands),
         ("search_command", search_command),
+        ("copy_handoff_command", copy_handoff_command),
         ("overview_counts", overview_counts),
         ("archive_command", archive_command),
         (
@@ -644,6 +645,61 @@ fn search_command(_: &Path) {
             .len(),
         2
     );
+    h.assert_no_event();
+}
+
+/// 依頼文の書き出し（Mod+Shift+A）：選んだ TODO の依頼文を作ってクリップボードに書く。権限は確かめず、
+/// 何も変えない（`changed` を出さない）。書けなければ `clipboard_failed`、項目が無ければ `not_found`、
+/// 障害の ID なら `invalid_argument`（`wrong_kind`）。
+fn copy_handoff_command(_: &Path) {
+    struct Capture(std::sync::Mutex<Vec<String>>);
+    impl yunagi_app::clipboard::Writer for Capture {
+        fn write(&self, text: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push(text.to_owned());
+            Ok(())
+        }
+    }
+
+    let h = Harness::opened();
+    let day = "2030-05-01";
+    let todo = h.add_todo(day, "依頼する TODO");
+    let blocker = h.ok(
+        "add_item",
+        json!({ "date": day, "kind": "blocker", "text": "待ち", "position": { "at": "last" } }),
+    );
+    h.drain();
+    let copy = |id: &Value| h.invoke("copy_handoff", json!({ "id": id }));
+
+    // 書き込む先が無い（プラグインを入れていない）あいだは、依頼文を作っても書けない
+    assert_eq!(
+        copy(&todo["id"]).unwrap_err()["kind"],
+        "clipboard_failed"
+    );
+
+    let capture = Arc::new(Capture(Default::default()));
+    h._app
+        .handle()
+        .state::<Arc<yunagi_app::clipboard::HandoffClipboard>>()
+        .attach(capture.clone());
+    assert_eq!(copy(&todo["id"]).unwrap(), Value::Null);
+    let written = capture.0.lock().unwrap().clone();
+    assert_eq!(
+        written,
+        [format!(
+            "## Task\n依頼する TODO\n\n(Exported from Yunagi on {})\n",
+            h.today()
+        )]
+    );
+    // 障害の ID と無い ID は、何も書かない
+    assert_eq!(
+        copy(&blocker["id"]).unwrap_err(),
+        json!({ "kind": "invalid_argument", "reason": "wrong_kind" })
+    );
+    assert_eq!(
+        copy(&json!(Ulid::generate().to_string())).unwrap_err(),
+        json!({ "kind": "not_found" })
+    );
+    assert_eq!(capture.0.lock().unwrap().len(), 1);
     h.assert_no_event();
 }
 

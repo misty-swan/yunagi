@@ -16,6 +16,7 @@ tauri-build.workspace = true
 yunagi-core.workspace = true
 yunagi-api.workspace = true
 tauri.workspace = true
+tauri-plugin-clipboard-manager.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-global-shortcut.workspace = true
 tauri-plugin-single-instance.workspace = true

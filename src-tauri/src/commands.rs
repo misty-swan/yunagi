@@ -12,11 +12,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tauri::State;
-use yunagi_core::domain::{archive, board, carryover, export, item, note_send, settings, text_doc};
+use yunagi_core::domain::handoff::{self, HandoffError};
+use yunagi_core::domain::{
+    archive, board, carryover, day, export, item, note_send, settings, text_doc,
+};
 use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
 
 use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
+use crate::clipboard::HandoffClipboard;
 use crate::global_shortcut::GlobalShortcutController;
 use crate::ime::ImeWorker;
 use crate::types::{
@@ -505,6 +509,34 @@ pub async fn search(
         })
     })
     .await
+}
+
+/// 選んだ TODO `id` の依頼文を作り、クリップボードに書く（Mod+Shift+A。操作仕様書 2章、MCP・CLI 仕様書
+/// 5章）。画面の操作なので、権限は確かめない。何も変えず、change_log にも記録しない。保存の失敗中でも
+/// 使える（読み取りだけ）。クリップボードに書けなかったら `clipboard_failed`、項目が無ければ `not_found`、
+/// 障害の ID なら `invalid_argument`（`wrong_kind`）。
+///
+/// 依頼文を作るのとクリップボードへの書き込みを 1 つのコマンドにして Rust 側で行う（`crate::clipboard`）。
+#[tauri::command]
+pub async fn copy_handoff(
+    core: Core<'_>,
+    clipboard: State<'_, Arc<HandoffClipboard>>,
+    id: Id,
+) -> Result<(), CommandError> {
+    let markdown = blocking(&core, move |core| {
+        core.read(|conn| {
+            let today = day::today(conn, &system_tz(), now()).map_err(HandoffError::Storage)?;
+            handoff::build(conn, id.0, today).map(|h| h.markdown)
+        })
+    })
+    .await?;
+    let clipboard = Arc::clone(&clipboard);
+    // OS の応答を待つことがあるので、止めてよいスレッドで書く
+    tauri::async_runtime::spawn_blocking(move || clipboard.write(&markdown))
+        .await
+        .map_err(|e| CommandError::Internal {
+            detail: e.to_string(),
+        })?
 }
 
 /// 持ち越しの後回し・再表示の記録の結果。`changed` は書いたか（ほかの窓が持ち越しの状態を読み直す

@@ -12,6 +12,7 @@ pub mod api;
 pub mod app_core;
 #[cfg(test)]
 mod bindings;
+pub mod clipboard;
 pub mod commands;
 pub mod global_shortcut;
 pub mod ime;
@@ -67,6 +68,7 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::mark_carryover_reshown,
         commands::confirm_carryover,
         commands::search,
+        commands::copy_handoff,
         commands::report_ui_state,
         commands::ime_status,
         commands::ime_leave_insert,
@@ -95,6 +97,9 @@ pub fn manage_core<R: Runtime>(app: &AppHandle<R>) -> Arc<AppCore> {
     // OS 全体のショートカットの登録（操作仕様書 1章）。プラグインは `run` で入れる（窓の無い試験では
     // 入れず、登録は `Unavailable` を返す）
     app.manage(Arc::new(global_shortcut::GlobalShortcutController::new()));
+    // 依頼文の書き出し先（クリップボード）。プラグインは `run` で入れる（窓の無い試験では入れず、
+    // 書き込みは `ClipboardFailed` を返す）
+    app.manage(Arc::new(clipboard::HandoffClipboard::new()));
     core
 }
 
@@ -163,6 +168,8 @@ pub fn run() {
             manage_core(app.handle()).start();
             // 入れられなくても起動する。OS 全体のショートカットだけが使えなくなる
             global_shortcut::install(app.handle());
+            // 入れられなくても起動する。依頼文の書き出しだけが使えなくなる
+            clipboard::install(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
