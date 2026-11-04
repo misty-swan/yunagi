@@ -272,6 +272,62 @@ test("持ち越し済みの項目を完了にしようとすると、上部の�
   expect($(".r-todo .item")?.classList.contains("done")).toBe(false);
 });
 
+test("持ち越し済みの項目と取りやめた TODO は、本文を変える操作（文字・Shift 付きの文字・削除キー・貼り付け・切り取り）を知らせて拒み、行の途中の Enter は分けずに直下に足す", async () => {
+  const { calls, notice } = await start({
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [
+          bi(item(C, "持ち越した"), { carriedTo: { id: D, date: "2026-11-04" } }),
+          bi(item(B, "やめた", { status: "dropped", closeReason: "dropped" })),
+        ],
+      },
+    },
+  });
+  const tryKey = (row: HTMLElement, init: KeyboardEventInit) => {
+    const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    row.dispatchEvent(e);
+    flushSync();
+    return e.defaultPrevented;
+  };
+  const rows = $$(".r-todo .item");
+  const keys: KeyboardEventInit[] = [
+    { key: "a" },
+    { key: "A", shiftKey: true },
+    { key: " " },
+    { key: "Backspace" },
+    { key: "Delete" },
+  ];
+  const expected = ["11.04 Wed へ持ち越し済みです", "持ち越しの見直しで閉じた TODO は変更できません"];
+  for (const [i, row] of rows.entries()) {
+    for (const init of keys) {
+      notice.text = "";
+      expect(tryKey(row, init)).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    for (const type of ["paste", "cut", "drop"]) {
+      notice.text = "";
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      row.dispatchEvent(e);
+      flushSync();
+      expect(e.defaultPrevented).toBe(true);
+      expect(notice.text).toBe(expected[i]);
+    }
+    // Mod との組み合わせ（コピーなど）は知らせない
+    notice.text = "";
+    tryKey(row, { key: "c", code: "KeyC", ctrlKey: true });
+    expect(notice.text).toBe("");
+  }
+  expect(calls.some((c) => c.cmd === "save_item" || c.cmd === "add_item")).toBe(false);
+  expect(rows.map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "やめた"]);
+  // 行の途中の Enter は、本文を変えないので知らせず、分けずに直下へ空の項目を足す
+  notice.text = "";
+  expect(tryKey(rows[0], { key: "Enter" })).toBe(true);
+  expect(notice.text).toBe("");
+  await until(() => $$(".r-todo .item").length === 3);
+  expect($$(".r-todo .item").map((r) => text(r.querySelector(".txt")))).toEqual(["持ち越した", "", "やめた"]);
+});
+
 test("空の TODO で Enter を押して入力すると項目を作り、チェック欄で完了にする", async () => {
   const { calls } = await start();
   $(".r-todo .empty")!.click();

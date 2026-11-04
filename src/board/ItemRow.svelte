@@ -175,6 +175,12 @@
         void (action === "undo" ? model.undo() : model.redo());
         return;
     }
+    // 変えられない行で文字を入力しようとした（Shift 付きの大文字、Option・AltGr で打つ文字も含む）
+    if (lock !== null && isTyping(e)) {
+      e.preventDefault();
+      model.refuseEdit(row.key);
+      return;
+    }
     if (!plain) return;
     if (e.key === "Backspace" && el !== null && row.text === "" && caretCollapsed(el)) {
       e.preventDefault();
@@ -186,11 +192,20 @@
     } else if (e.key === "ArrowDown" && (el === null || caretOnEdgeLine(el, "last"))) {
       e.preventDefault();
       onNeighbor(row.key, 1, offset);
-    } else if (lock !== null && (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete")) {
-      // 変えられない行で文字を入力しようとした
-      e.preventDefault();
-      model.refuseEdit(row.key);
     }
+  }
+
+  /** 文字を打つキーか（Mod・Ctrl との組み合わせは除く。AltGr は Ctrl+Alt として届くので文字を打つ）。 */
+  function isTyping(e: KeyboardEvent): boolean {
+    if (e.key === "Backspace" || e.key === "Delete") return !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (e.key.length !== 1) return false;
+    return !(e.ctrlKey || e.metaKey) || e.getModifierState?.("AltGraph") === true;
+  }
+
+  // 変えられない行への貼り付け・切り取り・文のドロップ（入力欄が無いので何も起きないが、知らせる）
+  function onLockedEdit(e: Event) {
+    e.preventDefault();
+    model.refuseEdit(row.key);
   }
 
   function onMemoKey(e: KeyboardEvent) {
@@ -251,6 +266,9 @@
   onfocusin={onFocusIn}
   onfocusout={onFocusOut}
   onkeydown={lock !== null ? onTextKey : undefined}
+  onpaste={lock !== null ? onLockedEdit : undefined}
+  oncut={lock !== null ? onLockedEdit : undefined}
+  ondrop={lock !== null ? onLockedEdit : undefined}
 >
   {#if row.unseen}
     <span class="mk-agent lead" role="img" aria-label={m.agentUnseen} title={m.agentUnseen}></span>
