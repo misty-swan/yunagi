@@ -534,7 +534,8 @@ fn reads_need_the_read_scope_and_writes_need_theirs(dir: &DefaultDir) {
 /// 出さず、履歴にも残さず）、障害の ID・無い ID・形の誤りは直接モードと同じエラーになる。
 fn export_handoff_goes_through_the_app_as_a_read(dir: &DefaultDir) {
     let h = Harness::opened(dir);
-    let date = "2031-03-04";
+    // テストの間でデータベースを共有するので、ほかのテストと重ならない日を使う
+    let date = "2031-09-10";
     h.grant("claude-code", &[Scope::Read, Scope::Todo, Scope::Blocker]);
     h.drain();
     let todo = h.ok(

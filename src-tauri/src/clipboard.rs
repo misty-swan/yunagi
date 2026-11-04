@@ -15,7 +15,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::types::CommandError;
 
-/// クリップボードへの書き込み。プラグインを使う本物（[`PluginWriter`]）と、テストの偽物がある。
+/// クリップボードへの書き込み。プラグインを使う本物（`PluginWriter`）と、テストの偽物がある。
 pub trait Writer: Send + Sync {
     /// 文 `text` を、クリップボードの文字列にする。失敗したら理由（ログ用の文）を返す。
     fn write(&self, text: &str) -> Result<(), String>;
