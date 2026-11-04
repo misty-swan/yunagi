@@ -46,8 +46,10 @@ const VIM_CTRL_KEYS = ["r", "["];
  * `<C-r>` と `<C-[>` 以外。Vim の `<C-v>` `<C-a>` `<C-x>` `<C-d>` `<C-w>` などは、Mod を使う標準の
  * ショートカットと重なる。
  */
-export function leavesToApp(e: Pick<KeyboardEvent, "ctrlKey" | "altKey" | "key">, mac: boolean): boolean {
-  return !mac && e.ctrlKey && !e.altKey && !VIM_CTRL_KEYS.includes(e.key.toLowerCase());
+export function leavesToApp(e: Pick<KeyboardEvent, "ctrlKey" | "altKey" | "shiftKey" | "key">, mac: boolean): boolean {
+  // Ctrl+Shift+R（振り返りのテンプレート）などの Shift 付きも、アプリのキーなので Vim に渡さない
+  // （渡すと、続きのキー待ちの `d` や回数が黙って捨てられる）
+  return !mac && e.ctrlKey && !e.altKey && (e.shiftKey || !VIM_CTRL_KEYS.includes(e.key.toLowerCase()));
 }
 
 let ready = false;
@@ -86,7 +88,7 @@ function setup() {
     const host = hosts.get(v);
     if (host === undefined) return;
     const visual = getVimState(cm)?.visualMode === true;
-    void host.send(v, kind).finally(() => {
+    void host.send(v, kind).catch(() => {}).finally(() => {
       // 送っている間に日を移った・Vim モードを切り替えたなら、Vim が作り直されている（古いほうは触らない）
       if (visual && getCM(v) === cm && getVimState(cm)?.visualMode === true) Vim.exitVisualMode(cm as never);
     });
@@ -115,7 +117,8 @@ function getVimState(cm: unknown): { visualMode: boolean; insertMode: boolean } 
 
 /** エディタ `v` の Vim のモード（Vim が無効なら `null`）。 */
 export function vimModeOf(v: EditorView): VimMode | null {
-  const s = getVimState(getCM(v));
+  const cm = getCM(v);
+  const s = cm === null ? undefined : getVimState(cm);
   if (s === undefined) return null;
   return s.insertMode ? "insert" : s.visualMode ? "visual" : "normal";
 }

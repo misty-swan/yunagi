@@ -155,11 +155,13 @@ test("Vim の Ctrl のキーは、Mod のキーとして外へ渡す（Vim が�
 });
 
 test("Ctrl を押していても、macOS と AltGr は Vim に渡す", () => {
-  expect(leavesToApp({ ctrlKey: true, altKey: false, key: "v" }, false)).toBe(true);
-  expect(leavesToApp({ ctrlKey: true, altKey: false, key: "v" }, true)).toBe(false);
-  expect(leavesToApp({ ctrlKey: true, altKey: true, key: "@" }, false)).toBe(false);
-  expect(leavesToApp({ ctrlKey: true, altKey: false, key: "R" }, false)).toBe(false);
-  expect(leavesToApp({ ctrlKey: false, altKey: false, key: "v" }, false)).toBe(false);
+  const k = (key: string, o: Partial<KeyboardEvent> = {}) => ({ ctrlKey: true, altKey: false, shiftKey: false, key, ...o });
+  expect(leavesToApp(k("v"), false)).toBe(true);
+  expect(leavesToApp(k("v"), true)).toBe(false);
+  expect(leavesToApp(k("@", { altKey: true }), false)).toBe(false);
+  expect(leavesToApp(k("R"), false)).toBe(false);
+  expect(leavesToApp(k("R", { shiftKey: true }), false)).toBe(true);
+  expect(leavesToApp(k("v", { ctrlKey: false }), false)).toBe(false);
 });
 
 test("Alt と ⌘ を使うキー（前日・翌日の Alt+[ ]、割当を変えたキー）は、ノーマル・ビジュアルでも Vim が使わず、外へ届く", () => {
@@ -210,6 +212,22 @@ test("R（上書き）は INSERT として知らせる。Caps Lock が入って�
   expect(v.state.doc.toString()).toBe("abc");
   expect(press(v, { key: "R", code: "KeyR", ctrlKey: true }).consumed).toBe(true);
   expect(v.state.doc.toString()).toBe("bc");
+});
+
+test("Vim が無効のエディタでも、モードを調べても例外にならない（null）", () => {
+  const parent = document.createElement("div");
+  document.body.append(parent);
+  const v = new EditorView({ parent, state: EditorState.create({ doc: "abc" }) });
+  expect(vimModeOf(v)).toBeNull();
+  v.destroy();
+});
+
+test("Ctrl+Shift+R のように Shift の付いたキーは、続きのキー待ちを捨てずに外へ届く", () => {
+  const v = make("a b c");
+  keys(v, "d");
+  expect(press(v, { key: "R", code: "KeyR", ctrlKey: true, shiftKey: true }).consumed).toBe(false);
+  keys(v, "w");
+  expect(v.state.doc.toString()).toBe("b c");
 });
 
 test("Ctrl+R はやり直し、Ctrl+[ は Esc", () => {
