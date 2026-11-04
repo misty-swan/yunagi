@@ -121,6 +121,8 @@ pub fn hello(
     timeout: Duration,
 ) -> Result<Session, HelloError> {
     let stream = Arc::new(stream);
+    // 0 の時間切れは設定できないので、1 ミリ秒を下限にする（期限の残りが尽きかけているとき）
+    let timeout = timeout.max(Duration::from_millis(1));
     stream
         .set_read_timeout(Some(timeout))
         .map_err(HelloError::Io)?;
