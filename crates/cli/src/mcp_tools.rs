@@ -9,6 +9,8 @@
 //! 権限を変えられないようにするため。05 1章）。`export_handoff`（A-06）は、コアの入口を作るとき（YUN-70）に
 //! 足す。
 
+use std::sync::OnceLock;
+
 use serde_json::{Map, Value, json};
 
 /// ツール 1 つの定義。
@@ -233,8 +235,13 @@ fn tools() -> Vec<Tool> {
     ]
 }
 
-/// `tools/list` の `tools`。
-pub fn list() -> Vec<Value> {
+/// `tools/list` の `tools`。最初に 1 回だけ組み立てる。
+pub fn list() -> &'static [Value] {
+    static LIST: OnceLock<Vec<Value>> = OnceLock::new();
+    LIST.get_or_init(build)
+}
+
+fn build() -> Vec<Value> {
     tools()
         .into_iter()
         .map(|t| {
@@ -264,7 +271,7 @@ pub fn list() -> Vec<Value> {
 
 /// 公開しているツールの名前か。後から `ops` に操作が増えても、ここに足すまでは MCP に出さない。
 pub fn exists(name: &str) -> bool {
-    tools().iter().any(|t| t.name == name)
+    list().iter().any(|t| t["name"] == name)
 }
 
 #[cfg(test)]

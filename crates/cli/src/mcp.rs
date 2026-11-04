@@ -98,8 +98,9 @@ pub fn serve(
             Ok(None) => return 0,
             Err(LineError::TooLong) => {
                 // 残りの行を読み捨てて、次の依頼から続ける
-                if skip_line(&mut *input).is_err() {
-                    return 0;
+                if let Err(e) = skip_line(&mut *input) {
+                    let _ = writeln!(stderr, "yunagi: could not read from standard input: {e}");
+                    return 1;
                 }
                 Some(rpc_error(
                     &Value::Null,
@@ -110,7 +111,7 @@ pub fn serve(
             }
             Err(LineError::Io(e)) => {
                 let _ = writeln!(stderr, "yunagi: could not read from standard input: {e}");
-                return 0;
+                return 1;
             }
         };
         if let Some(response) = response
@@ -217,13 +218,19 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
     if message.contains_key("result") || message.contains_key("error") {
         return None;
     }
+    // 読める `id` は、依頼の形の誤りの応答にも付ける（クライアントがどの依頼の誤りか分かるように）
+    let known_id = message
+        .get("id")
+        .filter(|id| id.is_string() || id.is_number())
+        .cloned()
+        .unwrap_or(Value::Null);
     let Some(method) = message
         .get("method")
         .and_then(Value::as_str)
         .map(str::to_owned)
     else {
         return Some(rpc_error(
-            &Value::Null,
+            &known_id,
             INVALID_REQUEST,
             "The message has no method.",
             None,
@@ -255,6 +262,8 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
     let modern = match params.get("_meta").and_then(|m| m.get(META_VERSION)) {
         None => false,
         Some(Value::String(version)) if version == MODERN_VERSION => true,
+        // 旧い仕様の版を名乗る依頼は、旧い仕様の依頼として答える（断らない）
+        Some(Value::String(version)) if LEGACY_VERSIONS.contains(&version.as_str()) => false,
         Some(Value::String(version)) => {
             return Some(rpc_error(
                 &id,
@@ -280,7 +289,7 @@ fn handle(line: &[u8], call: &mut CallFn<'_>, after_call: &mut dyn FnMut()) -> O
             Ok(json!({"tools": mcp_tools::list(), "ttlMs": 300_000, "cacheScope": "public"}))
         }
         "tools/call" => {
-            let result = tools_call(&mut params, line.len(), call);
+            let result = tools_call(&mut params, call);
             after_call();
             result
         }
@@ -339,7 +348,6 @@ fn discover() -> Value {
 /// ツールの結果の `isError`（仕様の Error Handling）。
 fn tools_call(
     params: &mut Map<String, Value>,
-    line_len: usize,
     call: &mut CallFn<'_>,
 ) -> Result<Value, (i64, String)> {
     let Some(name) = params
@@ -355,10 +363,11 @@ fn tools_call(
     let arguments = match params.remove("arguments") {
         None | Some(Value::Null) => Ok(Map::new()),
         Some(Value::Object(arguments)) => {
-            // JSON にした引数は、受け取った行より長くならない（エスケープの書き方は、受け取った側のほうが
-            // 長いか同じ）ので、行が上限以下なら測らない
-            let too_large = line_len > MAX_ARGUMENTS
-                && serde_json::to_vec(&arguments).is_ok_and(|json| json.len() > MAX_ARGUMENTS);
+            // 受け取った行の長さは当てにしない（`1e5` が `100000.0` になるなど、JSON にし直すと長くなる
+            // 書き方がある）。ローカル API に送る形で、書き出さずに長さだけ数える
+            let mut size = Counter(0);
+            let too_large =
+                serde_json::to_writer(&mut size, &arguments).is_err() || size.0 > MAX_ARGUMENTS;
             if too_large {
                 Err(error::invalid_argument(
                     "The arguments are too large. Send less text at a time.",
@@ -375,6 +384,20 @@ fn tools_call(
         // CLI の `--json` と同じ包み方
         Err(e) => tool_result(&json!({"error": e}), true),
     })
+}
+
+/// 書き込まれたバイト数だけを数える（中身は捨てる）。
+struct Counter(usize);
+
+impl Write for Counter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn tool_result(value: &Value, is_error: bool) -> Value {
@@ -546,6 +569,22 @@ mod tests {
         assert_eq!(r[4]["error"]["code"], INVALID_REQUEST);
         assert_eq!(r[5]["id"], 2);
         assert_eq!(r.len(), 6);
+    }
+
+    #[test]
+    fn a_readable_id_is_echoed_in_a_malformed_request_and_legacy_meta_is_served() {
+        let (r, _) = exchange(&[
+            r#"{"jsonrpc":"2.0","id":5,"method":123}"#,
+            r#"{"jsonrpc":"2.0","id":"six"}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-06-18"}}}"#,
+        ]);
+        assert_eq!(
+            (r[0]["id"].clone(), r[0]["error"]["code"].clone()),
+            (json!(5), json!(INVALID_REQUEST))
+        );
+        assert_eq!(r[1]["id"], "six");
+        // 旧い仕様の版を名乗る依頼は断らず、旧い仕様の依頼として答える
+        assert_eq!(r[2]["result"], json!({}));
     }
 
     #[test]
