@@ -17,8 +17,13 @@ use jiff::tz::TimeZone;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 use yunagi_core::domain::agent::{self, Agent, ClientLookup, PermissionDenied, ReadError};
+use yunagi_core::domain::agent_admin::{self, ScopeArgument, ScopeError};
 use yunagi_core::domain::board::{self, BoardItem};
 use yunagi_core::domain::day;
+use yunagi_core::domain::history::{
+    self, ChangeFilter, HistoryError, Missing, PlanState, RevertArgument, RevertConflict,
+    RevertError, RevertRequest,
+};
 use yunagi_core::domain::item::{
     self, CloseReason, Conflict, InvalidArgument, Item, ItemError, ItemKind, ItemOperation,
 };
@@ -26,11 +31,13 @@ use yunagi_core::domain::logical_date::{DateSpec, LogicalDate};
 use yunagi_core::domain::note_body::{self, LineEdit, LineOp};
 use yunagi_core::domain::search;
 use yunagi_core::domain::text_doc::{
-    self, InvalidHeading, NoteRead, NoteReadError, TextDocError, Written,
+    self, InvalidHeading, NoteRead, NoteReadError, TextDoc, TextDocError, Written,
 };
 use yunagi_core::error::ErrorChain;
 use yunagi_core::storage::search::{SearchKind, SearchQuery};
 use yunagi_core::storage::table::agent_client::Scope;
+use yunagi_core::storage::table::change_log::Target;
+use yunagi_core::storage::table::format_time;
 use yunagi_core::storage::{StorageError, Ulid};
 
 /// 失敗。
@@ -108,6 +115,55 @@ pub struct Date(DateSpec);
 pub enum Call {
     Read(ReadCall),
     Write(WriteCall),
+    /// 利用者が行う管理の操作（権限・変更履歴・取り消し。A-08）。MCP には出さない（05 3章）。
+    Admin(AdminCall),
+}
+
+impl Call {
+    /// データを何も変えない依頼か。変えなければ、依頼を送った後に接続が切れても 1 回だけやり直せる
+    /// （05 4.3 の `result_unknown`）。
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Self::Read(_) => true,
+            Self::Write(_) => false,
+            Self::Admin(a) => a.is_read_only(),
+        }
+    }
+}
+
+/// 管理の操作（A-08。05 4.4）。呼び出し元のスコープは確かめない（閲覧は不要。変更と取り消しの確認は、
+/// 呼び出し側の CLI の端末か、アプリの設定画面が行う。確認は防御の境界ではない。05 2章）。
+#[derive(Debug)]
+pub enum AdminCall {
+    /// クライアントの一覧。
+    ListAgents,
+    /// クライアントの権限を変える。
+    SetScopes {
+        client: String,
+        allow: Vec<Scope>,
+        deny: Vec<Scope>,
+        /// 確認の画面で見せた変更前のスコープ。いまと違えば書かない。
+        expect: Option<Vec<Scope>>,
+    },
+    /// 変更履歴の一覧。
+    ListChanges(ChangesArgs),
+    /// 取り消しで何が起きるか（何も書かない）。
+    PreviewRevert(Ulid),
+    /// 取り消す。
+    Revert {
+        id: Ulid,
+        force: bool,
+        expect: Option<String>,
+    },
+}
+
+/// `list_changes` の引数。
+#[derive(Debug)]
+pub struct ChangesArgs {
+    pub client: Option<String>,
+    pub unseen_only: bool,
+    pub before: Option<Ulid>,
+    pub limit: usize,
 }
 
 /// 読み取りの依頼。
@@ -232,6 +288,39 @@ impl Call {
                     "move_to",
                 ])?;
                 Self::Write(WriteCall::EditNote(p.date()?, p.line_edit()?))
+            }
+            "list_agents" => {
+                p.only(&[])?;
+                Self::Admin(AdminCall::ListAgents)
+            }
+            "set_agent_scopes" => {
+                p.only(&["client", "allow", "deny", "expect"])?;
+                Self::Admin(AdminCall::SetScopes {
+                    client: p.string("client")?,
+                    allow: p.scopes("allow")?,
+                    deny: p.scopes("deny")?,
+                    expect: if p.get("expect").is_some() {
+                        Some(p.scopes("expect")?)
+                    } else {
+                        None
+                    },
+                })
+            }
+            "list_changes" => {
+                p.only(&["client", "unseen", "before", "limit"])?;
+                Self::Admin(AdminCall::ListChanges(p.changes()?))
+            }
+            "preview_revert" => {
+                p.only(&["change_id"])?;
+                Self::Admin(AdminCall::PreviewRevert(p.change_id("change_id")?))
+            }
+            "revert_change" => {
+                p.only(&["change_id", "force", "expect"])?;
+                Self::Admin(AdminCall::Revert {
+                    id: p.change_id("change_id")?,
+                    force: p.boolean("force")?,
+                    expect: p.optional_string("expect")?,
+                })
             }
             _ => return Err(Failure::NoMethod),
         };
@@ -382,6 +471,109 @@ impl WriteCall {
     }
 }
 
+impl AdminCall {
+    /// データを何も変えない操作か。
+    pub fn is_read_only(&self) -> bool {
+        matches!(
+            self,
+            Self::ListAgents | Self::ListChanges(_) | Self::PreviewRevert(_)
+        )
+    }
+
+    /// 管理の操作を行う。`agent` は [`resolve_client`] で求めた呼び出し元（画面の状態を持つ。取り消しが
+    /// 入力中・保存の失敗中を確かめるため）。
+    pub fn execute(
+        &self,
+        conn: &Connection,
+        agent: &Agent<'_>,
+        tz: &TimeZone,
+        at: Timestamp,
+    ) -> Result<Reply, Failure> {
+        match self {
+            Self::ListAgents => {
+                let clients = agent_admin::list_clients(conn).map_err(storage_failure)?;
+                let agents: Vec<Value> = clients
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "id": c.id.to_string(),
+                            "name": c.name,
+                            "scopes": c.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                            "created_at": format_time(c.created_at),
+                            "last_seen_at": c.last_seen_at.map(format_time),
+                        })
+                    })
+                    .collect();
+                Ok(Reply::new(json!({"agents": agents}), false))
+            }
+            Self::SetScopes {
+                client,
+                allow,
+                deny,
+                expect,
+            } => {
+                let c = agent_admin::change_scopes(conn, client, allow, deny, expect.as_deref())
+                    .map_err(scope_failure)?;
+                let names =
+                    |scopes: &[Scope]| scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                let value = json!({
+                    "updated": c.updated,
+                    "client": c.client.name,
+                    "before": names(&c.before),
+                    "scopes": names(&c.client.scopes),
+                });
+                Ok(Reply::new(value, c.updated))
+            }
+            Self::ListChanges(args) => {
+                let filter = ChangeFilter {
+                    client: args.client.clone(),
+                    unseen_only: args.unseen_only,
+                    before: args.before,
+                    limit: args.limit,
+                };
+                let entries = history::list_changes(conn, &filter).map_err(history_failure)?;
+                let shown = args.limit.min(history::MAX_LIMIT);
+                let next_before = (entries.len() == shown)
+                    .then(|| entries.last().map(|e| e.log.id.to_string()))
+                    .flatten();
+                let value = json!({
+                    "changes": entries.iter().map(entry_json).collect::<Vec<_>>(),
+                    "next_before": next_before,
+                });
+                Ok(Reply::new(value, false))
+            }
+            Self::PreviewRevert(id) => {
+                let plan = history::preview(conn, *id).map_err(revert_failure)?;
+                Ok(Reply::new(plan_json(&plan), false))
+            }
+            Self::Revert { id, force, expect } => {
+                let request = RevertRequest {
+                    force: *force,
+                    expect: expect.as_deref(),
+                };
+                let r = history::revert(conn, *id, &request, agent.ui, tz, at)
+                    .map_err(revert_failure)?;
+                let state = if r.updated {
+                    "reverted"
+                } else {
+                    r.plan.state.as_str()
+                };
+                let mut value = json!({
+                    "updated": r.updated,
+                    "id": r.plan.log.id.to_string(),
+                    "state": state,
+                    "revert_id": r.revert_id.map(|i| i.to_string()),
+                    "effect": effect_json(&r.plan.effect),
+                });
+                value["operation"] = json!(r.plan.log.operation);
+                // 値を書かなくても、記録を取り消し済みにしたときは、履歴の画面を読み直せるよう知らせる
+                let changed = r.updated || r.plan.state == PlanState::AlreadyRestored;
+                Ok(Reply::new(value, changed))
+            }
+        }
+    }
+}
+
 // ---- 引数 ----
 
 struct Params<'a>(&'a Map<String, Value>);
@@ -439,6 +631,75 @@ impl<'a> Params<'a> {
             Failure::App(invalid_argument(
                 "id is not a valid item ID. Use an id from get_board.",
             ))
+        })
+    }
+
+    /// 変更履歴の記録の ID。
+    fn change_id(&self, key: &str) -> Result<Ulid, Failure> {
+        self.parse_change_id(key, &self.string(key)?)
+    }
+
+    fn parse_change_id(&self, key: &str, value: &str) -> Result<Ulid, Failure> {
+        value.parse().map_err(|_| {
+            Failure::App(invalid_argument(&format!(
+                "{key} is not a valid change ID. Use an ID from the change history."
+            )))
+        })
+    }
+
+    /// 真偽の引数。無ければ偽。
+    fn boolean(&self, key: &str) -> Result<bool, Failure> {
+        match self.get(key) {
+            None => Ok(false),
+            Some(Value::Bool(b)) => Ok(*b),
+            Some(_) => Err(Failure::Params(format!("{key} must be true or false"))),
+        }
+    }
+
+    /// スコープの名前の配列（無ければ空）。
+    fn scopes(&self, key: &str) -> Result<Vec<Scope>, Failure> {
+        match self.get(key) {
+            None => Ok(Vec::new()),
+            Some(Value::Array(items)) => {
+                let mut scopes = Vec::new();
+                for item in items {
+                    let scope = item
+                        .as_str()
+                        .and_then(|s| s.parse::<Scope>().ok())
+                        .ok_or_else(|| {
+                            let names: Vec<&str> = Scope::ALL.iter().map(|s| s.as_str()).collect();
+                            Failure::App(invalid_argument(&format!(
+                                "{key} must be a list of {}.",
+                                names.join(", ")
+                            )))
+                        })?;
+                    if !scopes.contains(&scope) {
+                        scopes.push(scope);
+                    }
+                }
+                Ok(scopes)
+            }
+            Some(_) => Err(Failure::Params(format!("{key} must be a list of strings"))),
+        }
+    }
+
+    /// `list_changes` の引数。`limit` は 1 以上（無ければ既定の件数）。
+    fn changes(&self) -> Result<ChangesArgs, Failure> {
+        let limit = match self.number("limit")? {
+            None => history::DEFAULT_LIMIT,
+            Some(0) => {
+                return Err(Failure::App(invalid_argument("limit must be 1 or more.")));
+            }
+            Some(n) => n,
+        };
+        Ok(ChangesArgs {
+            client: self.optional_string("client")?,
+            unseen_only: self.boolean("unseen")?,
+            before: match self.optional_string("before")? {
+                None => None,
+                Some(s) => Some(self.parse_change_id("before", &s)?),
+            },
+            limit,
         })
     }
 
@@ -607,6 +868,109 @@ fn found_json(found: &search::Found) -> Value {
     Value::Object(o)
 }
 
+/// 変更履歴の1件（05 4.4 の `list_changes`）。
+fn entry_json(e: &history::Entry) -> Value {
+    let log = &e.log;
+    let target = match (log.target, &e.item) {
+        (Target::Item(id), item) => {
+            let mut o = json!({"type": "item", "id": id.to_string()});
+            if let Some(i) = item {
+                o["date"] = json!(i.date.to_string());
+                o["kind"] = json!(i.kind.as_str());
+                o["text"] = json!(i.text);
+                o["deleted"] = json!(i.deleted);
+            }
+            o
+        }
+        (Target::Note(date), _) => json!({"type": "note", "date": date.to_string()}),
+        (Target::Reflection(date), _) => json!({"type": "reflection", "date": date.to_string()}),
+    };
+    let summary = match &e.summary {
+        history::Summary::ItemAdded { kind, text } => {
+            json!({"type": "added", "kind": kind, "text": text})
+        }
+        history::Summary::Fields(fields) => json!({
+            "type": "fields",
+            "fields": fields.iter().map(|f| json!({
+                "name": f.name, "before": f.before, "after": f.after,
+            })).collect::<Vec<_>>(),
+        }),
+        history::Summary::Text {
+            before_chars,
+            after_chars,
+        } => json!({"type": "text", "before_chars": before_chars, "after_chars": after_chars}),
+        history::Summary::Unknown => json!({"type": "unknown"}),
+    };
+    json!({
+        "id": log.id.to_string(),
+        "created_at": format_time(log.created_at),
+        "actor": log.actor.as_str(),
+        "client": e.client_name,
+        "operation": log.operation,
+        "target": target,
+        "summary": summary,
+        "seen_at": log.seen_at.map(format_time),
+        "reverted_at": log.reverted_at.map(format_time),
+        "revert_of": log.revert_of_id.map(|i| i.to_string()),
+    })
+}
+
+/// 取り消しの計画（05 4.4 の `preview_revert`）。
+fn plan_json(p: &history::Plan) -> Value {
+    let state = p.state.as_str();
+    json!({
+        "id": p.log.id.to_string(),
+        "operation": p.log.operation,
+        "client": p.client_name,
+        "created_at": format_time(p.log.created_at),
+        "state": state,
+        "token": p.token,
+        "changed_since": p.drift,
+        "effect": effect_json(&p.effect),
+    })
+}
+
+fn effect_json(e: &history::Effect) -> Value {
+    match e {
+        history::Effect::None => json!({"type": "none"}),
+        history::Effect::DeleteItem { item, carried_to } => json!({
+            "type": "delete_item",
+            "id": item.id.to_string(),
+            "date": item.date.to_string(),
+            "kind": item.kind.as_str(),
+            "text": item.text,
+            "carried_to_id": carried_to.map(|c| c.id.to_string()),
+            "carried_to_date": carried_to.map(|c| c.date.to_string()),
+        }),
+        history::Effect::Fields { item, fields } => json!({
+            "type": "fields",
+            "id": item.id.to_string(),
+            "date": item.date.to_string(),
+            "kind": item.kind.as_str(),
+            "text": item.text,
+            "fields": fields.iter().map(|f| json!({
+                "name": f.name,
+                "current": f.current,
+                "restore": f.restore,
+                "changed_since": f.changed_since,
+            })).collect::<Vec<_>>(),
+        }),
+        history::Effect::Text {
+            doc, date, diff, ..
+        } => json!({
+            "type": "text",
+            "doc": match doc {
+                TextDoc::Note => "note",
+                TextDoc::Reflection => "reflection",
+            },
+            "date": date.to_string(),
+            "removed": diff.removed,
+            "added": diff.added,
+            "truncated": diff.truncated,
+        }),
+    }
+}
+
 fn added_json(i: &Item) -> Value {
     json!({"id": i.id.to_string(), "date": i.date.to_string(), "text": i.text})
 }
@@ -745,6 +1109,117 @@ fn item_failure(e: ItemError) -> Failure {
         ItemError::Storage(e) => return storage_failure(e),
         // 画面の削除の取り消しだけで起きる（エージェントの操作には無い）
         ItemError::RestoreRefused(_) => error("invalid_argument", "This request is not supported."),
+    })
+}
+
+/// 権限の変更の失敗。
+fn scope_failure(e: ScopeError) -> Failure {
+    Failure::App(match e {
+        ScopeError::NotFound => error(
+            "not_found",
+            "No client with this name is registered. A client is registered when it first connects.",
+        ),
+        ScopeError::Changed => json!({
+            "code": "conflict",
+            "reason": "changed",
+            "message": "The client's scopes changed after they were shown. Nothing was changed. Look at them again.",
+        }),
+        ScopeError::InvalidArgument(ScopeArgument::Nothing) => {
+            invalid_argument("Give at least one scope to allow or deny.")
+        }
+        ScopeError::InvalidArgument(ScopeArgument::Both(scope)) => {
+            invalid_argument(&format!("The scope {scope} is both allowed and denied."))
+        }
+        ScopeError::InvalidArgument(ScopeArgument::UnknownWrite(scope)) => {
+            invalid_argument(&format!(
+                "The unknown client (connections without an identifier) can only have the read scope, not {scope}. Register the agent with `yunagi agent setup` so that it has its own name."
+            ))
+        }
+        ScopeError::Storage(e) => return storage_failure(e),
+    })
+}
+
+/// 変更履歴の一覧の失敗。
+fn history_failure(e: HistoryError) -> Failure {
+    match e {
+        HistoryError::ClientNotFound => Failure::App(error(
+            "not_found",
+            "No client with this name is registered.",
+        )),
+        HistoryError::ZeroLimit => Failure::App(invalid_argument("limit must be 1 or more.")),
+        HistoryError::Storage(e) => storage_failure(e),
+    }
+}
+
+/// 取り消しの失敗。どれも何も書いていない。
+fn revert_failure(e: RevertError) -> Failure {
+    Failure::App(match e {
+        RevertError::NotFound(Missing::Change) => error(
+            "not_found",
+            "No change record with this ID exists. It may have been replaced by the user's own change. Read the change history again.",
+        ),
+        RevertError::NotFound(Missing::Item) => error(
+            "not_found",
+            "The item of this change was deleted, so there is nothing to revert.",
+        ),
+        RevertError::InvalidArgument(RevertArgument::NotAgentChange) => invalid_argument(
+            "This record is not a change made by an agent (it is a revert). Revert the original change instead.",
+        ),
+        RevertError::InvalidArgument(RevertArgument::Unsupported) => {
+            invalid_argument("This record cannot be reverted because its content cannot be read.")
+        }
+        RevertError::InvalidArgument(RevertArgument::Dropped { close_reason }) => {
+            let what = match close_reason {
+                CloseReason::Dropped => "dropped",
+                CloseReason::Split => "split into other TODOs",
+                CloseReason::ReturnedExternal => "returned to the external tool",
+            };
+            json!({
+                "code": "invalid_argument",
+                "close_reason": close_reason.as_str(),
+                "message": format!(
+                    "This TODO was {what} by the user. A closed TODO keeps its text and state, so the change was not reverted."
+                ),
+            })
+        }
+        RevertError::StorageUnavailable(_) => storage_unavailable_retrying(),
+        RevertError::Conflict(RevertConflict::Changed {
+            fields,
+            after_preview: true,
+        }) => json!({
+            "code": "conflict",
+            "reason": "changed",
+            "changed_fields": fields,
+            "message": "The target changed after the preview. Nothing was changed. Review it again.",
+        }),
+        RevertError::Conflict(RevertConflict::Changed {
+            fields,
+            after_preview: false,
+        }) => json!({
+            "code": "conflict",
+            "reason": "changed",
+            "changed_fields": fields,
+            "message": format!(
+                "The target was changed after this record (changed: {}). Nothing was changed. Review the difference, then run again with force to overwrite it.",
+                fields.join(", ")
+            ),
+        }),
+        RevertError::Conflict(RevertConflict::CarriedOver {
+            carried_to_id,
+            carried_to_date,
+        }) => json!({
+            "code": "conflict",
+            "reason": "carried_over",
+            "carried_to_id": carried_to_id.to_string(),
+            "carried_to_date": carried_to_date.to_string(),
+            "message": format!(
+                "This item was carried over to {carried_to_date}, and a carried-over item keeps the state it ended the day with. Nothing was changed. Fix the carried-over item by hand if needed."
+            ),
+        }),
+        RevertError::Conflict(RevertConflict::UserEditing) => {
+            conflict("user_editing", "The user is editing this. Try again later.")
+        }
+        RevertError::Storage(e) => return storage_failure(e),
     })
 }
 

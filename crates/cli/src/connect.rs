@@ -159,7 +159,7 @@ impl Connector {
                 return Err(error::internal(format!("unknown operation {method}")));
             }
         };
-        let is_read = matches!(call, Call::Read(_));
+        let is_read = call.is_read_only();
         let params = Value::Object(params);
         let mut retried = false;
         loop {
@@ -355,6 +355,13 @@ impl Connector {
             Call::Write(write) => {
                 let agent = Agent::without_ui(client_id);
                 write
+                    .execute(conn, &agent, &ops::system_tz(), ops::now())
+                    .map(|reply| reply.value)
+                    .map_err(failure_error)
+            }
+            Call::Admin(admin) => {
+                let agent = Agent::without_ui(client_id);
+                admin
                     .execute(conn, &agent, &ops::system_tz(), ops::now())
                     .map(|reply| reply.value)
                     .map_err(failure_error)

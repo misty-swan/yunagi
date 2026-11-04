@@ -30,10 +30,24 @@ impl Fixture {
 
     /// 偽の `claude`：引数を `calls.log` に 1 行ずつ記録する。`fail-add` があれば `mcp add` だけ失敗する。
     fn fake_claude(&self) {
-        let script = "#!/bin/sh\ndir=$(dirname \"$0\")\necho \"$@\" >> \"$dir/calls.log\"\nif [ \"$1 $2\" = \"mcp add\" ] && [ -f \"$dir/fail-add\" ]; then echo \"MCP server yunagi already exists in user config\" >&2; exit 1; fi\nexit 0\n";
+        let script = "#!/bin/sh\nif [ \"$1\" = \"--probe\" ]; then exit 0; fi\ndir=$(dirname \"$0\")\necho \"$@\" >> \"$dir/calls.log\"\nif [ \"$1 $2\" = \"mcp add\" ] && [ -f \"$dir/fail-add\" ]; then echo \"MCP server yunagi already exists in user config\" >&2; exit 1; fi\nexit 0\n";
         let exe = self.path("bin/claude");
         fs::write(&exe, script).unwrap();
         fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+        // 書いた直後の実行は、並行して動く別の試験が子プロセスを作った瞬間に、その子が書き込み用の
+        // ファイルの記述子を持ったまま（exec する前に）いると、ETXTBSY（実行ファイルが使用中）で失敗する。
+        // 子が exec して記述子が閉じるまでの一瞬なので、実行できるようになるまで試し直す
+        let mut tries = 0;
+        loop {
+            match std::process::Command::new(&exe).arg("--probe").status() {
+                Ok(_) => break,
+                Err(e) if e.raw_os_error() == Some(26) && tries < 400 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => panic!("the fake claude cannot be run: {e}"),
+            }
+        }
     }
 
     fn calls(&self) -> Vec<String> {

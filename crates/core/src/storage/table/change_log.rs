@@ -160,6 +160,65 @@ pub fn list_by_target(conn: &Connection, target: Target) -> Result<Vec<ChangeLog
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// 履歴の一覧の絞り込み（[`list_recent`]）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RecentFilter {
+    /// このクライアントの記録だけ（人の取り消しの記録は `agent_client_id` が無いので入らない）。
+    pub client: Option<Ulid>,
+    /// エージェントによる未確認の変更（`actor = agent` で `seen_at` が NULL）だけ。
+    pub unseen_only: bool,
+    /// この id より前（古い）の記録だけ（続きを読むときの目印）。
+    pub before: Option<Ulid>,
+}
+
+/// 一覧の1件。ノート・振り返りの記録は本文が大きいので、`before`・`after` を読まずに空にし、
+/// 本文の文字数だけを SQLite に数えさせる。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentRow {
+    pub log: ChangeLog,
+    /// ノート・振り返りの記録の、変更前・変更後の本文の文字数（項目の記録は `None`）。
+    pub before_chars: Option<i64>,
+    pub after_chars: Option<i64>,
+}
+
+/// 新しい順（id の降順）に、最大 `limit` 件。エージェントの記録と、人の取り消しの記録の両方を含む。
+pub fn list_recent(
+    conn: &Connection,
+    filter: &RecentFilter,
+    limit: usize,
+) -> Result<Vec<RecentRow>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, actor, agent_client_id, operation, target_type, target_id, \
+         CASE WHEN target_type = 'item' THEN before END, \
+         CASE WHEN target_type = 'item' THEN after END, \
+         created_at, reverted_at, revert_of_id, seen_at, \
+         CASE WHEN target_type <> 'item' THEN length(json_extract(before, '$')) END, \
+         CASE WHEN target_type <> 'item' THEN length(json_extract(after, '$')) END \
+         FROM change_log \
+         WHERE (?1 IS NULL OR agent_client_id = ?1) \
+         AND (?2 = 0 OR (actor = 'agent' AND seen_at IS NULL)) \
+         AND (?3 IS NULL OR id < ?3) \
+         ORDER BY id DESC LIMIT ?4",
+    )?;
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let rows = stmt.query_map(
+        params![
+            filter.client,
+            i64::from(filter.unseen_only),
+            filter.before,
+            limit
+        ],
+        |row| {
+            Ok(RecentRow {
+                log: from_row(row)?,
+                before_chars: row.get(12)?,
+                after_chars: row.get(13)?,
+            })
+        },
+    )?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// 取り消した時刻を記録する。行が無いか、すでに取り消し済みなら何もせず `false`
 /// （同じ記録を2回取り消したことに気づけるようにするため）。
 pub fn set_reverted_at(conn: &Connection, id: Ulid, at: Timestamp) -> Result<bool, StorageError> {

@@ -14,6 +14,9 @@ pub const CLI_ID: Ulid = Ulid::from_u128(1);
 /// `unknown` クライアント（識別子のない MCP 接続）の id（migrations/0001_initial.sql と同じ値）。
 pub const UNKNOWN_ID: Ulid = Ulid::from_u128(2);
 
+/// `unknown` クライアントの識別子（migrations/0001_initial.sql と同じ値）。
+pub const UNKNOWN_NAME: &str = "unknown";
+
 text_enum! {
     /// 権限（スコープ。MCP・CLI 仕様書 2章）。
     pub enum Scope {
@@ -23,6 +26,17 @@ text_enum! {
         Append => "append",
         NoteEdit => "note_edit",
     }
+}
+
+impl Scope {
+    /// すべてのスコープ。表示と保存で並べるときの順（MCP・CLI 仕様書 2章の表の順）。
+    pub const ALL: [Scope; 5] = [
+        Scope::Read,
+        Scope::Todo,
+        Scope::Blocker,
+        Scope::Append,
+        Scope::NoteEdit,
+    ];
 }
 
 /// agent_client の1行。
