@@ -122,6 +122,29 @@ test("足した行は本文が入ってから、いまの並びの位置に作�
   expect(calls.at(-1)).toEqual({ cmd: "restore_item", args: { deleted: { id: NEW, source: null } } });
 });
 
+test("持ち越しの確定で今日のボードが読み直されても、確定の前の操作は Mod+Z で戻せる（確定そのものは履歴に入れない）", async () => {
+  const { model, calls } = setup((cmd) => {
+    if (cmd === "add_item") return item(NEW, "新しい");
+    if (cmd === "delete_item") return { id: NEW, source: null };
+    return null;
+  });
+  model.load(board([bi(item(A, "a"))]));
+  const f = model.add("todo", A)!;
+  model.editText(f.key, "新しい");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS);
+  // 確定で、持ち越した項目 B・C が今日に加わった（同じ日の読み直し）
+  model.load(board([bi(item(B, "持ち越し")), bi(item(C, "子")), bi(item(A, "a")), bi(item(NEW, "新しい"))]));
+  await model.undo();
+  await model.settled();
+  // 戻るのは確定の前に足した項目だけで、持ち越した項目は残る
+  expect(calls.at(-1)).toEqual({ cmd: "delete_item", args: { id: NEW } });
+  expect(texts(model)).toEqual(["持ち越し", "子", "a"]);
+  // 戻せる操作はもう無い
+  const n = calls.length;
+  await model.undo();
+  expect(calls.length).toBe(n);
+});
+
 test("何も書かずに離れた行は、作らずに消す", async () => {
   const { model, calls } = setup();
   model.load(board([bi(item(A, "a"))]));

@@ -470,8 +470,8 @@ from: LogicalDate, selection: CarryoverSelection,
 reviews: Array<CarryoverReviewChoice>, };
 
 /**
- * 持ち越しを確定した結果。確定を Mod+Z で取り消すかはまだ決めていない（画面設計書 11章）。
- * 取り消すことにしたときは、作った項目と取りやめた項目をここから取り消しの履歴に持つ。
+ * 持ち越しを確定した結果。確定は Mod+Z で取り消せないので、画面は取り消しの履歴に持たない
+ * （操作仕様書 2章「取り消し・やり直し」）。
  */
 export type CarryoverConfirmed = { 
 /**
