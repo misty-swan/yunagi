@@ -4610,6 +4610,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "yunagi-api"
+version = "0.0.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows",
+ "yunagi-core",
+]
+
+[[package]]
 name = "yunagi-app"
 version = "0.0.0"
 dependencies = [
@@ -4626,6 +4638,7 @@ dependencies = [
  "tempfile",
  "ts-rs",
  "windows",
+ "yunagi-api",
  "yunagi-core",
 ]
 

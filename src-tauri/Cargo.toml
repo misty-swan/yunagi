@@ -14,6 +14,7 @@ tauri-build.workspace = true
 
 [dependencies]
 yunagi-core.workspace = true
+yunagi-api.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-global-shortcut.workspace = true
@@ -44,6 +45,12 @@ ts-rs.workspace = true
 # 1つのスレッドで順に走らせる（テストの仕組み（harness）を使わず、main から走らせる）
 [[test]]
 name = "bridge"
+harness = false
+
+# ローカル API の結合テスト（テスト計画書 4.2）。実際にソケットで待ち受け、既定ディレクトリを
+# 一時フォルダにするため、bridge と同じく main から走らせる
+[[test]]
+name = "api"
 harness = false
 
 # 強制終了の試験（テスト計画書 4.1）。コアを子プロセスで動かして SIGKILL で止める。既定ディレクトリを

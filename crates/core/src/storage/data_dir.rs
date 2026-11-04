@@ -89,6 +89,28 @@ pub fn default_dir() -> Result<DefaultDir, DataDirError> {
     default_dir_for(Platform::current(), |name| std::env::var_os(name)).map(DefaultDir)
 }
 
+/// 既定ディレクトリを作る（無ければ）。UNIX 系では利用者本人だけが入れる権限（0700）で作る
+/// （ローカル API のソケットとトークンを置くフォルダなので。docs/release/SECURITY.md 4.2。
+/// アーキテクチャ設計書 4.4）。親のフォルダは通常の権限で作る。すでにあるフォルダの権限は変えない
+/// （狭めるのはローカル API の待ち受けを始めるとき）。
+pub fn create_default_dir(dir: &DefaultDir) -> io::Result<()> {
+    let path = dir.path();
+    if path.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    match builder.create(path) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        other => other,
+    }
+}
+
 /// `platform` の既定ディレクトリを、`env` で引いた環境変数から求める。
 ///
 /// 求め方を確かめるための関数で、結果は [`DefaultDir`] ではなくただのパスにする

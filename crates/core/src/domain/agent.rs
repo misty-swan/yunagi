@@ -15,6 +15,63 @@ use crate::storage::table::agent_client::{self, Scope};
 use crate::storage::table::text_doc::TextDoc;
 use crate::storage::{StorageError, Ulid};
 
+/// クライアントの識別子（`yunagi mcp --client <name>`）の長さの上限（バイト数）。設定画面と
+/// change_log に出るので、長すぎるものは断る。
+pub const MAX_CLIENT_NAME_LEN: usize = 64;
+
+/// 識別子 `name` が使える形か：1〜[`MAX_CLIENT_NAME_LEN`] 文字の、英小文字・数字で始まり、英小文字・
+/// 数字・`-`・`_`・`.` だけでできたもの（`claude-code`・`codex` など）。
+pub fn is_valid_client_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= MAX_CLIENT_NAME_LEN
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
+}
+
+/// 識別子 `name` の呼び出し元（agent_client）の id を求め、最後に接続した時刻を `now` にする。
+///
+/// - `name` が無い（識別子のない接続）なら `unknown`（[`agent_client::UNKNOWN_ID`]）。
+/// - すでに登録された識別子（固定の `cli`・`unknown` を含む）ならその行。
+/// - 初めての識別子は `read` だけの権限で登録する（MCP・CLI 仕様書 2章。権限を足すのは利用者）。
+///
+/// 識別子は名乗るだけのもので、本人であることは確かめない（SECURITY.md 4.2）。使えない形の識別子は
+/// `Ok(None)`（何も登録しない）。
+pub fn client_for(
+    conn: &Connection,
+    name: Option<&str>,
+    now: jiff::Timestamp,
+) -> Result<Option<Ulid>, StorageError> {
+    let Some(name) = name else {
+        agent_client::update_last_seen(conn, agent_client::UNKNOWN_ID, now)?;
+        return Ok(Some(agent_client::UNKNOWN_ID));
+    };
+    if !is_valid_client_name(name) {
+        return Ok(None);
+    }
+    let id = match agent_client::get_by_name(conn, name)? {
+        Some(client) => client.id,
+        None => {
+            let id = Ulid::generate();
+            agent_client::insert(
+                conn,
+                &agent_client::AgentClient {
+                    id,
+                    name: name.to_owned(),
+                    scopes: vec![Scope::Read],
+                    created_at: now,
+                    last_seen_at: Some(now),
+                },
+            )?;
+            id
+        }
+    };
+    agent_client::update_last_seen(conn, id, now)?;
+    Ok(Some(id))
+}
+
 /// エージェント・CLI の呼び出し元。
 #[derive(Clone, Copy)]
 pub struct Agent<'a> {
