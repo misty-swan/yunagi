@@ -20,7 +20,7 @@ use super::item::{CarriedTo, Item, ItemKind, ItemStatus};
 use super::logical_date::LogicalDate;
 use super::note_body::{self, TimeHeading};
 use super::note_send;
-use crate::storage::table::agent_client::{self, Scope};
+use crate::storage::table::agent_client;
 use crate::storage::table::change_log;
 use crate::storage::table::item as item_table;
 use crate::storage::table::text_doc::{self, TextDoc};
@@ -220,8 +220,7 @@ pub fn get_board(
     client_id: Ulid,
     date: LogicalDate,
 ) -> Result<Board, ReadError> {
-    in_read_transaction(conn, || {
-        agent::require_scope::<ReadError>(conn, client_id, Scope::Read)?;
+    agent::read_as(conn, client_id, || {
         Ok(read_board(conn, date).map(|(b, _)| b)?)
     })
 }
@@ -316,8 +315,7 @@ pub fn open_board(
     client_id: Ulid,
     date: LogicalDate,
 ) -> Result<OpenBoard, ReadError> {
-    let (todos, blockers) = in_read_transaction(conn, || {
-        agent::require_scope::<ReadError>(conn, client_id, Scope::Read)?;
+    let (todos, blockers) = agent::read_as(conn, client_id, || {
         Ok::<_, ReadError>(board_items(conn, date, |i| i.status == ItemStatus::Open)?)
     })?;
     Ok(OpenBoard {
@@ -442,7 +440,7 @@ mod tests {
     use crate::domain::day;
     use crate::domain::item::{self, CloseReason, Position, delete};
     use crate::storage::Database;
-    use crate::storage::table::agent_client::CLI_ID;
+    use crate::storage::table::agent_client::{CLI_ID, Scope};
     use crate::storage::table::item::ItemChanges;
     use crate::storage::table::test_support::{at, date, open};
 

@@ -24,7 +24,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rusqlite::Connection;
 
-use super::agent::{self, Agent, PermissionDenied, StorageUnavailable};
+use super::agent::{self, Agent, PermissionDenied, ReadError, StorageUnavailable};
 use super::note_body::{self, Changed, InvalidArgument, LineEdit, LineEditError};
 use crate::domain::day;
 use crate::domain::logical_date::LogicalDate;
@@ -185,23 +185,22 @@ impl std::error::Error for InvalidHeading {}
 /// `get_note` が失敗した理由。読み取りなので `storage_unavailable` は無い（MCP・CLI 仕様書 4.3）。
 #[derive(Debug)]
 pub enum NoteReadError {
-    /// `read` スコープが許可されていない（`permission_denied`）。何も読んでいない。
-    PermissionDenied(PermissionDenied),
+    /// 権限が無い（`permission_denied`）か、読み取りに失敗した。
+    Read(ReadError),
     /// `--heading` が誤っている（`invalid_argument`）。
     InvalidArgument(InvalidHeading),
     /// 指定した見出しがノートに無い（`not_found`）。
     NotFound,
-    /// 読み取りに失敗した。
-    Storage(StorageError),
 }
 
 impl std::fmt::Display for NoteReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PermissionDenied(e) => e.fmt(f),
+            Self::Read(e) => e.fmt(f),
             Self::InvalidArgument(e) => e.fmt(f),
-            Self::NotFound => f.write_str("the note has no such heading"),
-            Self::Storage(e) => e.fmt(f),
+            Self::NotFound => f.write_str(
+                "The note has no such heading. Pass a string from `headings` of get_board unchanged.",
+            ),
         }
     }
 }
@@ -209,28 +208,28 @@ impl std::fmt::Display for NoteReadError {
 impl std::error::Error for NoteReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Read(e) => Some(e),
             Self::InvalidArgument(e) => Some(e),
-            Self::Storage(e) => Some(e),
-            Self::PermissionDenied(_) | Self::NotFound => None,
+            Self::NotFound => None,
         }
     }
 }
 
 impl From<PermissionDenied> for NoteReadError {
     fn from(e: PermissionDenied) -> Self {
-        Self::PermissionDenied(e)
+        Self::Read(e.into())
     }
 }
 
 impl From<StorageError> for NoteReadError {
     fn from(e: StorageError) -> Self {
-        Self::Storage(e)
+        Self::Read(e.into())
     }
 }
 
 impl From<rusqlite::Error> for NoteReadError {
     fn from(e: rusqlite::Error) -> Self {
-        Self::Storage(e.into())
+        Self::Read(e.into())
     }
 }
 
@@ -270,8 +269,7 @@ pub fn get_note(
     date: LogicalDate,
     heading: Option<&str>,
 ) -> Result<NoteRead, NoteReadError> {
-    crate::storage::in_read_transaction(conn, || {
-        agent::require_scope::<NoteReadError>(conn, client_id, Scope::Read)?;
+    agent::read_as(conn, client_id, || {
         let wanted = heading
             .map(|h| {
                 let h = h.trim();
@@ -292,16 +290,11 @@ pub fn get_note(
         let sections: Vec<HeadingSection> = note_body::sections(&snapshot.body)
             .into_iter()
             .filter_map(|section| {
-                let h = section.heading.filter(|h| h.text == wanted)?;
-                let text = note_body::lines(&snapshot.body)
-                    .skip(h.line - 1)
-                    .take(section.lines.end - h.line)
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let h = section.heading.as_ref().filter(|h| h.text == wanted)?;
                 Some(HeadingSection {
-                    heading: h.text,
+                    heading: h.text.clone(),
                     start_line: h.line,
-                    text,
+                    text: section.text_with_heading(&snapshot.body),
                 })
             })
             .collect();
@@ -1248,9 +1241,11 @@ mod tests {
             assert!(
                 matches!(
                     r,
-                    Err(NoteReadError::PermissionDenied(PermissionDenied {
-                        required_scope: Scope::Read
-                    }))
+                    Err(NoteReadError::Read(ReadError::PermissionDenied(
+                        PermissionDenied {
+                            required_scope: Scope::Read
+                        }
+                    )))
                 ),
                 "{r:?}"
             );
@@ -1342,6 +1337,25 @@ mod tests {
             // 良かったこと は時刻付き見出しではないので、見出しでは選べない
             assert!(matches!(get(h), Err(NoteReadError::NotFound)), "{h}");
         }
+    }
+
+    #[test]
+    fn get_note_matches_headings_in_a_crlf_note_and_keeps_the_cr() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        note_of(conn, "前置き\r\n## 10:00 定例\r\nA\r\n## 11:00 別件\r\nB");
+        assert_eq!(
+            sections(get_note(conn, CLI_ID, date(D), Some("10:00 定例"))),
+            [("10:00 定例".into(), 2, "## 10:00 定例\r\nA\r".into())]
+        );
+    }
+
+    #[test]
+    fn the_not_found_message_tells_how_to_pass_a_heading() {
+        let (db, _dir) = open();
+        let err = get_note(db.connection(), CLI_ID, date(D), Some("10:00")).unwrap_err();
+        assert!(matches!(err, NoteReadError::NotFound));
+        assert!(err.to_string().contains("`headings` of get_board"));
     }
 
     #[test]
