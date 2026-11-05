@@ -29,7 +29,12 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。
 
 1. タグ `v<ver>` の push を契機に起動する。
 2. 依存を固定したまま（lock ファイルを厳守）ビルドする。
-3. 依存の既知脆弱性の検査（`cargo audit`、`npm audit` 等）と、許可外ライセンスの検出（third-party-licenses.md 2章）を行い、問題があれば中止する。同梱するフォントのファイルの SHA-256 がデザインガイド 4章に書いた値と一致し、ライセンス文書（UDEV Gothic HS は `LICENSE`・`LICENSE_JetBrainsMono`・`LICENSE_BIZUDGothic`、Inter は `LICENSE.txt`）がそろっていることも確かめ、違えば中止する。`THIRD_PARTY_LICENSES.md` を、同梱するフォントのライセンスも含めて生成し（third-party-licenses.md 2章）、配布物に含める。
+3. 依存の既知脆弱性の検査と、許可外ライセンスの検出（third-party-licenses.md 2章）を行い、問題があれば中止する。同梱するフォントのファイルの SHA-256 がデザインガイド 4章に書いた値と一致し、ライセンス文書（UDEV Gothic HS は `LICENSE`・`LICENSE_JetBrainsMono`・`LICENSE_BIZUDGothic`、Inter は `LICENSE.txt`）がそろっていることも確かめ、違えば中止する。脆弱性の検査は次のとおり。
+   - Rust：`cargo audit`（`Cargo.lock` を調べる）。脆弱性（vulnerability）の指摘が1件でもあれば中止する。メンテナンス終了・取り下げ（yanked）の警告は、ログに残すだけで中止しない。
+   - JavaScript：`pnpm audit`（`pnpm-lock.yaml` を調べる）。指摘が1件でもあれば中止する。`--prod` は付けず、`devDependencies`（vite・`@tauri-apps/cli` など）も調べる。これらはビルドを動かす CI でシークレット（Updater の署名鍵）の近くで動き、配布物を作るため。
+   - 修正版がまだ無い指摘は、リポジトリに置いた許可リスト（Rust は `.cargo/audit.toml` の `ignore`、JavaScript は `pnpm audit --ignore <GHSA の ID>` に渡す ID の一覧）に、理由と見直す期限を添えて載せたときだけ通す。許可リストの変更は PR で見る。
+   - 検査は、その時点の脆弱性データベースと照合するので、同じタグを再実行すると結果が変わることがある（2 の「依存を固定したままビルドする」は、依存の版を固定する意味で、検査結果の固定ではない）。データベースやレジストリに届かず検査できなかったときも中止し（`--ignore-registry-errors` は使わない）、脆弱性による中止と区別して、つなぎ直してから再実行する。
+   - `THIRD_PARTY_LICENSES.md` を、同梱するフォントのライセンスも含めて生成し（third-party-licenses.md 2章）、配布物に含める。
 4. macOS：ビルド後にアドホック署名を行う（`codesign --force --deep -s - Yunagi.app`）。Apple Silicon では署名がないと起動できないため必須。
 5. Updater 用の署名を、CI のシークレットに保管した秘密鍵で付与する。
 6. SHA-256 を計算し、`.sha256` と `SHA256SUMS` を Release に添付する。`SHA256SUMS` に配布用鍵で署名し、`SHA256SUMS.sig` を添付する。
