@@ -252,7 +252,11 @@ export class AgentsScreen {
   }
 
   async #preview(entry: ChangeEntry, changedAfterPreview: boolean) {
-    await this.#deps.flush();
+    try {
+      await this.#deps.flush();
+    } catch {
+      // 送れなかった（保存に失敗している）。取り消しは、コアが保存の失敗中として断る（理由を出す）
+    }
     try {
       const plan = await core.previewRevert(entry.id);
       if (this.flow?.entry.id !== entry.id) return;

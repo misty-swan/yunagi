@@ -952,6 +952,8 @@ test("権限を足すときは確かめる文を出してから送り、外す�
   await until(() => $(".confirm") !== null);
   expect(text(".confirm")).toContain("Claude Code に「TODO 操作」を許可します。");
   expect(text(".confirm")).toContain("TODO の追加・編集・完了・取り消しができます。");
+  // 初めのフォーカスは「やめる」（Space の二度押しで、権限を許可してしまわない）
+  await until(() => document.activeElement?.textContent?.trim() === "やめる");
   expect(core.count("set_agent_scopes")).toBe(0);
   expect(scopeBox("claude-code", "todo").checked).toBe(false);
   // やめる

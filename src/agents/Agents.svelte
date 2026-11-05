@@ -27,8 +27,12 @@
   // 開いたら権限の一覧を読み、閉じるときは確かめている途中の操作を捨てる
   $effect(() => {
     if (!screen.open) return;
+    const release = admin.retain();
     void admin.load();
-    return () => admin.reset();
+    return () => {
+      release();
+      admin.reset();
+    };
   });
 
   // 開いたとき・開き直したときに、パネルへフォーカスを置く。閉じたら、開く直前にフォーカスのあった所へ戻す
@@ -52,7 +56,8 @@
   const flowKey = $derived(screen.flow === null ? null : `${screen.flow.entry.id}:${screen.flow.plan?.token ?? ""}:${screen.flow.problem?.kind ?? ""}`);
   $effect(() => {
     if (flowKey === null) return;
-    void tick().then(() => root?.querySelector<HTMLElement>(".revert .btn")?.focus());
+    // 初めのフォーカスは「やめる」（確定のボタンではなく）。キーボードの二度押しで、取り消しが確定しないように
+    void tick().then(() => root?.querySelector<HTMLElement>(".revert [data-initial]")?.focus());
   });
 
   const unseenCount = $derived(screen.unseen.length);
@@ -142,7 +147,9 @@
         <p class="warn" role="alert">
           {h.problem(f.problem.kind, { date: f.problem.date === undefined ? undefined : shortDate(f.problem.date) })}
         </p>
-        <div class="actions"><button type="button" class="btn" onclick={() => screen.cancelRevert()}>{h.revertCancel}</button></div>
+        <div class="actions">
+          <button type="button" class="btn" data-initial onclick={() => screen.cancelRevert()}>{h.revertCancel}</button>
+        </div>
       {:else if f.plan === null}
         <p class="muted" role="status">{h.previewing}</p>
       {:else}
@@ -191,7 +198,7 @@
         {/if}
         <div class="actions">
           {#if plan.state === "already_reverted"}
-            <button type="button" class="btn" onclick={() => screen.cancelRevert()}>{a.close}</button>
+            <button type="button" class="btn" data-initial onclick={() => screen.cancelRevert()}>{a.close}</button>
           {:else}
             <button
               type="button"
@@ -207,7 +214,9 @@
                     ? h.revertForce
                     : h.revertOk}
             </button>
-            <button type="button" class="btn" disabled={f.busy} onclick={() => screen.cancelRevert()}>{h.revertCancel}</button>
+            <button type="button" class="btn" data-initial disabled={f.busy} onclick={() => screen.cancelRevert()}>
+              {h.revertCancel}
+            </button>
           {/if}
         </div>
       {/if}

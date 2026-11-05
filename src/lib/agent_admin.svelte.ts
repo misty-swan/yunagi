@@ -52,15 +52,31 @@ export class AgentAdmin {
 
   #loads = 0;
   #stopped = false;
+  /** 一覧を出している画面の数（出している間だけ、`changed` で読み直す）。 */
+  #holders = 0;
   readonly #unlisten: UnlistenFn[] = [];
 
-  /** データの変わり方（changed）を聞き始める。読み込み済みなら、一覧を読み直す。 */
+  /**
+   * 一覧を出し始める（設定のエージェント区分・変更履歴 S-06 を開いたとき）。戻り値の関数で、出し終える。
+   * 出している間だけ、`changed` が届くたびに一覧を読み直す（自動保存のたびに読み直し続けないため）。
+   */
+  retain(): () => void {
+    this.#holders++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#holders--;
+    };
+  }
+
+  /** データの変わり方（changed）を聞き始める。一覧を出している間は、読み直す。 */
   start() {
     void (async () => {
       const u = await keepListening(
         () =>
           coreEvents.onChanged(() => {
-            if (this.agents !== null) void this.load();
+            if (this.#holders > 0) void this.load();
           }),
         () => this.#stopped,
       );

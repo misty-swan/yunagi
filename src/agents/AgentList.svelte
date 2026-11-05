@@ -44,7 +44,8 @@
   const asking = $derived(admin.ask?.client ?? admin.removing);
   $effect(() => {
     if (asking === null) return;
-    void tick().then(() => root?.querySelector<HTMLElement>(".confirm .btn")?.focus());
+    // 初めのフォーカスは「やめる」（許可する・消すではなく）。キーボードの二度押しで確定しないように
+    void tick().then(() => root?.querySelector<HTMLElement>(".confirm [data-initial]")?.focus());
   });
 </script>
 
@@ -105,7 +106,7 @@
               <p>{a.grantConfirm(names.label, a.scopes[ask.scope], a.scopeHelp[ask.scope])}</p>
               <div class="actions">
                 <button type="button" class="btn primary" onclick={() => void admin.confirmAsk()}>{a.grantYes}</button>
-                <button type="button" class="btn" onclick={() => admin.cancelAsk()}>{a.grantNo}</button>
+                <button type="button" class="btn" data-initial onclick={() => admin.cancelAsk()}>{a.grantNo}</button>
               </div>
             </div>
           {/if}
@@ -114,7 +115,7 @@
               <p>{a.removeConfirm(names.label)}</p>
               <div class="actions">
                 <button type="button" class="btn primary" onclick={() => void admin.confirmRemove()}>{a.removeYes}</button>
-                <button type="button" class="btn" onclick={() => admin.cancelRemove()}>{a.removeNo}</button>
+                <button type="button" class="btn" data-initial onclick={() => admin.cancelRemove()}>{a.removeNo}</button>
               </div>
             </div>
           {/if}

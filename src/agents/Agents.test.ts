@@ -308,15 +308,17 @@ test("エージェントと「未確認のみ」で絞り込み、続きがあ�
   expect(core.last("list_changes")).toEqual({ client: "claude-code", unseenOnly: true, before: null, limit: 50 });
 });
 
-test("取り消しは、入力を送り終えてから取り消す内容を確かめ、確かめた目印を付けて行う。行の下に出す", async () => {
+test("取り消しは、取り消す内容を確かめ、確かめた目印を付けて行う。確かめる文は行の下に出し、初めのフォーカスは「やめる」", async () => {
   const core = await start();
   await openPanel(core);
   core.calls.length = 0;
   buttonIn(row(E1.id), "取り消す").click();
   await until(() => row(E1.id).querySelector(".revert table") !== null);
-  // 入力を送る（report の後ではなく）前に、取り消す内容を読まない：preview_revert が呼ばれた
   expect(core.last("preview_revert")).toEqual({ changeId: E1.id });
   const box = row(E1.id).querySelector(".revert")!;
+  // 確定のボタンではなく「やめる」にフォーカスがある（Enter の二度押しで確定しない）
+  await until(() => document.activeElement?.textContent?.trim() === "やめる");
+  expect(box.contains(document.activeElement)).toBe(true);
   expect(box.textContent).toContain("次の欄を、記録の前の値に戻します。");
   expect(box.textContent).toContain("本文");
   expect(box.textContent).toContain("調べる");

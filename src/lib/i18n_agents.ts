@@ -4,7 +4,14 @@
 // 見出しの英字ラベル（Change history / Agents など）は、日英で共通（`labels.agents`）。ここには、状態の
 // 説明・操作の文・エラーを各言語で書く。内部のエラーの文は出さない（README「エラーの表示」）。
 
+import { backupTime } from "./backups";
 import type { AgentScope, ApiCause, CloseReason } from "./bindings";
+
+/** 欄の値のうち、時刻（ISO 8601）は端末の時刻の `2026.11.03 14:05` にする。読めなければそのまま。 */
+function timeValue(v: string): string {
+  const ms = Date.parse(v);
+  return Number.isNaN(ms) ? v : backupTime(ms);
+}
 
 /** 取り消しを始められない・取り消せなかった理由（画面に出す文の種類）。 */
 export type RevertProblem =
@@ -239,6 +246,9 @@ const ja: AgentsMessages = {
       })[name] ?? name,
     value: (name, v) => {
       if (v === null || v === "") return "（空）";
+      if (name === "completed_at") return timeValue(v);
+      if (name === "close_reason")
+        return ({ dropped: "取りやめ", split: "分割", returned_external: "外部課題へ戻した" } as Record<string, string>)[v] ?? v;
       if (name === "status")
         return ({ open: "未完了", done: "完了", dropped: "取りやめ", resolved: "解消済み" } as Record<string, string>)[v] ?? v;
       return v;
@@ -407,6 +417,9 @@ const en: AgentsMessages = {
       })[name] ?? name,
     value: (name, v) => {
       if (v === null || v === "") return "(empty)";
+      if (name === "completed_at") return timeValue(v);
+      if (name === "close_reason")
+        return ({ dropped: "dropped", split: "split", returned_external: "returned to the external tool" } as Record<string, string>)[v] ?? v;
       if (name === "status")
         return ({ open: "open", done: "done", dropped: "dropped", resolved: "resolved" } as Record<string, string>)[v] ?? v;
       return v;

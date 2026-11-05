@@ -92,9 +92,13 @@
   // 確かめている途中の操作と知らせを捨てる
   $effect(() => {
     if (panel.open && panel.section === "agents") {
+      const release = admin.retain();
       void admin.load();
       void admin.loadApi();
-      return () => admin.reset();
+      return () => {
+        release();
+        admin.reset();
+      };
     }
   });
 
