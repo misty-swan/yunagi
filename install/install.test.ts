@@ -202,6 +202,25 @@ describe("install.sh：Linux", () => {
     expect(existsSync(join(home, ".local/opt"))).toBe(false);
   });
 
+  it("YUNAGI_BASE_URL の末尾に / があっても動く", () => {
+    stockRelease("x86_64");
+    const r = run({ YUNAGI_BASE_URL: `file://${dist}/` });
+    expect(r.err).toBe("");
+    expect(r.status).toBe(0);
+  });
+
+  it("コピーに失敗したときは、前の AppImage を残し、一時ファイルも残さない", () => {
+    stockRelease("x86_64");
+    expect(run().status).toBe(0);
+    // AppImage の一時ファイルの場所をフォルダにして、cp を失敗させる
+    mkdirSync(join(home, ".local/opt/yunagi/.Yunagi.AppImage.new/x"), { recursive: true });
+    put(`Yunagi_${VERSION}_x86_64.AppImage`, "newer-bytes");
+    const r = run();
+    expect(r.status).not.toBe(0);
+    expect(readFileSync(join(home, ".local/opt/yunagi/Yunagi.AppImage"), "utf8")).toBe("appimage-bytes");
+    expect(existsSync(join(home, ".local/opt/yunagi/bin/.yunagi.new"))).toBe(false);
+  });
+
   it("CLI の配布物のメンバー名が ./yunagi でも読める", () => {
     put(`Yunagi_${VERSION}_x86_64.AppImage`, "appimage-bytes");
     const src = mkdtempSync(join(root, "dot-"));
@@ -471,5 +490,11 @@ describe.skipIf(!hasPwsh)("install.ps1（pwsh がある環境だけ）", () => {
     expect(ps(`${load} Get-PathWithEntry 'C:\\a;C:\\b' 'C:\\x\\bin'`).out).toBe("C:\\a;C:\\b;C:\\x\\bin");
     expect(ps(`${load} Get-PathWithEntry '' 'C:\\x\\bin'`).out).toBe("C:\\x\\bin");
     expect(ps(`${load} $null -eq (Get-PathWithEntry 'C:\\a;c:\\X\\BIN\\' 'C:\\x\\bin')`).out).toBe("True");
+    // 空の項目だけの PATH に足しても、先頭に空の項目を作らない
+    expect(ps(`${load} Get-PathWithEntry ';; ;' 'C:\\x\\bin'`).out).toBe("C:\\x\\bin");
+    // 展開前の %VAR% の項目が同じ場所を指しているときも、足さない
+    expect(
+      ps(`$env:YT_BASE='C:\\x'; ${load} $null -eq (Get-PathWithEntry 'C:\\a;%YT_BASE%\\bin' 'C:\\x\\bin')`).out,
+    ).toBe("True");
   });
 });

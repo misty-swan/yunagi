@@ -62,10 +62,12 @@ function Assert-Sha256([string]$Path, [string]$Expected) {
 # Adds Dir to the user PATH when it is not there yet. Returns the new value, or $null when nothing changed.
 function Get-PathWithEntry([string]$Current, [string]$Dir) {
     $entries = @()
-    if ($Current) { $entries = $Current.Split(';') | Where-Object { $_ -ne '' } }
+    if ($Current) { $entries = @($Current.Split(';') | Where-Object { $_.Trim() -ne '' }) }
     $wanted = $Dir.TrimEnd('\')
     foreach ($e in $entries) {
-        if ($e.TrimEnd('\') -ieq $wanted) { return $null }
+        # An entry may still hold %VAR% (the registry value is read unexpanded): compare the expanded form too.
+        $expanded = [Environment]::ExpandEnvironmentVariables($e)
+        if ($e.TrimEnd('\') -ieq $wanted -or $expanded.TrimEnd('\') -ieq $wanted) { return $null }
     }
     return (@($entries) + $Dir) -join ';'
 }
@@ -103,6 +105,7 @@ function Install-Yunagi {
 
         $base = if ($env:YUNAGI_BASE_URL) { $env:YUNAGI_BASE_URL } else { $script:DefaultBaseUrl }
         Test-PlaceholderUrl $base 'YUNAGI_BASE_URL'
+        $base = $base.TrimEnd('/') # a trailing slash would make "//" in the URL
         $name = "Yunagi_${version}_${arch}-setup.exe"
         $setup = Join-Path $tmp $name
         Save-File "$base/v$version/$name" $setup
@@ -110,12 +113,15 @@ function Install-Yunagi {
         Assert-Sha256 $setup (Read-Sha256File (Get-Content -Raw -LiteralPath "$setup.sha256"))
         Write-Host "Verified $name"
 
-        if (Get-Process -Name 'Yunagi' -ErrorAction SilentlyContinue) {
+        $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Yunagi'
+        # Only the app itself counts: the name 'Yunagi' also matches the command yunagi.exe (for example
+        # a running MCP server), which does not block the installer.
+        $appPath = Join-Path $installDir 'Yunagi.exe'
+        if (@(Get-Process -Name 'Yunagi' -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $appPath }).Count -gt 0) {
             Stop-Install 'Yunagi is running. Quit it and run this again.'
         }
 
         # NSIS: /S is silent, /D sets the install folder (it must be the last argument, without quotes).
-        $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Yunagi'
         $process = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
         if ($process.ExitCode -ne 0) { Stop-Install "the installer failed (exit code $($process.ExitCode))." }
 
@@ -135,6 +141,13 @@ function Install-Yunagi {
             }
         } finally {
             $envKey.Close()
+        }
+        if ($newPath) {
+            # Writing the registry directly does not tell running programs (Explorer, which starts new terminals)
+            # that the environment changed. Setting and removing a throwaway user variable through .NET sends that
+            # notice (WM_SETTINGCHANGE), so a terminal opened afterwards sees the new PATH without signing out.
+            [Environment]::SetEnvironmentVariable('YUNAGI_ENV_REFRESH', '1', 'User')
+            [Environment]::SetEnvironmentVariable('YUNAGI_ENV_REFRESH', $null, 'User')
         }
         if ($null -ne (Get-PathWithEntry $env:Path $binDir)) {
             $env:Path = "$env:Path;$binDir"

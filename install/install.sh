@@ -22,6 +22,7 @@ DEFAULT_LATEST_URL='https://<site>/latest.json'
 APP_ID='io.github.misty-swan.yunagi'
 
 TMP_DIR=''
+INSTALL_ROOT=''
 OS=''
 ARCH=''
 
@@ -37,6 +38,10 @@ die() {
 cleanup() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
+  fi
+  # Temporary files of a copy that did not finish (after a successful rename they no longer exist).
+  if [ -n "$INSTALL_ROOT" ]; then
+    rm -f "$INSTALL_ROOT/.Yunagi.AppImage.new" "$INSTALL_ROOT/bin/.yunagi.new"
   fi
 }
 
@@ -108,6 +113,7 @@ download_verified() {
   name=$1
   base=${YUNAGI_BASE_URL:-$DEFAULT_BASE_URL}
   check_url "$base" YUNAGI_BASE_URL
+  base=${base%/} # a trailing slash would make "//" in the URL
   fetch "$base/v$VERSION/$name" "$TMP_DIR/$name"
   fetch "$base/v$VERSION/$name.sha256" "$TMP_DIR/$name.sha256"
   expected=$(awk '{print tolower($1); exit}' "$TMP_DIR/$name.sha256")
@@ -149,12 +155,13 @@ install_linux() {
 
   mkdir -p "$root/bin"
 
-  # Write next to the final place and rename, so a running app is never overwritten in place.
+  # Write both next to their final places first, then rename both. A running app is never overwritten
+  # in place, and a failure while copying (for example a full disk) leaves the old install as it was.
+  INSTALL_ROOT=$root
   cp "$TMP_DIR/$appimage" "$root/.Yunagi.AppImage.new"
-  chmod 755 "$root/.Yunagi.AppImage.new"
-  mv -f "$root/.Yunagi.AppImage.new" "$root/Yunagi.AppImage"
   cp "$TMP_DIR/cli/yunagi" "$root/bin/.yunagi.new"
-  chmod 755 "$root/bin/.yunagi.new"
+  chmod 755 "$root/.Yunagi.AppImage.new" "$root/bin/.yunagi.new"
+  mv -f "$root/.Yunagi.AppImage.new" "$root/Yunagi.AppImage"
   mv -f "$root/bin/.yunagi.new" "$root/bin/yunagi"
 
   data_home=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -196,6 +203,14 @@ install_linux() {
     say "  desktop entry  $desktop"
   else
     say "$desktop_note"
+  fi
+
+  # An AppImage needs FUSE to start. Only warn: the installation itself is complete.
+  if ! command -v fusermount >/dev/null 2>&1 && ! command -v fusermount3 >/dev/null 2>&1; then
+    say ''
+    say 'Note: FUSE (fusermount) was not found. An AppImage cannot start without it.'
+    say 'Install your distribution'"'"'s FUSE 2 package (for example libfuse2 or fuse2), or start the app with'
+    say "  $root/Yunagi.AppImage --appimage-extract-and-run"
   fi
 }
 
@@ -287,6 +302,15 @@ main() {
   need awk
   need grep
   need sed
+  need head
+  need mktemp
+  need mkdir
+  need cp
+  need mv
+  need rm
+  need ln
+  need chmod
+  need dirname
   detect_platform
 
   TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/yunagi-install.XXXXXX") || die 'could not create a temporary directory.'
