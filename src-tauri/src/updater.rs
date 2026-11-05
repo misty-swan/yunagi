@@ -32,6 +32,10 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
 /// 設定を読めない間（データベースを開く前）に、読み直す間隔。
 pub const NOT_READY_RETRY: Duration = Duration::from_secs(5);
 
+/// 再起動すると知らせてから、データベースを閉じるまでの待ち。画面は知らせを受けると、入力を受け付けなく
+/// して、入力中の内容を保存し終える（閉じた後に打たれた文字が消えないように）。
+pub const RESTART_GRACE: Duration = Duration::from_millis(1500);
+
 /// 見つかった新しい版。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
@@ -46,9 +50,10 @@ pub trait Backend: Send + Sync {
     fn available(&self) -> bool;
     /// 配布元に新しい版を尋ねる（通信する）。失敗したら理由（ログ用の文）を返す。
     fn check(&self) -> Result<Option<Found>, String>;
-    /// 見つけた版をダウンロードして、署名を検証する（何も入れ替えない）。`progress` に 0〜100 の割合
-    /// （大きさが分からなければ `None`）を知らせる。
-    fn download(&self, progress: &mut dyn FnMut(Option<u8>)) -> Result<(), String>;
+    /// 見つけた版 `version` をダウンロードして、署名を検証する（何も入れ替えない）。見つけている版が
+    /// `version` と違えば（画面に出していた版と別の版を入れ替えないように）失敗する。`progress` に
+    /// 0〜100 の割合（大きさが分からなければ `None`）を知らせる。
+    fn download(&self, version: &str, progress: &mut dyn FnMut(Option<u8>)) -> Result<(), String>;
     /// ダウンロードした版を入れ替える。Windows では、入れ替えのためにアプリを終える。
     fn install(&self) -> Result<(), String>;
 }
@@ -70,6 +75,8 @@ pub struct Hooks {
 pub struct Timing {
     pub interval: Duration,
     pub not_ready_retry: Duration,
+    /// 再起動すると知らせてから、データベースを閉じるまでの待ち。画面が、その間に入力中の内容を保存し終える。
+    pub restart_grace: Duration,
 }
 
 impl Default for Timing {
@@ -77,6 +84,7 @@ impl Default for Timing {
         Self {
             interval: CHECK_INTERVAL,
             not_ready_retry: NOT_READY_RETRY,
+            restart_grace: RESTART_GRACE,
         }
     }
 }
@@ -274,7 +282,7 @@ impl UpdateService {
             version
         };
         let mut last = None;
-        let downloaded = backend.download(&mut |progress| {
+        let downloaded = backend.download(&version, &mut |progress| {
             if progress != last {
                 last = progress;
                 self.set(UpdateState::Downloading {
@@ -289,6 +297,7 @@ impl UpdateService {
             return;
         }
         self.set(UpdateState::Restarting);
+        thread::sleep(self.timing.restart_grace);
         (self.hooks.close)();
         if let Err(e) = backend.install() {
             eprintln!("yunagi: the update could not be installed: {e}");
@@ -402,10 +411,16 @@ impl<R: Runtime> Backend for PluginBackend<R> {
         }))
     }
 
-    fn download(&self, progress: &mut dyn FnMut(Option<u8>)) -> Result<(), String> {
+    fn download(&self, version: &str, progress: &mut dyn FnMut(Option<u8>)) -> Result<(), String> {
         let update = {
             let mut pending = lock(&self.pending);
             let mut update = pending.update.clone().ok_or("no update has been found")?;
+            if update.version != version {
+                return Err(format!(
+                    "the version found ({}) is not the one shown ({version})",
+                    update.version
+                ));
+            }
             update.timeout = Some(DOWNLOAD_TIMEOUT);
             pending.chosen = Some(update.clone());
             pending.bytes = None;
@@ -463,6 +478,8 @@ mod tests {
         found: Mutex<Result<Option<Found>, String>>,
         checks: AtomicUsize,
         downloads: AtomicUsize,
+        /// ダウンロードを頼まれた版（画面に出していた版を指しているか）。
+        versions: Mutex<Vec<String>>,
         download_result: Mutex<Result<(), String>>,
         install_result: Mutex<Result<(), String>>,
         log: Arc<Mutex<Vec<&'static str>>>,
@@ -475,6 +492,7 @@ mod tests {
                 found: Mutex::new(Ok(Some(found("1.2.0")))),
                 checks: AtomicUsize::new(0),
                 downloads: AtomicUsize::new(0),
+                versions: Mutex::default(),
                 download_result: Mutex::new(Ok(())),
                 install_result: Mutex::new(Ok(())),
                 log,
@@ -496,7 +514,12 @@ mod tests {
             self.found.lock().unwrap().clone()
         }
 
-        fn download(&self, progress: &mut dyn FnMut(Option<u8>)) -> Result<(), String> {
+        fn download(
+            &self,
+            version: &str,
+            progress: &mut dyn FnMut(Option<u8>),
+        ) -> Result<(), String> {
+            self.versions.lock().unwrap().push(version.to_owned());
             self.downloads.fetch_add(1, Ordering::SeqCst);
             self.log.lock().unwrap().push("download");
             progress(Some(40));
@@ -548,6 +571,11 @@ mod tests {
                 Box::new(move || l.lock().unwrap().push("restart"))
             },
         };
+        // 試験は、再起動の前の待ちを無くす
+        let timing = Timing {
+            restart_grace: Duration::ZERO,
+            ..timing
+        };
         let service = UpdateService::with_timing(hooks, timing);
         let fake = Fake::new(Arc::clone(&log));
         service.attach(fake.clone());
@@ -564,6 +592,7 @@ mod tests {
         Timing {
             interval: Duration::from_millis(20),
             not_ready_retry: Duration::from_millis(10),
+            restart_grace: Duration::ZERO,
         }
     }
 
@@ -697,6 +726,7 @@ mod tests {
             Timing {
                 interval: Duration::from_secs(3600),
                 not_ready_retry: Duration::from_secs(3600),
+                restart_grace: Duration::ZERO,
             },
         );
         rig.service.start();
@@ -756,6 +786,8 @@ mod tests {
         *rig.fake.download_result.lock().unwrap() = Ok(());
         rig.service.install();
         assert_eq!(rig.fake.downloads.load(Ordering::SeqCst), 2);
+        // 頼むのは、画面に出していた版
+        assert_eq!(*rig.fake.versions.lock().unwrap(), ["1.2.0", "1.2.0"]);
         assert_eq!(rig.log.lock().unwrap().last(), Some(&"restart"));
     }
 

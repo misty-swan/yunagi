@@ -21,6 +21,7 @@ export class UpdateStore {
   refused = $state(false);
   readonly #deps: UpdateDeps;
   #stopped = false;
+  #starting = false;
   #unlisten: (() => void) | null = null;
 
   constructor(deps: UpdateDeps) {
@@ -81,6 +82,14 @@ export class UpdateStore {
   #apply(s: UpdateState) {
     this.state = s;
     this.refused = false;
+    // 再起動すると知らされた：コアがデータベースを閉じる前に、入力中の内容を保存し終える（この間の入力は
+    // 外枠が受け付けない）
+    if (s.state === "restarting") void this.#deps.flush().catch(() => {});
+  }
+
+  /** 再起動すると知らされている（外枠は入力を受け付けない）。 */
+  get restarting(): boolean {
+    return this.state.state === "restarting";
   }
 
   /**
@@ -88,23 +97,29 @@ export class UpdateStore {
    * （`refused`）。ダウンロードの進み具合・失敗は `state` に届く。再起動するので、返ってこないことがある。
    */
   async install() {
-    if (!this.canInstall) return;
-    this.refused = false;
+    // 保存し終えるのを待つ間の重ねての頼み（二度押し・ボタンとパレット）は無視する
+    if (!this.canInstall || this.#starting) return;
+    this.#starting = true;
     try {
-      await this.#deps.flush();
-    } catch {
-      // 保存し終えられなかった（保存できていないのと同じ扱い）
-      this.refused = true;
-      return;
-    }
-    if (this.#deps.saveFailing()) {
-      this.refused = true;
-      return;
-    }
-    try {
-      await core.installUpdate();
-    } catch {
-      // コマンドが断られても（データベースを閉じた後など）、状態はイベントで届く
+      this.refused = false;
+      try {
+        await this.#deps.flush();
+      } catch {
+        // 保存し終えられなかった（保存できていないのと同じ扱い）
+        this.refused = true;
+        return;
+      }
+      if (this.#deps.saveFailing()) {
+        this.refused = true;
+        return;
+      }
+      try {
+        await core.installUpdate();
+      } catch {
+        // コマンドが断られても（データベースを閉じた後など）、状態はイベントで届く
+      }
+    } finally {
+      this.#starting = false;
     }
   }
 }

@@ -501,7 +501,7 @@
   <StartupScreen startup={session.startup} actions={startupActions} />
 {:else if shown}
   <!-- 持ち越し・パレット・設定を出している間は、背後の外枠と本文を操作できなくする -->
-  <div inert={carry.open || palette.open || settingsPanel.open || agentsScreen.open}>
+  <div inert={carry.open || palette.open || settingsPanel.open || agentsScreen.open || update.restarting}>
     <AppShell
       {session}
       {save}

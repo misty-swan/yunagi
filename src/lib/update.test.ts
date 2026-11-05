@@ -107,6 +107,29 @@ test("保存し終えられなかった（flush が失敗した）ときも、�
   s.stop();
 });
 
+test("二度押し（ボタンとパレットの重なり）では、コアに一度だけ頼む", async () => {
+  current = available;
+  let release: () => void = () => {};
+  const s = store({ flush: () => new Promise<void>((resolve) => (release = resolve)) });
+  await vi.waitFor(() => expect(s.canInstall).toBe(true));
+  const first = s.install();
+  const second = s.install();
+  release();
+  await Promise.all([first, second]);
+  expect(calls.filter((c) => c === "install_update")).toHaveLength(1);
+  s.stop();
+});
+
+test("再起動すると知らされたら、入力中の内容を保存し終え、外枠は入力を受け付けない", async () => {
+  const flush = vi.fn(async () => {});
+  const s = store({ flush });
+  await vi.waitFor(() => expect(emit).not.toBeNull());
+  emit!({ state: "restarting" });
+  expect(s.restarting).toBe(true);
+  expect(flush).toHaveBeenCalledOnce();
+  s.stop();
+});
+
 test("保存できていないときは、更新を始めない（refused）", async () => {
   current = available;
   const s = store({ saveFailing: () => true });
