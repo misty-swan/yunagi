@@ -38,7 +38,9 @@
   - `app-icon.svg`：1024×1024 の全面版。Windows・Linux 用。
   - `app-icon-macos.svg`：同じ絵を、四方に透明の余白（約 10%。一辺 824px の角丸を中央に置く）を残して縮めた版。macOS 用。macOS の Dock・Finder は角丸の下地を自分では付けず、アイコンの絵のとおりに出すため、余白が無いと他のアプリより大きく見える。
   - `app-icon.png`・`app-icon-macos.png`：上の SVG を 1024px の PNG にしたもの（`pnpm tauri icon` の入力）。
-- **生成物**：`src-tauri/icons/` の `icon.ico`（Windows。16・24・32・48・64・256px）、`icon.icns`（macOS）、`icon.png`（512px）、`32x32.png`、`128x128.png`、`128x128@2x.png`。`tauri.conf.json` の `bundle.icon` が指すのはこの 5 つ。
+- **生成物**：`src-tauri/icons/` の `icon.ico`（Windows。16・24・32・48・64・256px）、`icon.icns`（macOS）、`icon.png`（512px）、`32x32.png`、`128x128.png`、`128x128@2x.png`。`tauri.conf.json` の `bundle.icon` が指すのはこの 6 つ。`icon.png`（512px）を先頭に置く：Tauri は窓のアイコンを `bundle.icon` の先頭の画像から作るため、先頭が 32px だと Linux の高解像度の画面でぼやける。
+- **食い違いの検査**：`install/appIcon.test.ts`（`pnpm check` に含まれる）が、SVG の色と順序が `Logo.svelte` と同じこと、macOS 版が全面版を縮めただけであること、元 PNG と生成 PNG の大きさ、`icon.ico` が複数サイズを持つこと、`icon.icns` の形式を確かめる。ロゴを変えて SVG を直し忘れると、ここで落ちる。生成物が古いこと・win と mac の取り違えは検査できない（手順 3 で取り違えると、macOS で大きすぎ、または Windows で余白つきに見える）ので、作り直したら 08 4.10 の見た目を確かめる。
+- **角丸**：macOS 版も、縮める前の角丸（一辺の 25%）のままにする（ロゴと同じ形に保つため）。Apple の標準の格子（一辺 824px の約 22.5%、連続した曲線）とは少し違うが、実機で見て違和感が大きければ、macOS 版だけ角丸を直す（08 4.10）。
 - **作り直す手順**（SVG を直したとき。リポジトリ直下で）：
   1. `rsvg-convert -w 1024 -h 1024 src-tauri/icons/source/app-icon.svg -o src-tauri/icons/source/app-icon.png`（`app-icon-macos` も同様）。
   2. `pnpm tauri icon src-tauri/icons/source/app-icon.png -o <一時フォルダ>/win`、`pnpm tauri icon src-tauri/icons/source/app-icon-macos.png -o <一時フォルダ>/mac`。Tauri 公式の生成で、各サイズの PNG・ico・icns が出る。
