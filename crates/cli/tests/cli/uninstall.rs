@@ -640,8 +640,115 @@ fn windows_reports_a_cleanup_that_could_not_start() {
     );
 }
 
+fn a_symlinked_default_dir_loses_only_the_link_and_the_data_is_listed() {
+    let w = Sandbox::new();
+    w.install_linux();
+    w.use_app();
+    // 既定ディレクトリを別の場所へ移してリンクにする
+    let moved = w.root.join("moved-data");
+    fs::rename(w.default_dir(), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, w.default_dir()).unwrap();
+    let out = w.run(w.linux_setup(), &["uninstall", "--purge"], "y\n", true);
+    assert_eq!(out.code, 1, "{} / {}", out.stdout, out.stderr);
+    assert!(gone(&w.default_dir()));
+    assert!(moved.join("yunagi.db").exists(), "the target is untouched");
+    assert!(
+        out.stdout.contains(&moved.display().to_string()),
+        "{}",
+        out.stdout
+    );
+    assert!(gone(&w.linux_root()) && gone(&w.webview_dir()));
+}
+
+fn a_dangling_relative_link_into_the_install_is_removed() {
+    let w = Sandbox::new();
+    w.install_linux();
+    fs::remove_file(w.link()).unwrap();
+    // 先がもう無い（部分的に消えた後）相対リンク
+    std::os::unix::fs::symlink("../opt/yunagi/bin/yunagi-gone", w.link()).unwrap();
+    let out = w.run(w.linux_setup(), &["uninstall"], "y\n", true);
+    assert_eq!(out.code, 0, "{} / {}", out.stdout, out.stderr);
+    assert!(gone(&w.link()));
+}
+
+fn macos_forgets_the_preferences_even_without_the_plist_file() {
+    let w = Sandbox::new();
+    let app_exe = w
+        .home()
+        .join("Applications/Yunagi.app/Contents/MacOS/yunagi");
+    w.write(&app_exe, "cli");
+    w.write(
+        &w.home()
+            .join("Library/Caches")
+            .join(APP_IDENTIFIER)
+            .join("x"),
+        "x",
+    );
+    let out = w.run(
+        w.setup(Platform::MacOs, &app_exe),
+        &["uninstall", "--purge"],
+        "y\n",
+        true,
+    );
+    assert_eq!(out.code, 0, "{} / {}", out.stdout, out.stderr);
+    assert_eq!(w.ops.state().defaults_deleted, [APP_IDENTIFIER]);
+}
+
+fn windows_without_an_uninstaller_notes_it_and_still_cleans_up() {
+    let w = Sandbox::new();
+    let root = w.root.join("local/Programs/Yunagi");
+    let exe = root.join("bin/yunagi.exe");
+    w.write(&exe, "cli");
+    let out = w.run(
+        w.setup(Platform::Windows, &exe),
+        &["uninstall"],
+        "y\n",
+        true,
+    );
+    assert_eq!(out.code, 0, "{} / {}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("was not found"), "{}", out.stdout);
+    assert_eq!(w.ops.state().detached.clone().unwrap().uninstaller, None);
+}
+
+fn windows_does_not_change_the_path_when_the_cleanup_cannot_start() {
+    let w = Sandbox::new();
+    let root = w.root.join("local/Programs/Yunagi");
+    let exe = root.join("bin/yunagi.exe");
+    w.write(&exe, "cli");
+    w.ops.state().user_path = root.join("bin").display().to_string();
+    w.ops.state().spawn_fails = true;
+    let out = w.run(
+        w.setup(Platform::Windows, &exe),
+        &["uninstall"],
+        "y\n",
+        true,
+    );
+    assert_eq!(out.code, 1);
+    assert_eq!(w.ops.state().written_path, None);
+}
+
 pub fn main() {
-    let tests: [(&str, fn()); 15] = [
+    let tests: [(&str, fn()); 20] = [
+        (
+            "uninstall_symlinked_default_dir",
+            a_symlinked_default_dir_loses_only_the_link_and_the_data_is_listed,
+        ),
+        (
+            "uninstall_dangling_relative_link",
+            a_dangling_relative_link_into_the_install_is_removed,
+        ),
+        (
+            "uninstall_macos_defaults_without_plist",
+            macos_forgets_the_preferences_even_without_the_plist_file,
+        ),
+        (
+            "uninstall_windows_without_an_uninstaller",
+            windows_without_an_uninstaller_notes_it_and_still_cleans_up,
+        ),
+        (
+            "uninstall_windows_keeps_the_path_when_the_cleanup_cannot_start",
+            windows_does_not_change_the_path_when_the_cleanup_cannot_start,
+        ),
         (
             "uninstall_keeps_the_data_without_purge",
             without_purge_keeps_the_data,

@@ -39,8 +39,21 @@ impl Guard {
         if path.parent().is_none() {
             return Err("this is the root of a drive".to_owned());
         }
-        if self.protected.iter().any(|p| p == path) {
-            return Err("this folder is never removed".to_owned());
+        // 守るフォルダ自身と、その上のフォルダ（`/home` など）は消さない。macOS・Windows は大文字小文字を
+        // 区別しないファイルシステムが多いので、区別せずに比べる
+        let key = |p: &Path| {
+            if cfg!(any(windows, target_os = "macos")) {
+                PathBuf::from(p.to_string_lossy().to_lowercase())
+            } else {
+                p.to_path_buf()
+            }
+        };
+        let here = key(path);
+        if self.protected.iter().any(|p| key(p).starts_with(&here)) {
+            return Err(
+                "this folder, or a folder that holds a protected folder, is never removed"
+                    .to_owned(),
+            );
         }
         if let Some(root) = &self.confine_to {
             let root = resolve_existing(root);
@@ -54,6 +67,23 @@ impl Guard {
         }
         Ok(())
     }
+}
+
+/// `.` を除き、`..` を文字の上でたたんだパス（ファイルシステムは見ない）。
+pub fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// 存在するところまでの祖先をシンボリックリンクを辿った実体にして、残りをつなげたパス。
@@ -297,9 +327,13 @@ mod tests {
             confine_to: None,
             protected: vec![PathBuf::from("/home/a")],
         };
-        for bad in ["relative/x", "/", "/home/a", "/home/a/../b"] {
+        for bad in ["relative/x", "/", "/home", "/home/a", "/home/a/../b"] {
             assert!(guard.check(Path::new(bad)).is_err(), "{bad}");
         }
+        assert_eq!(
+            normalize(Path::new("/a/b/../c/./d")),
+            PathBuf::from("/a/c/d")
+        );
         assert!(guard.check(Path::new("/home/a/.local/opt/yunagi")).is_ok());
     }
 }

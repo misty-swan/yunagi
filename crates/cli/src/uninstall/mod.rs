@@ -292,7 +292,7 @@ fn execute(purge: bool, env: &Env, io: &mut Io<'_>) -> Result<i32, ErrorObject> 
     // 3. アプリ本体と CLI のリンク
     remove_app(s, &layout, &dir, purge, &mut report)?;
     // 4. macOS・Linux は、最後にロックファイルと既定ディレクトリ（開いたまま消せる）
-    if purge && s.platform != Platform::Windows && lock.is_some() {
+    if purge && s.platform != Platform::Windows {
         report.remove(&s.guard, &dir.path().join(LOCK_FILE_NAME));
         remove_default_dir_if_empty(s, dir.path(), &mut report);
     }
@@ -303,12 +303,37 @@ fn execute(purge: bool, env: &Env, io: &mut Io<'_>) -> Result<i32, ErrorObject> 
 /// 既定ディレクトリを、空になっていれば消す。残っているものがあれば、消せなかったものとして
 /// すでに記録されている（ここでは足さない）。記録が無いのに残っているときだけ、フォルダを記録する。
 fn remove_default_dir_if_empty(s: &Setup, dir: &Path, report: &mut Report) {
+    if !exists(dir) {
+        return;
+    }
+    if is_symlink(dir) {
+        // リンクだけを消し、先には触れない（6.5）。先にデータが残るので、消し残りとして挙げる
+        note_linked_data(dir, report);
+        report.remove_empty_dir(&s.guard, dir);
+        return;
+    }
     let is_empty = fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none());
-    if is_empty || fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) {
+    if is_empty {
         report.remove_empty_dir(&s.guard, dir);
     } else if !report.failed.iter().any(|(path, _)| path.starts_with(dir)) {
         report.fail(dir, "it still has files in it");
     }
+}
+
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// 既定ディレクトリがシンボリックリンクだったとき、先のフォルダを消し残りとして記録する。
+fn note_linked_data(link: &Path, report: &mut Report) {
+    let target = fs::canonicalize(link).unwrap_or_else(|_| link.to_path_buf());
+    report.fail(
+        &target,
+        format!(
+            "{} is a link to this folder, so only the link is removed and the data inside stays; delete the folder by hand to remove the data",
+            link.display()
+        ),
+    );
 }
 
 fn running() -> ErrorObject {
@@ -418,8 +443,6 @@ impl Plan {
                 &self.data,
             );
             section("Data the screen made for itself:", &self.webview);
-        } else if self.default_dir.is_none() {
-            // 何も言わない
         }
         let _ = io.stdout.write_all(text.as_bytes());
         if !purge {
@@ -449,15 +472,16 @@ fn purge_data(
     } else {
         None
     };
-    for path in &plan.webview {
-        if Some(path) == plist.as_ref() {
-            // 設定の仕組みが値を覚えていて書き戻すことがあるので、ファイルを消す前に忘れさせる
-            if let Err(e) = s.ops.defaults_delete(APP_IDENTIFIER) {
-                report.notes.push(format!(
-                    "`defaults delete {APP_IDENTIFIER}` did not run ({e})."
-                ));
-            }
+    if plist.is_some() {
+        // 設定の仕組み（cfprefsd）は値をメモリに覚えていて書き戻すことがあるので、plist のファイルが
+        // 無くても、先に忘れさせる
+        if let Err(e) = s.ops.defaults_delete(APP_IDENTIFIER) {
+            report.notes.push(format!(
+                "`defaults delete {APP_IDENTIFIER}` did not run ({e})."
+            ));
         }
+    }
+    for path in &plan.webview {
         report.remove(&s.guard, path);
         if Some(path) == plist.as_ref() && exists(path) {
             report.fail(
@@ -501,7 +525,7 @@ fn remove_link(s: &Setup, link: &Path, root: &Path, report: &mut Report) {
     let Ok(meta) = fs::symlink_metadata(link) else {
         return;
     };
-    if meta.file_type().is_symlink() && points_into(link, root, s.platform) {
+    if meta.file_type().is_symlink() && points_into(link, root) {
         report.remove(&s.guard, link);
     } else {
         report.fail(
@@ -512,7 +536,7 @@ fn remove_link(s: &Setup, link: &Path, root: &Path, report: &mut Report) {
 }
 
 /// シンボリックリンク `link` の先が `root` の中か。
-fn points_into(link: &Path, root: &Path, _platform: Platform) -> bool {
+fn points_into(link: &Path, root: &Path) -> bool {
     let Ok(target) = fs::read_link(link) else {
         return false;
     };
@@ -521,7 +545,8 @@ fn points_into(link: &Path, root: &Path, _platform: Platform) -> bool {
     } else {
         target
     };
-    if target.starts_with(root) {
+    // `..` を文字の上でたたんでから比べる（先がもう無くても、書かれた場所で判断できる）
+    if remove::normalize(&target).starts_with(remove::normalize(root)) {
         return true;
     }
     let real_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
@@ -536,20 +561,23 @@ fn remove_windows_app(
     report: &mut Report,
 ) {
     let bin = layout.root.join("bin");
-    match remove_from_user_path(s, &bin) {
-        Ok(true) => report.notes.push(format!("{} was taken out of your user PATH.", bin.display())),
-        Ok(false) => {}
-        Err(e) => report.fail(&bin, format!("could not take it out of your user PATH ({e}); remove it by hand in the environment variable settings")),
-    }
     let uninstaller = layout.root.join("uninstall.exe");
     let uninstaller = exists(&uninstaller).then_some(uninstaller);
     if uninstaller.is_none() {
-        report.fail(
-            &layout.root.join("uninstall.exe"),
-            "the Yunagi uninstaller was not found; the folder is removed anyway",
-        );
+        // 後片付けがインストール先ごと消すので、消し残りではなく知らせにする
+        report.notes.push(format!(
+            "The Yunagi uninstaller ({}) was not found; the folder is removed without it.",
+            layout.root.join("uninstall.exe").display()
+        ));
     }
-    let default_dir = purge.then(|| dir.path().to_path_buf());
+    // 既定ディレクトリがシンボリックリンクなら、後片付け（`Remove-Item -Recurse`）に渡さない
+    // （先に触れないため）。リンクだけ消し、先は消し残りとして挙げる
+    let mut default_dir = purge.then(|| dir.path().to_path_buf());
+    if default_dir.is_some() && is_symlink(dir.path()) {
+        note_linked_data(dir.path(), report);
+        report.remove_empty_dir(&s.guard, dir.path());
+        default_dir = None;
+    }
     for path in std::iter::once(&layout.root).chain(default_dir.iter()) {
         if let Err(why) = s.guard.check(path) {
             report.fail(path, why);
@@ -573,9 +601,25 @@ fn remove_windows_app(
                 later.join(", ")
             ));
         }
+        Err(e) => {
+            // 後片付けが始まらなかったので、`PATH` は変えない（`yunagi` が見つからなくなって、
+            // やり直せなくなるのを避ける）
+            report.fail(
+                &layout.root,
+                format!("could not start the uninstaller ({e}); nothing else was changed"),
+            );
+            return;
+        }
+    }
+    // 後片付けを始めてから `PATH` を直す（始められなかったときに、半端に外した状態にしない）
+    match remove_from_user_path(s, &bin) {
+        Ok(true) => report
+            .notes
+            .push(format!("{} was taken out of your user PATH.", bin.display())),
+        Ok(false) => {}
         Err(e) => report.fail(
-            &layout.root,
-            format!("could not start the uninstaller ({e})"),
+            &bin,
+            format!("could not take it out of your user PATH ({e}); remove it by hand in the environment variable settings"),
         ),
     }
 }
