@@ -195,7 +195,7 @@ Inter は v4.1 の `web/InterVariable.woff2` を入れる（公式の配布元 G
 | 振り返り | Reflection |
 | 持ち越し | Carry over |
 | 検索パレット | Palette |
-| 設定「操作」 | Settings → Input |
+| 設定「操作」 | Settings → Operation（区分の名前は日英とも英字） |
 | エージェント変更履歴 | Agent change history |
 
 ## 8. アイコンとロゴ
