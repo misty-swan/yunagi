@@ -128,24 +128,47 @@ pub fn default_dir_for(
     platform: Platform,
     env: impl Fn(&str) -> Option<OsString>,
 ) -> Result<PathBuf, DataDirError> {
+    let name = match platform {
+        Platform::MacOs | Platform::Windows => "Yunagi",
+        Platform::Linux => "yunagi",
+    };
+    Ok(local_data_root_for(platform, env)?.join(name))
+}
+
+/// アプリの識別子（bundle identifier。アーキテクチャ設計書 6.1）。`src-tauri/tauri.conf.json` の
+/// `identifier` と同じ（試験で固定する）。WebView が自分のデータを置くフォルダの名前にも使われる
+/// （アーキテクチャ設計書 6.5）。
+pub const APP_IDENTIFIER: &str = "io.github.misty-swan.yunagi";
+
+/// `platform` の「利用者ごとのアプリのデータを置く親のフォルダ」を、`env` で引いた環境変数から求める。
+/// 既定ディレクトリ（[`default_dir_for`]）の親で、Linux・Windows では Tauri が WebView のデータを置く
+/// `<親>/<識別子>/` の親でもある（アーキテクチャ設計書 6.5。別々に環境変数を読むと食い違うので、
+/// どちらもここから導く）。
+///
+/// | OS | 親のフォルダ |
+/// | --- | --- |
+/// | macOS | `$HOME/Library/Application Support` |
+/// | Windows | `%LOCALAPPDATA%` |
+/// | Linux | `$XDG_DATA_HOME`（未設定・空・相対パスのとき `$HOME/.local/share`） |
+pub fn local_data_root_for(
+    platform: Platform,
+    env: impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf, DataDirError> {
     // XDG Base Directory の決まりでは、相対パスの XDG_DATA_HOME は無視する
     let absolute = |name: &str| absolute_env(&env, name);
     let missing = |var: &'static str| DataDirError::NoDefaultDir { var };
     match platform {
         Platform::MacOs => {
             let home = absolute("HOME").ok_or_else(|| missing("HOME"))?;
-            Ok(home.join("Library/Application Support/Yunagi"))
+            Ok(home.join("Library/Application Support"))
         }
-        Platform::Windows => {
-            let local = absolute("LOCALAPPDATA").ok_or_else(|| missing("LOCALAPPDATA"))?;
-            Ok(local.join("Yunagi"))
-        }
+        Platform::Windows => absolute("LOCALAPPDATA").ok_or_else(|| missing("LOCALAPPDATA")),
         Platform::Linux => {
             if let Some(data_home) = absolute("XDG_DATA_HOME") {
-                return Ok(data_home.join("yunagi"));
+                return Ok(data_home);
             }
             let home = absolute("HOME").ok_or_else(|| missing("HOME"))?;
-            Ok(home.join(".local/share/yunagi"))
+            Ok(home.join(".local/share"))
         }
     }
 }
@@ -1056,6 +1079,39 @@ mod tests {
             default_dir_for(Platform::Linux, env_of(&[("HOME", "")])),
             Err(DataDirError::NoDefaultDir { var: "HOME" })
         ));
+    }
+
+    /// アーキテクチャ設計書 6.5：既定ディレクトリと WebView の場所は、同じ親（`local_data_root_for`）の
+    /// 下になる。`XDG_DATA_HOME` の未設定・空・相対・絶対の 4 通りで確かめる（環境変数は書き換えず、
+    /// 引く関数を差し替える）。
+    #[cfg(unix)]
+    #[test]
+    fn linux_default_dir_and_webview_dir_share_a_parent() {
+        let cases = [
+            (None, "/home/a/.local/share"),
+            (Some(""), "/home/a/.local/share"),
+            (Some("relative/path"), "/home/a/.local/share"),
+            (Some("/data"), "/data"),
+        ];
+        for (xdg, root) in cases {
+            let mut vars = vec![("HOME", "/home/a")];
+            if let Some(v) = xdg {
+                vars.push(("XDG_DATA_HOME", v));
+            }
+            let default = default_dir_for(Platform::Linux, env_of(&vars)).unwrap();
+            let parent = local_data_root_for(Platform::Linux, env_of(&vars)).unwrap();
+            assert_eq!(parent, PathBuf::from(root), "XDG_DATA_HOME = {xdg:?}");
+            assert_eq!(default, parent.join("yunagi"), "XDG_DATA_HOME = {xdg:?}");
+            assert_eq!(default.parent(), Some(parent.as_path()));
+        }
+    }
+
+    /// 識別子は `src-tauri/tauri.conf.json` の `identifier` と同じ（アーキテクチャ設計書 6.1）。
+    #[test]
+    fn app_identifier_matches_tauri_conf() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../src-tauri/tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], APP_IDENTIFIER);
     }
 
     #[test]

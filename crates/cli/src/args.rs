@@ -47,6 +47,9 @@ pub enum Command {
     },
     /// `agent revert CHANGE_ID [--force]`：エージェントの変更を取り消す（05 7章。端末で確認する）。
     AgentRevert { change_id: String, force: bool },
+    /// `uninstall [--purge]`：アプリと CLI を削除する。`purge` ならデータと WebView のデータも消す
+    /// （05 3.1、ビルド・配布手順書 4.4。端末で確認する）。
+    Uninstall { purge: bool },
 }
 
 /// ローカル API の操作の名前（05 3章のツール名）と引数。
@@ -125,6 +128,8 @@ Commands:
                                     List the changes agents made, newest first
   agent revert CHANGE_ID [--force]  Undo one change an agent made
                                     (shows what changes and asks first; needs a terminal)
+  uninstall [--purge]               Remove the app and this command (--purge also removes
+                                    your data; lists what goes and asks first; needs a terminal)
 
 Options:
   --json       Print JSON instead of text
@@ -187,7 +192,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
                     // 値を取らない指定
                     None if matches!(
                         rest,
-                        "delete" | "claude-code" | "codex" | "force" | "unseen"
+                        "delete" | "claude-code" | "codex" | "force" | "unseen" | "purge"
                     ) =>
                     {
                         options.push((rest.to_owned(), None));
@@ -244,6 +249,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, ParseError> {
             Some("agent permissions with --allow or --deny")
         }
         Command::AgentRevert { .. } => Some("agent revert"),
+        Command::Uninstall { .. } => Some("uninstall"),
         _ => None,
     };
     if json && let Some(name) = asks {
@@ -448,6 +454,14 @@ fn command(
             let note = opts.take_flag("note")?;
             opts.finish()?;
             Command::Show { note }
+        }
+        "uninstall" => {
+            if !rest.is_empty() {
+                return Err(unknown(positionals));
+            }
+            let purge = opts.take_flag("purge")?;
+            opts.finish()?;
+            Command::Uninstall { purge }
         }
         "mcp" => {
             if !rest.is_empty() {
@@ -837,6 +851,26 @@ mod tests {
         assert_eq!(search.params["from"], "2026-11-01");
         assert_eq!(search.params["kinds"], json!(["todo", "note"]));
         assert_eq!(search.params["limit"], 10);
+    }
+
+    #[test]
+    fn uninstall_takes_only_the_purge_flag() {
+        assert_eq!(
+            parse_args(&["uninstall"]).unwrap().command,
+            Command::Uninstall { purge: false }
+        );
+        assert_eq!(
+            parse_args(&["uninstall", "--purge"]).unwrap().command,
+            Command::Uninstall { purge: true }
+        );
+        for bad in [
+            &["uninstall", "extra"][..],
+            &["uninstall", "--purge=1"],
+            &["uninstall", "--purg"],
+            &["uninstall", "--json"],
+        ] {
+            assert!(parse_args(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

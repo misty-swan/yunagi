@@ -81,6 +81,14 @@ impl World {
             setup: Env::default().setup,
             // 本物のアプリが起動しないよう、起動先は存在しないものにしておく（`show` の試験が差し替える）
             show: show_options(Launch::Program(PathBuf::from("/nonexistent/yunagi-app"))),
+            // `uninstall` は、ここでは動かさない（`uninstall.rs` が専用の場所で試験する）。実行ファイルを
+            // 知らせないので、動かしても何も消す前に止まる。念のため、消してよい場所も試験の場所に絞る
+            uninstall: {
+                let mut setup = yunagi_cli::uninstall::Setup::from_process();
+                setup.exe = None;
+                setup.guard.confine_to = Some(self.root.path().to_path_buf());
+                setup
+            },
         }
     }
 }
