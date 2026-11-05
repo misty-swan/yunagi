@@ -6,7 +6,8 @@
 //
 // リポジトリ直下で動かす。cargo-about（Rust の依存）と pnpm（JavaScript の依存）が要る。
 // 許可するライセンスの一覧は license-policy.json。about.toml の accepted は、allowed と pending を合わせたもの。
-import { spawnSync } from "node:child_process";
+import { exec } from "./exec.ts";
+import { readStringArray } from "./toml.ts";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,12 +62,7 @@ export function satisfies(expression: string, allowed: readonly string[]): boole
 
 /** about.toml の `accepted = [...]` の ID（コメントの行は読まない） */
 export function readAccepted(toml: string): string[] {
-  const body = toml
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("#"))
-    .join("\n");
-  const m = /accepted\s*=\s*\[([^\]]*)\]/.exec(body);
-  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+  return readStringArray(toml, "accepted");
 }
 
 /** about.toml から、許可が決まっていないもの（pending）を除いた設定を作る（許可外の検出用） */
@@ -122,11 +118,6 @@ type CargoAboutJson = {
 };
 
 type JsPackage = { name: string; versions: string[]; paths: string[]; license: string };
-
-function exec(command: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(command, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, shell: process.platform === "win32" });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.error ? String(r.error) : (r.stderr ?? "") };
-}
 
 function readPolicy(): Policy {
   return JSON.parse(readFileSync("scripts/release/license-policy.json", "utf8")) as Policy;

@@ -7,14 +7,12 @@
 // 脆弱性による中止と、データベースやレジストリに届かず検査できなかったことを区別するため、
 // 道具の出力（JSON）を読んで分ける。許可した指摘は、道具の設定（.cargo/audit.toml・pnpm-workspace.yaml）で
 // 除かれる（scripts/release/allowlist.ts が設定と audit-allowlist.json の一致を確かめる）。
-import { spawnSync } from "node:child_process";
+import { type Run, exec as run } from "./exec.ts";
 
 export type Outcome =
   | { kind: "ok"; notes: string[] }
   | { kind: "vulnerable"; findings: string[]; notes: string[] }
   | { kind: "unavailable"; reason: string };
-
-type Run = { status: number | null; stdout: string; stderr: string };
 
 function tryParse(text: string): unknown {
   try {
@@ -85,11 +83,6 @@ export function classifyPnpmAudit(run: Run): Outcome {
     return { kind: "unavailable", reason: `pnpm audit の終了コードが ${run.status}\n${lastLines(run.stderr)}` };
   }
   return { kind: "ok", notes: [] };
-}
-
-function run(command: string, args: string[]): Run {
-  const r = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, shell: process.platform === "win32" });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.error ? String(r.error) : (r.stderr ?? "") };
 }
 
 /** 結果を表示して、終了コードを返す */

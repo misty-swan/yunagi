@@ -4,8 +4,16 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { classifyCargoAudit, classifyPnpmAudit, report } from "./audit.ts";
+
+// report() は GitHub Actions の注釈（`::warning`・`::error`）を出す。試験の出力が、開発用 CI の注釈として
+// 本物の警告のように見えないよう、この試験の中では出力を止める
+beforeAll(() => {
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+afterAll(() => vi.restoreAllMocks());
 
 const pkg = (name: string, version: string) => ({ name, version });
 const item = (kind: string, name: string, id: string | null, title = "題名") => ({
@@ -118,4 +126,16 @@ test.skipIf(process.platform === "win32")("CLI：終了コードは 0（指摘�
   expect(runCli("js").status).toBe(2);
 
   expect(runCli("other").status).toBe(64);
+});
+
+test("TOML の配列の読み取り：行末のコメントの中の文字列・括弧は読まない", async () => {
+  const { readStringArray } = await import("./toml.ts");
+  const toml = `ignore = [
+    "A-1", # 理由は "foo" を見る ]
+    "B-2",
+]
+other = ["C-3"]`;
+  expect(readStringArray(toml, "ignore")).toEqual(["A-1", "B-2"]);
+  expect(readStringArray(toml, "other")).toEqual(["C-3"]);
+  expect(readStringArray(toml, "ignore-build-dependencies")).toEqual([]);
 });

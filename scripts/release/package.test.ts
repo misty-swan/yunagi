@@ -84,7 +84,7 @@ test.skipIf(process.platform === "win32")("Linux：AppImage を付け替え、CL
 test.skipIf(process.platform === "win32")("macOS：ルートに Yunagi.app、CLI は Contents/MacOS/yunagi。CLI が無ければ失敗する", () => {
   const t = "x86_64-apple-darwin";
   const macos = join(root, "mac", "target", t, "release", "bundle", "macos");
-  put(join(macos, "Yunagi.app", "Contents", "MacOS", "Yunagi"), "app");
+  put(join(macos, "Yunagi.app", "Contents", "MacOS", "yunagi-app"), "app");
   expect(() => packageArtifacts("macos", "x86_64", t, "1.2.3", join(root, "mac", "out"), join(root, "mac"))).toThrow("CLI が入っていない");
   put(join(macos, "Yunagi.app", "Contents", "MacOS", "yunagi"), "cli");
   const out = join(root, "mac", "out");

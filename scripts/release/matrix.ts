@@ -13,17 +13,15 @@ export type Entry = {
   target: string;
   /** `tauri build --bundles` に渡すもの */
   bundles: string;
-  /** 実機のランナーが要る（交差ビルドできない）。Linux の webkit2gtk は交差ビルドが難しい */
-  nativeRunner: boolean;
 };
 
 export const ALL: Entry[] = [
-  { name: "linux-x86_64", runner: "ubuntu-24.04", os: "linux", arch: "x86_64", target: "x86_64-unknown-linux-gnu", bundles: "appimage", nativeRunner: true },
-  { name: "linux-arm64", runner: "ubuntu-24.04-arm", os: "linux", arch: "arm64", target: "aarch64-unknown-linux-gnu", bundles: "appimage", nativeRunner: true },
-  { name: "macos-arm64", runner: "macos-15", os: "macos", arch: "arm64", target: "aarch64-apple-darwin", bundles: "app", nativeRunner: false },
-  { name: "macos-x86_64", runner: "macos-15", os: "macos", arch: "x86_64", target: "x86_64-apple-darwin", bundles: "app", nativeRunner: false },
-  { name: "windows-x86_64", runner: "windows-2025", os: "windows", arch: "x86_64", target: "x86_64-pc-windows-msvc", bundles: "nsis", nativeRunner: false },
-  { name: "windows-arm64", runner: "windows-2025", os: "windows", arch: "arm64", target: "aarch64-pc-windows-msvc", bundles: "nsis", nativeRunner: false },
+  { name: "linux-x86_64", runner: "ubuntu-24.04", os: "linux", arch: "x86_64", target: "x86_64-unknown-linux-gnu", bundles: "appimage" },
+  { name: "linux-arm64", runner: "ubuntu-24.04-arm", os: "linux", arch: "arm64", target: "aarch64-unknown-linux-gnu", bundles: "appimage" },
+  { name: "macos-arm64", runner: "macos-15", os: "macos", arch: "arm64", target: "aarch64-apple-darwin", bundles: "app" },
+  { name: "macos-x86_64", runner: "macos-15", os: "macos", arch: "x86_64", target: "x86_64-apple-darwin", bundles: "app" },
+  { name: "windows-x86_64", runner: "windows-2025", os: "windows", arch: "x86_64", target: "x86_64-pc-windows-msvc", bundles: "nsis" },
+  { name: "windows-arm64", runner: "windows-2025", os: "windows", arch: "arm64", target: "aarch64-pc-windows-msvc", bundles: "nsis" },
 ];
 
 /** 試運転で除く組：Linux の arm64 は arm のランナー（`ubuntu-24.04-arm`）が要り、公開リポジトリでないと使えない */

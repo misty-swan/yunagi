@@ -5,6 +5,8 @@
 // あわせて、理由と期限の正本（audit-allowlist.json）と、検査の道具が読む設定（.cargo/audit.toml・
 // pnpm-workspace.yaml）の ID が食い違っていないことを確かめる。
 
+import { readStringArray } from "./toml.ts";
+
 export type Entry = {
   id: string;
   reason: string;
@@ -69,13 +71,7 @@ export function checkAllowlist(list: Allowlist, today: string): string[] {
 
 /** `.cargo/audit.toml` の `ignore = [...]` にある ID（コメントの行は読まない） */
 export function readCargoIgnore(toml: string): string[] {
-  const body = toml
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("#"))
-    .join("\n");
-  const m = /ignore\s*=\s*\[([^\]]*)\]/.exec(body);
-  if (!m) return [];
-  return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+  return readStringArray(toml, "ignore");
 }
 
 /** `pnpm-workspace.yaml` の `auditConfig.ignoreGhsas` にある ID（コメントの行は読まない） */

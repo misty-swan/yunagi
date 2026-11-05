@@ -6,7 +6,7 @@
 //
 // Tauri がビルドで付ける名前（`amd64`・`aarch64`・`x64` など）は、ここで x86_64・arm64 に付け替える。
 // Updater 用の `.sig`・`latest.json`・`SHA256SUMS` は、ここでは作らない（YUN-101）。
-import { spawnSync } from "node:child_process";
+import { execOrThrow as run } from "./exec.ts";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -37,12 +37,6 @@ function only(dir: string, suffix: string): string {
   const found = readdirSync(dir).filter((f) => f.endsWith(suffix));
   if (found.length !== 1) throw new Error(`${dir} に ${suffix} のファイルがちょうど 1 つあるはずが、${found.length} 個ある: ${found.join(", ")}`);
   return join(dir, found[0]);
-}
-
-function run(command: string, args: string[]): string {
-  const r = spawnSync(command, args, { encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`${command} ${args.join(" ")} が失敗した（終了コード ${r.status}）\n${r.stderr}`);
-  return r.stdout;
 }
 
 /** 作った配布物の名前を返す。`.sha256` も出力先に作る */

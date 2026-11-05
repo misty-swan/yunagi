@@ -35,7 +35,15 @@ export function checkTag(tag: string, version: string | null): string | null {
 if (import.meta.main) {
   const version = workspaceVersion(readFileSync("Cargo.toml", "utf8"));
   const tag = process.argv[2];
-  const problem = tag === undefined ? (version === null ? "Cargo.toml に版が無い" : null) : checkTag(tag, version);
+  // 版は workflow の run: に埋め込まれ、配布物の名前にもなる。タグの確認をしないとき（試運転）も、形を確かめる
+  const problem =
+    tag === undefined
+      ? version === null
+        ? "Cargo.toml に版が無い"
+        : VERSION_PATTERN.test(version)
+          ? null
+          : `Cargo.toml の版 ${version} が 1.2.3 の形でない（07 2章）`
+      : checkTag(tag, version);
   if (problem) {
     console.error(`::error title=版の確認::${problem}`);
     process.exit(1);
