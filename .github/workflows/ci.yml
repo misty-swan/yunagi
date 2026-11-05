@@ -25,7 +25,7 @@ env:
 jobs:
   check:
     name: pnpm check (Linux)
-    # macOS・Windows は 5. 配布で追加する
+    # macOS・Windows では、OS で動きが変わる Rust のテストだけを走らせる（下の `rust-test`）
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -73,3 +73,41 @@ jobs:
 
       - name: pnpm check
         run: pnpm check
+
+  # macOS・Windows では、Rust のテスト（`cargo test --workspace`）と clippy だけを走らせる。
+  # OS ごとに分かれたコード（`yunagi.lock` のロック、Windows だけの再試行など）は Linux ではコンパイルもされないため、
+  # 各 OS でのコンパイルとテストが要る。画面の型チェック・テスト、書式、文書の生成は OS で変わらないので Linux だけで足りる
+  # （範囲と時間の見込みの理由は docs/release/08-test-plan.md 2章）。
+  rust-test:
+    name: cargo test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+          - name: Windows
+            runner: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 版と clippy・rustfmt は rust-toolchain.toml から読む
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
