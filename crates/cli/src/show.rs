@@ -329,13 +329,17 @@ fn start(options: &Options, note: bool, warn: &dyn Fn(&str)) -> Result<Launched,
     let target = match &options.launch {
         Launch::Program(path) => Target::Program(path.clone()),
         Launch::Os => {
-            let exe = std::env::current_exe().map_err(|e| {
-                warn(&format!(
-                    "yunagi: could not find this command's location: {}",
-                    ErrorChain(&e)
-                ));
-                app_not_found()
-            })?;
+            // `current_exe` は、macOS などではリンク（`~/.local/bin/yunagi`）のままのパスを返すことがある。
+            // アプリを探す起点は実体（`Yunagi.app` の中の実行ファイル。ビルド・配布手順書 4.1）なので、リンクを解く
+            let exe = std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .map_err(|e| {
+                    warn(&format!(
+                        "yunagi: could not find this command's location: {}",
+                        ErrorChain(&e)
+                    ));
+                    app_not_found()
+                })?;
             locate(
                 &exe,
                 std::env::var_os(APP_ENV).as_deref(),
