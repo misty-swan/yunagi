@@ -21,9 +21,10 @@ ignore-dev-dependencies = true
 private = { ignore = true }
 
 # 許可するライセンス。scripts/release/license-policy.json の `allowed` と `pending` を合わせたものと同じに保つ
-# （scripts/release/licenses.test.ts が確かめる）。`pending` は、許可するか決まるまでの暫定で、配布用 CI の
-# 許可外ライセンスの検査は落とす（Linear の YUN-96）。cargo-about は、ここに無いライセンスしか使えない依存が
-# あると、一覧を作れずに失敗するので、決まるまでの間も一覧は作れるように、暫定のものもここに置く
+# （scripts/release/licenses.test.ts が確かめる）。`pending` は、新しい依存が一覧に無い
+# ライセンスを連れてきたとき、許可するか決まるまでの暫定の置き場で、ふだんは空（入っている間は、配布用 CI の
+# 許可外ライセンスの検査は落とす）。cargo-about は、ここに無いライセンスしか使えない依存があると、一覧を作れずに
+# 失敗するので、決まるまでの間も一覧は作れるように、暫定のものもここに置く
 accepted = [
     "MIT",
     "Apache-2.0",

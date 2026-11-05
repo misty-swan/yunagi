@@ -132,12 +132,10 @@ jobs:
       - name: Install cargo-about
         run: cargo install cargo-about --version 0.9.2 --locked --features cli
 
-      # 許可外ライセンスの検出。許可するか決まっていないライセンス（scripts/release/license-policy.json の pending。
-      # YUN-96）があるうちは、タグの push では落ちる。試運転（PR）では結果を見せるだけで、落とさない。
-      # YUN-96 が決まって pending が空になったら、continue-on-error を外す
+      # 許可外ライセンスの検出。許可外のライセンスがあれば、タグの push でも試運転（PR）でも落ちる
+      # （許可するか決まっていないもの = scripts/release/license-policy.json の pending があるときも同じ）
       - name: Licenses (disallowed)
-        continue-on-error: ${{ github.event_name != 'push' }}
-        run: node scripts/release/licenses.ts check
+        run:node scripts/release/licenses.ts check
 
       - name: Generate THIRD_PARTY_LICENSES.md
         run: node scripts/release/licenses.ts generate THIRD_PARTY_LICENSES.md

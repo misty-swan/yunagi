@@ -242,7 +242,7 @@ function main(argv: string[]): number {
       // 外部の出力（cargo-about の stderr）が、行頭の `::` でワークフローコマンドとして読まれないよう字下げする
       console.error(problems.map((p) => p.split("\n").map((l) => `  ${l}`).join("\n")).join("\n\n"));
       console.error(
-        `\n許可しているライセンス：${policy.allowed.join("、")}。許可するか決まっていないもの（YUN-96）：${policy.pending.join("、")}`,
+        `\n許可しているライセンス：${policy.allowed.join("、")}。許可するか決まっていないもの：${policy.pending.length > 0 ? policy.pending.join("、") : "なし"}`,
       );
       return 1;
     }

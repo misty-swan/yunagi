@@ -7,17 +7,19 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { LICENSE_FILE, type Policy, checkFonts, readAccepted, satisfies, strictAboutToml } from "./licenses.ts";
 
-const allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "MPL-2.0"];
+const allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "MPL-2.0", "BSL-1.0", "CDLA-Permissive-2.0", "Unicode-3.0"];
 
 test("ライセンス式：OR はどれか 1 つ、AND はすべてが許可に入っていれば満たす", () => {
   expect(satisfies("MIT", allowed)).toBe(true);
   expect(satisfies("Apache-2.0 OR MIT", allowed)).toBe(true);
   expect(satisfies("MIT OR GPL-3.0-only", allowed)).toBe(true);
   expect(satisfies("GPL-3.0-only OR LGPL-2.1-or-later", allowed)).toBe(false);
-  expect(satisfies("MIT AND Unicode-3.0", allowed)).toBe(false);
+  expect(satisfies("MIT AND Unicode-3.0", allowed)).toBe(true);
+  expect(satisfies("MIT AND GPL-3.0-only", allowed)).toBe(false);
   expect(satisfies("MIT AND (Apache-2.0 OR GPL-2.0-only)", allowed)).toBe(true);
   expect(satisfies("(MIT OR Apache-2.0) AND BSD-3-Clause", allowed)).toBe(true);
-  expect(satisfies("BSL-1.0", allowed)).toBe(false);
+  expect(satisfies("BSL-1.0", allowed)).toBe(true);
+  expect(satisfies("BUSL-1.1", allowed)).toBe(false); // 名前が似ていても別のライセンス
   expect(satisfies("MIT or Apache-2.0", allowed)).toBe(true); // 演算子の大文字小文字は区別しない
 });
 
@@ -36,6 +38,8 @@ test("about.toml の accepted は、license-policy.json の allowed と pending 
   // 07 3章・third-party-licenses.md 2章に書いた許可の一覧が、そのまま allowed に入っている
   expect(policy.allowed).toEqual(allowed);
   expect(policy.allowed.some((id) => policy.pending.includes(id))).toBe(false);
+  // 決定済み（YUN-96）：pending は、新しい未決のライセンスが出たときだけ使う。ふだんは空
+  expect(policy.pending).toEqual([]);
 });
 
 test("許可外の検出用の設定は、pending を accepted から除くだけで、ほかは変えない", () => {
@@ -44,7 +48,7 @@ test("許可外の検出用の設定は、pending を accepted から除くだ�
   const strict = strictAboutToml(toml, policy.allowed);
   expect(readAccepted(strict)).toEqual(policy.allowed);
   // accepted の書き方（1 行・行末のコメント・CRLF）に左右されない
-  expect(readAccepted(strictAboutToml('accepted = ["MIT", "BSL-1.0"] # x\r\n', policy.allowed))).toEqual(policy.allowed);
+  expect(readAccepted(strictAboutToml('accepted = ["MIT", "GPL-3.0-only"] # x\r\n', policy.allowed))).toEqual(policy.allowed);
   expect(strict).toContain("ignore-build-dependencies = true");
   expect(strict).toContain("targets = [");
 });
