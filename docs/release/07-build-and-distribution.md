@@ -30,6 +30,26 @@
 
 各配布物に対応する `.sha256` と、Tauri Updater 用の署名ファイル（`.sig`）を同時に公開する。あわせて、全配布物のハッシュをまとめた `SHA256SUMS` と、その minisign 署名 `SHA256SUMS.sig` を公開する。`SHA256SUMS.sig` の署名には、Updater 鍵とは別の配布用鍵を使う。配布用の公開鍵は公式サイトと公開リポジトリの両方に掲載し、検証手順を導入ガイドに載せる。更新情報 `latest.json` は `https://<公式サイト>/latest.json` に置き、取り下げ時にすぐ差し替えられるようにする。
 
+### アプリアイコン
+
+アプリアイコンの絵は、デザインガイド 8章の「夕凪版」。画面の左上のロゴ（`src/shell/Logo.svelte`）の絵を 1024px に拡大したもので、色・水平線の位置（58%）・半分沈んだ太陽・海面の光の道・角丸（一辺の 25%）はロゴと同じにする（2026-11-05 決定。YUN-33）。Design キャンバスの元の図は取り出せないため、ロゴの図形を元に組み直した。
+
+- **元画像（正本）**：`src-tauri/icons/source/` に置く。
+  - `app-icon.svg`：1024×1024 の全面版。Windows・Linux 用。
+  - `app-icon-macos.svg`：同じ絵を、四方に透明の余白（約 10%。一辺 824px の角丸を中央に置く）を残して縮めた版。macOS 用。macOS の Dock・Finder は角丸の下地を自分では付けず、アイコンの絵のとおりに出すため、余白が無いと他のアプリより大きく見える。
+  - `app-icon.png`・`app-icon-macos.png`：上の SVG を 1024px の PNG にしたもの（`pnpm tauri icon` の入力）。
+- **生成物**：`src-tauri/icons/` の `icon.ico`（Windows。16・24・32・48・64・256px）、`icon.icns`（macOS）、`icon.png`（512px）、`32x32.png`、`128x128.png`、`128x128@2x.png`。`tauri.conf.json` の `bundle.icon` が指すのはこの 6 つ。`icon.png`（512px）を先頭に置く：Tauri は窓のアイコンを `bundle.icon` の先頭の画像から作るため、先頭が 32px だと Linux の高解像度の画面でぼやける。
+- **食い違いの検査**：`install/appIcon.test.ts`（`pnpm check` に含まれる）が、SVG の色・グラデーションの位置・水平線と太陽と光の帯と角丸の大きさが `Logo.svelte` を拡大したものと同じこと、macOS 版が全面版の定義と絵をそのまま縮めて置いただけであること（縮め方は 824px・余白 100px）、元 PNG と生成 PNG の大きさ、`icon.ico` の絵のサイズが 16・24・32・48・64・256px であること、`icon.icns` の形式を確かめる。ロゴの図形や色を変えて SVG を直し忘れると、ここで落ちる。生成物が古いこと・全面版と macOS 版の取り違えは検査できない（手順 3 で取り違えると、macOS で大きすぎ、または Windows で余白つきに見える）。スクリプトは取り違えないように書いてあるので、手で作り直さず、スクリプトを使う。作り直したら 08 4.10 の見た目を確かめる。
+- **開発時の窓のアイコン**：先頭の `icon.png` は全面版なので、`pnpm tauri dev` で動かした macOS の Dock には、余白の無い絵が出ることがある（ビルドした `.app` の Dock・Finder は `icon.icns` を使う）。開発時だけの見た目で、直さない。
+- **角丸**：macOS 版も、縮める前の角丸（一辺の 25%）のままにする（ロゴと同じ形に保つため）。Apple の標準の格子（一辺 824px の約 22.5%、連続した曲線）とは少し違うが、実機で見て違和感が大きければ、macOS 版だけ角丸を直す（08 4.10）。
+- **作り直す手順**（SVG を直したとき）：リポジトリ直下で `sh src-tauri/icons/source/generate.sh` を実行する。事前に `rsvg-convert`（SVG を PNG にする。librsvg に入っている）と `pnpm`（`pnpm tauri icon` が使う）が要る。スクリプトは次の 3 つをする。手で行うときも同じ順にする。
+  1. 2 つの SVG を 1024px の PNG にする（`rsvg-convert -w 1024 -h 1024`）。
+  2. `pnpm tauri icon` を、全面版の PNG と macOS 版の PNG のそれぞれに、別々の一時フォルダを出力先にして実行する（Tauri 公式の生成。各サイズの PNG・ico・icns が出る）。
+  3. 全面版の出力から `icon.ico`・`icon.png`・`32x32.png`・`128x128.png`・`128x128@2x.png` を、macOS 版の出力から `icon.icns` だけを、`src-tauri/icons/` にコピーする。`tauri.conf.json` が使わない Android・iOS・Windows ストア用のファイルは置かない。
+  - `src-tauri/icons/` に `source/` を置いても、配布物には入らない（`bundle.icon` が列挙したファイルだけが入る）。
+- 絵の確認：16〜32px では、太陽は空の橙と色が近く見分けにくいが、空と海の明暗の境目と水平線の横線で夕凪の絵と分かる。ロゴ（24px）と同じ見え方なので、このままとする。
+- Linux の AppImage・デスクトップエントリには、いまのところアイコンを付けない（4.1 の決まりのまま）。実機での見た目は 08 4.10 で確かめる。
+
 ## 3. ビルド（CI）
 
 GitHub Actions で OS ごとのマトリクスビルドを行う。
