@@ -7,17 +7,19 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { LICENSE_FILE, type Policy, checkFonts, readAccepted, satisfies, strictAboutToml } from "./licenses.ts";
 
-const allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "MPL-2.0"];
+const allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "MPL-2.0", "BSL-1.0", "CDLA-Permissive-2.0", "Unicode-3.0"];
 
 test("ライセンス式：OR はどれか 1 つ、AND はすべてが許可に入っていれば満たす", () => {
   expect(satisfies("MIT", allowed)).toBe(true);
   expect(satisfies("Apache-2.0 OR MIT", allowed)).toBe(true);
   expect(satisfies("MIT OR GPL-3.0-only", allowed)).toBe(true);
   expect(satisfies("GPL-3.0-only OR LGPL-2.1-or-later", allowed)).toBe(false);
-  expect(satisfies("MIT AND Unicode-3.0", allowed)).toBe(false);
+  expect(satisfies("MIT AND Unicode-3.0", allowed)).toBe(true);
+  expect(satisfies("MIT AND GPL-3.0-only", allowed)).toBe(false);
   expect(satisfies("MIT AND (Apache-2.0 OR GPL-2.0-only)", allowed)).toBe(true);
   expect(satisfies("(MIT OR Apache-2.0) AND BSD-3-Clause", allowed)).toBe(true);
-  expect(satisfies("BSL-1.0", allowed)).toBe(false);
+  expect(satisfies("BSL-1.0", allowed)).toBe(true);
+  expect(satisfies("BUSL-1.1", allowed)).toBe(false); // 名前が似ていても別のライセンス
   expect(satisfies("MIT or Apache-2.0", allowed)).toBe(true); // 演算子の大文字小文字は区別しない
 });
 
@@ -43,8 +45,14 @@ test("許可外の検出用の設定は、pending を accepted から除くだ�
   const policy = JSON.parse(readFileSync("scripts/release/license-policy.json", "utf8")) as Policy;
   const strict = strictAboutToml(toml, policy.allowed);
   expect(readAccepted(strict)).toEqual(policy.allowed);
+  // pending が入っている場合（ふだんは空なので、作って確かめる）：pending だけが accepted から除かれ、ほかは変わらない
+  const withPending = `accepted = [${[...policy.allowed, "X-Pending-1.0"].map((id) => `"${id}"`).join(", ")}]\n${toml.replace(/^accepted = \[[^\]]*\]/m, "")}`;
+  expect(readAccepted(withPending)).toContain("X-Pending-1.0");
+  const strictWithPending = strictAboutToml(withPending, policy.allowed);
+  expect(readAccepted(strictWithPending)).toEqual(policy.allowed);
+  expect(strictWithPending).toContain("ignore-build-dependencies = true");
   // accepted の書き方（1 行・行末のコメント・CRLF）に左右されない
-  expect(readAccepted(strictAboutToml('accepted = ["MIT", "BSL-1.0"] # x\r\n', policy.allowed))).toEqual(policy.allowed);
+  expect(readAccepted(strictAboutToml('accepted = ["MIT", "GPL-3.0-only"] # x\r\n', policy.allowed))).toEqual(policy.allowed);
   expect(strict).toContain("ignore-build-dependencies = true");
   expect(strict).toContain("targets = [");
 });

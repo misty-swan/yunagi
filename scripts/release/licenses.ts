@@ -6,6 +6,7 @@
 //
 // リポジトリ直下で動かす。cargo-about（Rust の依存）と pnpm（JavaScript の依存）が要る。
 // 許可するライセンスの一覧は license-policy.json。about.toml の accepted は、allowed と pending を合わせたもの。
+// pending は、一覧に無いライセンスが出たとき、オーナーが決めるまでの一時の置き場で、ふだんは空。
 import { escapeData } from "./audit.ts";
 import { exec } from "./exec.ts";
 import { readStringArray, replaceStringArray } from "./toml.ts";
@@ -242,7 +243,7 @@ function main(argv: string[]): number {
       // 外部の出力（cargo-about の stderr）が、行頭の `::` でワークフローコマンドとして読まれないよう字下げする
       console.error(problems.map((p) => p.split("\n").map((l) => `  ${l}`).join("\n")).join("\n\n"));
       console.error(
-        `\n許可しているライセンス：${policy.allowed.join("、")}。許可するか決まっていないもの（YUN-96）：${policy.pending.join("、")}`,
+        `\n許可しているライセンス：${policy.allowed.join("、")}。許可するか決まっていないもの：${policy.pending.length > 0 ? policy.pending.join("、") : "なし"}`,
       );
       return 1;
     }
