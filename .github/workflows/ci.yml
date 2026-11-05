@@ -1,6 +1,7 @@
 # 開発用 CI：PR と main への push のたびに、手元と同じ `pnpm check` を走らせる。
 # 配布用のビルド（docs/release/07-build-and-distribution.md 3章）とは別のもの。
 # 検査の中身は package.json の `check` にだけ書き、ここには書かない（手元と CI をずらさないため）。
+# macOS・Windows の `rust-test` も、`pnpm run check:rust`・`check:clippy`・`check:doc` を呼ぶ（コマンドを写さない）。
 # `uses:` の action は、コミットの SHA で固定し、行末に版を書く（決まりと更新の仕方は
 # docs/release/07-build-and-distribution.md 3章「action の固定」。更新は .github/dependabot.yml の Dependabot）。
 name: CI
@@ -9,6 +10,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # 手動で実行する（GitHub の Actions 画面の「Run workflow」、または `gh workflow run CI --ref <ブランチ>`）。
+  # 非公開の間は、これだけが macOS・Windows の検査を走らせる
+  workflow_dispatch:
 
 # 同じ PR で新しい push があったら、古い実行は止める。
 # main への push はコミットごとに別のグループにして、どの push も取り消さずに検査する。
@@ -25,7 +29,7 @@ env:
 jobs:
   check:
     name: pnpm check (Linux)
-    # macOS・Windows は 5. 配布で追加する
+    # macOS・Windows では、OS で動きが変わる Rust の検査だけを走らせる（下の `rust-test`。公開後か手動のとき）
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -73,3 +77,69 @@ jobs:
 
       - name: pnpm check
         run: pnpm check
+
+  # macOS・Windows では、Rust のテスト・clippy・文書の生成だけを走らせる（手元と同じ `pnpm run check:rust`・
+  # `check:clippy`・`check:doc`）。OS ごとに分かれたコード（`yunagi.lock` のロック、Windows だけの再試行など）は
+  # Linux ではコンパイルもされず、clippy の警告や文書のリンク切れも見えないため、各 OS で検査が要る。
+  # 書式・画面の型チェック・テストは OS で変わらないので Linux だけで足りる
+  # （範囲と時間の見込みの理由は docs/release/08-test-plan.md 2章）。
+  #
+  # 走らせるのは、リポジトリが公開のとき（標準のランナーは無料）か、手動で実行したとき（workflow_dispatch）だけ。
+  # 非公開のリポジトリでは、macOS は 1 分が Linux の約 10 倍、Windows は約 1.7 倍の料金で、月の無料枠
+  # （12 ドル）を使い切ると Linux も含めて全部止まるため、自動では走らせない。公開した時点で、
+  # ここを直さなくても自動で走り出す。決めた経緯・単価・手動実行の手順は 08 の 2章。
+  rust-test:
+    name: cargo test (${{ matrix.name }})
+    if: github.event_name == 'workflow_dispatch' || github.event.repository.private == false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+          - name: Windows
+            runner: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 版と clippy・rustfmt は rust-toolchain.toml から読む
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          # main への push のほか、手動の実行も保存する（非公開の間は main で走らないため。走らないと、
+          # 手動の実行が毎回キャッシュなしで、Windows の約 15 分の料金がかかる）
+          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          cache-on-failure: true
+
+      # 検査の中身を package.json の `check:*` にだけ置くため、pnpm 経由で動かす
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # どれかが落ちても、残りも走らせて、OS ごとの失敗を 1 回の実行で全部出す
+      - name: cargo test
+        run: pnpm run check:rust
+
+      - name: cargo clippy
+        if: success() || failure()
+        run: pnpm run check:clippy
+
+      - name: cargo doc
+        if: success() || failure()
+        run: pnpm run check:doc

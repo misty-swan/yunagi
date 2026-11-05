@@ -37,14 +37,34 @@ const TIMING: Timing = Timing {
     connect: Duration::from_millis(300),
 };
 
-/// 試験の場所。環境変数 `XDG_DATA_HOME` を試験ごとに変える（1 つのスレッドで順に走らせるので安全）。
+/// 既定ディレクトリを求める環境変数の名前（この OS のもの。Linux は `XDG_DATA_HOME` と `HOME`、macOS は `HOME`）。
+fn own_vars() -> &'static [&'static str] {
+    // 製品の `default_dir_vars` を使わず、期待を別に書く（同じ関数で求めると、試験が当たり前になるため）
+    if cfg!(target_os = "macos") {
+        &["HOME"]
+    } else {
+        &["XDG_DATA_HOME", "HOME"]
+    }
+}
+
+/// 試験の場所。環境変数（`own_vars`）を試験ごとに変える（1 つのスレッドで順に走らせるので安全）。
 struct World {
     root: tempfile::TempDir,
 }
 
 impl World {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        // macOS の既定の一時フォルダ（/var/folders/…）は長く、ソケットのパスが上限（103 文字）を超えるので、
+        // macOS だけ、短い /tmp の下に作る（/tmp は /private/tmp への別名なので、実際の場所に直す）
+        let root = if cfg!(target_os = "macos") {
+            let base = std::fs::canonicalize("/tmp").unwrap();
+            tempfile::Builder::new()
+                .prefix("yg")
+                .tempdir_in(base)
+                .unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
         let w = Self { root };
         w.use_data_home("xdg");
         w
@@ -54,9 +74,15 @@ impl World {
         self.root.path().join(name)
     }
 
-    /// 自分の既定ディレクトリの元（`XDG_DATA_HOME`）を `name` の下にする。
+    /// 自分の既定ディレクトリの元を `name` の下にする。Linux は `XDG_DATA_HOME` を `name` にし
+    /// （`HOME` は別の `home`）、macOS は既定ディレクトリが `HOME` だけから決まる（`XDG_DATA_HOME` を
+    /// 見ない）ので `HOME` を `name` にする。
     fn use_data_home(&self, name: &str) {
-        let home = self.path("home");
+        let home = if cfg!(target_os = "macos") {
+            self.path(name)
+        } else {
+            self.path("home")
+        };
         // SAFETY: 試験は 1 つのスレッドで順に走り、環境変数を読む処理は呼び出しの間だけ動く
         unsafe {
             std::env::set_var("HOME", &home);
@@ -64,14 +90,21 @@ impl World {
         }
     }
 
-    /// 自分の既定ディレクトリ（`XDG_DATA_HOME/yunagi`）。
+    /// 自分の既定ディレクトリ（動いている OS のもの。Linux は `XDG_DATA_HOME/yunagi`、
+    /// macOS は `HOME/Library/Application Support/Yunagi`）。
     fn own(&self) -> DefaultDir {
         data_dir::default_dir().unwrap()
     }
 
-    /// 別の候補の既定ディレクトリ（`AltHome::Fixed` の下の `.local/share/yunagi`）。
+    /// 別の候補の既定ディレクトリ（`AltHome::Fixed` の下の、OS の標準の場所。Linux は
+    /// `.local/share/yunagi`、macOS は `Library/Application Support/Yunagi`）。
     fn candidate_dir(&self) -> PathBuf {
-        self.path("althome").join(".local/share/yunagi")
+        let alt = self.path("althome");
+        if cfg!(target_os = "macos") {
+            alt.join("Library/Application Support/Yunagi")
+        } else {
+            alt.join(".local/share/yunagi")
+        }
     }
 
     fn env(&self) -> Env {
@@ -943,7 +976,7 @@ fn missing_data(w: &World) {
     assert_eq!(out.code, 6, "{}", out.stderr);
     assert!(out.stderr.contains("storage_unavailable"));
     assert!(out.stderr.contains(&own.path().display().to_string()));
-    assert!(out.stderr.contains("XDG_DATA_HOME"));
+    assert!(out.stderr.contains(own_vars()[0]));
     assert!(!own.path().exists());
     // フォルダはあるがデータベースが無い：新しく作らない
     fs::create_dir_all(own.path()).unwrap();
@@ -1052,7 +1085,7 @@ fn agent_setup_warnings(w: &World) {
     );
     assert!(out.stdout.contains("does not exist"), "{}", out.stdout);
     assert!(out.stdout.contains(&own.path().display().to_string()));
-    assert!(out.stdout.contains("XDG_DATA_HOME / HOME"));
+    assert!(out.stdout.contains(&own_vars().join(" / ")));
     // アプリが標準の場所で動いている：別の既定ディレクトリを使っていると警告する
     let held = hold_lock(&cand);
     let out = agent_setup_preview(w);
@@ -1109,7 +1142,7 @@ fn doctor_states(w: &World) {
         "version:",
         "os:",
         "default directory:",
-        "XDG_DATA_HOME",
+        own_vars()[0],
         "data directory:",
         "local API: no_listener",
     ] {
@@ -1119,10 +1152,7 @@ fn doctor_states(w: &World) {
     assert_eq!(report["version"], yunagi_core::VERSION);
     assert_eq!(report["local_api"]["status"], "no_listener");
     assert_eq!(report["default_dir"]["path"], own.path().to_str().unwrap());
-    assert_eq!(
-        report["default_dir"]["env_vars"],
-        json!(["XDG_DATA_HOME", "HOME"])
-    );
+    assert_eq!(report["default_dir"]["env_vars"], json!(own_vars()));
     assert_eq!(report["data_dir"]["database_exists"], true);
     assert_eq!(report["other_default_dir"]["status"], "absent");
     // 業務データの内容を含まない
@@ -1158,7 +1188,7 @@ fn doctor_states(w: &World) {
     }
     let out = exec(w, &["board"]);
     assert_eq!(out.code, 6);
-    assert!(out.stderr.contains("XDG_DATA_HOME") && out.stderr.contains("HOME"));
+    assert!(own_vars().iter().all(|var| out.stderr.contains(var)));
     let report = exec(w, &["doctor", "--json"]);
     assert_eq!(report.code, 0);
     assert!(report.json()["default_dir"]["error"].is_string());
@@ -2026,7 +2056,7 @@ fn mcp_no_dir(w: &World) {
             e["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("XDG_DATA_HOME")
+                .contains(own_vars()[0])
         );
     }
     assert_eq!(run.stderr.lines().count(), 1, "{}", run.stderr);

@@ -1022,10 +1022,16 @@ mod tests {
 
     #[test]
     fn default_dir_macos() {
-        let env = env_of(&[("HOME", "/Users/a")]);
+        // Windows 上でテストしても Unix 形式のパスは絶対と判定されないので、動いている OS で絶対のパスを使う
+        let home = if cfg!(windows) {
+            r"C:\Users\a"
+        } else {
+            "/Users/a"
+        };
+        let env = env_of(&[("HOME", home)]);
         assert_eq!(
             default_dir_for(Platform::MacOs, env).unwrap(),
-            PathBuf::from("/Users/a/Library/Application Support/Yunagi")
+            Path::new(home).join("Library/Application Support/Yunagi")
         );
     }
 
@@ -1188,7 +1194,26 @@ mod tests {
         let report = d.change(&new_dir).unwrap();
         drop(conn);
 
-        assert_eq!(report, ChangeReport::default());
+        if cfg!(windows) {
+            // Windows は開いたままのファイルを消せないので、閉じていない接続の元のデータベース
+            // （と WAL・共有メモリ）が「消せなかったもの」として返る（backups/ は消えている）。
+            // 移した後の確認のため、閉じた今、自分で消す
+            // 残るのは元のデータベースと、その横のファイルだけ（WAL・共有メモリが残るかは SQLite の
+            // タイミング次第なので、本体を含み、すべてがそれらのどれかであることを確かめる）
+            let old_files = db_files::with_side_files(&database_path(&d.default));
+            assert!(report.leftovers.contains(&database_path(&d.default)));
+            assert!(
+                report.leftovers.iter().all(|p| old_files.contains(p)),
+                "{:?}",
+                report.leftovers
+            );
+            // 接続を閉じると、SQLite が WAL と共有メモリを自分で消すことがある（もう無くてよい）
+            for path in &report.leftovers {
+                let _ = fs::remove_file(path);
+            }
+        } else {
+            assert_eq!(report, ChangeReport::default());
+        }
         assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
         assert_eq!(read_note(&new_dir), "kept in wal");
         assert_eq!(

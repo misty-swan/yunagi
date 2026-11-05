@@ -34,7 +34,17 @@ const WAIT: Duration = Duration::from_secs(10);
 type Test = fn(&DefaultDir);
 
 pub fn main() {
-    let tmp = tempfile::tempdir().unwrap();
+    // macOS の既定の一時フォルダ（/var/folders/…）は長く、ソケットのパスが上限（103 文字）を超えるので、
+    // macOS だけ、短い /tmp の下に作る（/tmp は /private/tmp への別名なので、実際の場所に直す）
+    let tmp = if cfg!(target_os = "macos") {
+        let base = std::fs::canonicalize("/tmp").unwrap();
+        tempfile::Builder::new()
+            .prefix("yg")
+            .tempdir_in(base)
+            .unwrap()
+    } else {
+        tempfile::tempdir().unwrap()
+    };
     let home = tmp.path().to_path_buf();
     // SAFETY: まだほかのスレッドを作っていない（テストはこの後、このスレッドで順に走らせる）
     unsafe {

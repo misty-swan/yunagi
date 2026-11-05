@@ -323,9 +323,12 @@ mod tests {
     fn default_dir_spelled_differently_in_config_is_still_the_default() {
         let env = Env::new();
         // config.json が、既定ディレクトリを別の表記（ここではシンボリックリンク）で指す
-        let alias = env.root.join("alias");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&env.default, &alias).unwrap();
+        let alias = {
+            let alias = env.root.join("alias");
+            std::os::unix::fs::symlink(&env.default, &alias).unwrap();
+            alias
+        };
         #[cfg(not(unix))]
         let alias = env.default.join(".");
         env.point_config_to(&alias);

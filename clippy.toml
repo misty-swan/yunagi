@@ -1,0 +1,6 @@
+# clippy の `result_large_err`（Err の型が大きい）の目安を、既定の 128 バイトから上げる。
+# Windows の clippy だけ、`StorageError` など Err の型が 128 バイト以上になり（Linux では収まる。
+# パスの型などの大きさが OS で違うため）、99 か所で落ちた（開発用 CI で macOS・Windows の clippy を
+# 走らせて分かった。docs/release/08-test-plan.md 2章）。エラーは例外的な経路で、数十バイトの差は
+# 性能に響かないので、全部を Box にして OS ごとの差に合わせるより、目安を上げる。
+large-error-threshold = 192
