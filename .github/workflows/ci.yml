@@ -10,6 +10,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # 手動で実行する（GitHub の Actions 画面の「Run workflow」、または `gh workflow run CI --ref <ブランチ>`）。
+  # 非公開の間は、これだけが macOS・Windows の検査を走らせる
+  workflow_dispatch:
 
 # 同じ PR で新しい push があったら、古い実行は止める。
 # main への push はコミットごとに別のグループにして、どの push も取り消さずに検査する。
@@ -26,7 +29,7 @@ env:
 jobs:
   check:
     name: pnpm check (Linux)
-    # macOS・Windows では、OS で動きが変わる Rust のテストだけを走らせる（下の `rust-test`）
+    # macOS・Windows では、OS で動きが変わる Rust の検査だけを走らせる（下の `rust-test`。公開後か手動のとき）
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -75,52 +78,19 @@ jobs:
       - name: pnpm check
         run: pnpm check
 
-  # この PR が Rust に関係するファイルを変えたか（macOS・Windows のジョブを走らせるか）を決める。
-  # main への push は常に走らせる。関係するファイル：コア・CLI・API・アプリ本体（crates/・src-tauri/）、
-  # Rust のテストが読む画面側の生成物（src/lib/bindings.ts）、依存と道具の版（Cargo.toml・Cargo.lock・
-  # rust-toolchain.toml・clippy.toml・.cargo/）、この定義。
-  # PR の検査は「PR を main に合わせた結合コミット」で動くので、その第 1 の親（main の先頭）との差が
-  # この PR の変更になる（main が進んでいても、ほかの PR の変更を含めない）。差が求められないときは走らせる側に倒す。
-  changes:
-    name: 変更の確認
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      rust: ${{ steps.diff.outputs.rust }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-
-      - name: Changed files
-        id: diff
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          rust=true
-          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only HEAD^1 HEAD); then
-            if printf '%s\n' "$files" | grep -qE '^(crates/|src-tauri/|\.cargo/|src/lib/bindings\.ts$|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|clippy\.toml$|\.github/workflows/ci\.yml$)'; then
-              rust=true
-            else
-              rust=false
-            fi
-          fi
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "rust=$rust"
-
   # macOS・Windows では、Rust のテスト・clippy・文書の生成だけを走らせる（手元と同じ `pnpm run check:rust`・
   # `check:clippy`・`check:doc`）。OS ごとに分かれたコード（`yunagi.lock` のロック、Windows だけの再試行など）は
   # Linux ではコンパイルもされず、clippy の警告や文書のリンク切れも見えないため、各 OS で検査が要る。
   # 書式・画面の型チェック・テストは OS で変わらないので Linux だけで足りる
   # （範囲と時間の見込みの理由は docs/release/08-test-plan.md 2章）。
   #
-  # macOS は 1 分が Linux の約 10 倍、Windows は約 1.7 倍の料金になる（非公開リポジトリ。08 の 2章）ので、
-  # PR では Rust に関係するファイルを変えたときだけ走らせる。main への push では常に走らせる。
+  # 走らせるのは、リポジトリが公開のとき（標準のランナーは無料）か、手動で実行したとき（workflow_dispatch）だけ。
+  # 非公開のリポジトリでは、macOS は 1 分が Linux の約 10 倍、Windows は約 1.7 倍の料金で、月の無料枠
+  # （12 ドル）を使い切ると Linux も含めて全部止まるため、自動では走らせない。公開した時点で、
+  # ここを直さなくても自動で走り出す。決めた経緯・単価・手動実行の手順は 08 の 2章。
   rust-test:
     name: cargo test (${{ matrix.name }})
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'workflow_dispatch' || github.event.repository.private == false
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
