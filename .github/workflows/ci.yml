@@ -1,6 +1,8 @@
 # 開発用 CI：PR と main への push のたびに、手元と同じ `pnpm check` を走らせる。
 # 配布用のビルド（docs/release/07-build-and-distribution.md 3章）とは別のもの。
 # 検査の中身は package.json の `check` にだけ書き、ここには書かない（手元と CI をずらさないため）。
+# `uses:` の action は、コミットの SHA で固定し、行末に版を書く（決まりと更新の仕方は
+# docs/release/07-build-and-distribution.md 3章「action の固定」。更新は .github/dependabot.yml の Dependabot）。
 name: CI
 
 on:
@@ -27,7 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Tauri（yunagi-app）のコンパイルに要る Linux のライブラリ
       # https://v2.tauri.app/start/prerequisites/#linux
@@ -50,17 +52,17 @@ jobs:
       # 保存は main だけで行い（PR は main のキャッシュを使う）、容量の上限を PR ごとの分で埋めない。
       # 検査が失敗しても、時間のかかるビルド結果は保存する。
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
       # 版は package.json の packageManager から読む
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # 版は .node-version から読む（手元の nvm・fnm・mise なども同じファイルを読む）
           node-version-file: .node-version
