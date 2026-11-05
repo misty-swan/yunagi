@@ -119,6 +119,7 @@ const ctx: CommandContext = {
   layout: "B",
   carryPending: false,
   saveFailing: false,
+  updateAvailable: false,
   mac: false,
 };
 
@@ -146,6 +147,16 @@ test("コマンドの一覧：持ち越し・保存の失敗はその間だけ�
   const more = paletteCommands({ ...ctx, carryPending: true, saveFailing: true, mode: "note", mac: true }, ja, en);
   expect(more.slice(0, 2).map((c) => c.id)).toEqual(["carryover", "saveDetail"]);
   expect(more.find((c) => c.id === "mode")).toMatchObject({ label: "整理モードにする", key: "⌘J" });
+});
+
+test("「更新して再起動」は、新しい版があるときだけ出す（保存の失敗の次）", () => {
+  const ja = MESSAGES.ja;
+  const en = MESSAGES.en;
+  expect(paletteCommands(ctx, ja, en).some((c) => c.id === "update")).toBe(false);
+  const list = paletteCommands({ ...ctx, saveFailing: true, updateAvailable: true }, ja, en);
+  expect(list.slice(0, 3).map((c) => c.id)).toEqual(["saveDetail", "update", "today"]);
+  expect(list.find((c) => c.id === "update")).toMatchObject({ label: "更新して再起動", key: null });
+  expect(matchCommands(list, "update and restart").map((c) => c.id)).toEqual(["update"]);
 });
 
 test("コマンドは、どちらの言語の名前の一部でも探せる（大文字・小文字・空白は問わない）", () => {

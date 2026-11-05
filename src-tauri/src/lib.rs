@@ -18,6 +18,7 @@ pub mod global_shortcut;
 pub mod ime;
 mod screen;
 pub mod types;
+pub mod updater;
 
 use std::sync::Arc;
 
@@ -37,6 +38,9 @@ pub const EVENT_TODAY_CHANGED: &str = "today-changed";
 pub const EVENT_BACKUP_FAILED: &str = "backup-failed";
 /// 窓を前面に出した（[`types::ShowRequested`]）。`yunagi show` と、2 つ目の起動の引き渡し。
 pub const EVENT_SHOW_REQUESTED: &str = "show-requested";
+
+/// 自動更新の状態が変わった（[`types::UpdateState`]）。
+pub const EVENT_UPDATE_STATE: &str = "update-state";
 
 /// 画面から呼べるコマンドの一覧。
 pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
@@ -78,6 +82,8 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::export_markdown,
         commands::get_settings,
         commands::save_settings,
+        commands::get_update_state,
+        commands::install_update,
         commands::get_data_dir,
         commands::check_data_dir,
         commands::change_data_dir,
@@ -108,6 +114,35 @@ pub fn manage_core<R: Runtime>(app: &AppHandle<R>) -> Arc<AppCore> {
     // 依頼文の書き出し先（クリップボード）。プラグインは `run` で入れる（窓の無い試験では入れず、
     // 書き込みは `ClipboardFailed` を返す）
     app.manage(Arc::new(clipboard::HandoffClipboard::new()));
+    // 自動更新（ビルド・配布手順書 5章）。確認の手段とスレッドは `run` で入れる（窓の無い試験では入れず、
+    // 状態はいつも `none`）。有効かは、確認のたびにデータベースから読み直す（データベースを開く前は読めず、
+    // 確認しない）
+    app.manage(updater::UpdateService::new(updater::Hooks {
+        update_check: {
+            let core = Arc::clone(&core);
+            Box::new(move || {
+                core.read(yunagi_core::domain::settings::load)
+                    .ok()
+                    .map(|s| s.update_check)
+            })
+        },
+        notify: {
+            let app = app.clone();
+            Box::new(move |state| {
+                if let Err(e) = app.emit(EVENT_UPDATE_STATE, state) {
+                    eprintln!("yunagi: failed to notify the screen: {e}");
+                }
+            })
+        },
+        close: {
+            let core = Arc::clone(&core);
+            Box::new(move || core.close())
+        },
+        restart: {
+            let app = app.clone();
+            Box::new(move || app.restart())
+        },
+    }));
     core
 }
 
@@ -178,12 +213,15 @@ pub fn run() {
             global_shortcut::install(app.handle());
             // 入れられなくても起動する。依頼文の書き出しだけが使えなくなる
             clipboard::install(app.handle());
+            // 入れられなくても起動する。更新の確認だけが使えなくなる
+            updater::install(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("Yunagi の起動に失敗しました");
     app.run(|app, event| {
         if let RunEvent::Exit = event {
+            app.state::<Arc<updater::UpdateService>>().stop();
             app.state::<Arc<AppCore>>().close();
         }
     });

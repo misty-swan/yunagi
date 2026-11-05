@@ -1,0 +1,18 @@
+# cargo audit の許可リスト（docs/release/07-build-and-distribution.md 3章）。
+# 修正版がまだ使えない指摘だけを、理由と見直す期限を添えて載せる。載せるときも消すときも PR で見る。
+
+[advisories]
+ignore = [
+    # zip 4.6.1 の展開（ZipArchive::extract）の脆弱性 4 件（SUID/SGID の保持・シンボリックリンクの
+    # 作成と書き込み・巨大なサイズの宣言での異常終了）。修正は zip 9.0.0 以上だが、自動更新の
+    # プラグイン（tauri-plugin-updater 2.14.0）が zip ^4 に固定していて、こちらでは上げられない。
+    # 使わない経路：zip はプラグインの Windows 用の「zip 形式の更新の展開」だけが使う。Yunagi は
+    # Windows に NSIS の .exe で配る（ビルド・配布手順書 2章）ので通らず、通る場合も署名の検証
+    # （minisign）に通った後の展開になる。tar.gz の展開（macOS・Linux）は zip を使わない。
+    # 外す条件：プラグインが zip 9 以上に上がったら、プラグインを上げて 4 件とも外す。
+    # 見直す期限：2027-02-05（3 か月後）。期限までにプラグインが上がっていなければ、残すか決め直す。
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+]

@@ -1267,6 +1267,39 @@ pub struct BackupFailed {
     pub detail: String,
 }
 
+// ---- 自動更新 ----
+
+/// 自動更新の状態（`get_update_state` の返り値と `update-state` イベントの中身。
+/// ビルド・配布手順書 5章、画面設計書 3章「New version」）。確認して新しい版が無いとき・確認できないとき・
+/// 更新の自動確認が無効のとき・自動更新の対象でない配布のときは、どれも `none`（画面には何も出さない）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum UpdateState {
+    /// 新しい版は見つかっていない。
+    None,
+    /// 新しい版がある。`notes` は更新内容（配布元の `latest.json` の `notes`。信用しない文字列で、
+    /// プレーンテキストとして出す。長いものは `updater::NOTES_MAX_CHARS` 字で切る）。
+    #[serde(rename_all = "camelCase")]
+    Available {
+        version: String,
+        notes: Option<String>,
+    },
+    /// ダウンロードしている（署名の検証を含む）。`progress` は 0〜100 の割合で、大きさが分からない
+    /// ときは `None`。
+    #[serde(rename_all = "camelCase")]
+    Downloading {
+        version: String,
+        progress: Option<u8>,
+    },
+    /// ダウンロードできなかったか、署名の検証に通らなかった（何も入れ替えていない。アプリはそのまま使え、
+    /// 「更新して再起動」を選び直せる。詳しい文はログにだけ出す）。入れ替えに失敗したときは、データベースを
+    /// 閉じた後なので、この状態にはせず、そのまま再起動する（`updater::UpdateService::install`）。
+    Failed { version: String },
+    /// 入れ替えが終わり、再起動する。
+    Restarting,
+}
+
 // ---- 設定 ----
 
 /// テーマ（画面設計書 7章「表示」）。

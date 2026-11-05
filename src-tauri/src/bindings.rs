@@ -87,6 +87,7 @@ fn render() -> String {
         decl::<TodayChanged>(&cfg),
         decl::<BackupFailed>(&cfg),
         decl::<ShowRequested>(&cfg),
+        decl::<UpdateState>(&cfg),
         decl::<Theme>(&cfg),
         decl::<NoteFont>(&cfg),
         decl::<Layout>(&cfg),
@@ -129,13 +130,15 @@ fn render() -> String {
          changed: \"{}\",\n  \
          todayChanged: \"{}\",\n  \
          backupFailed: \"{}\",\n  \
-         showRequested: \"{}\",\n\
+         showRequested: \"{}\",\n  \
+         updateState: \"{}\",\n\
          }} as const;\n",
         crate::EVENT_STARTUP,
         crate::EVENT_CHANGED,
         crate::EVENT_TODAY_CHANGED,
         crate::EVENT_BACKUP_FAILED,
         crate::EVENT_SHOW_REQUESTED,
+        crate::EVENT_UPDATE_STATE,
     );
     format!(
         "// このファイルは src-tauri/src/bindings.rs が Rust の型から作る。手で書き換えない。\n\

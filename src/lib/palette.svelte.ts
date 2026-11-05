@@ -178,6 +178,7 @@ export class Palette {
 export type PaletteCommandId =
   | "carryover"
   | "saveDetail"
+  | "update"
   | "today"
   | "mode"
   | "archive"
@@ -208,12 +209,14 @@ export interface CommandContext {
   carryPending: boolean;
   /** 保存に失敗している（原因の表示を開ける）。 */
   saveFailing: boolean;
+  /** 新しい版があり、「更新して再起動」を始められる（`UpdateStore.canInstall`）。 */
+  updateAvailable: boolean;
   mac: boolean;
 }
 
 /**
  * コマンドの一覧（この順に出す）。持ち越しを開くは今日の持ち越しが残っている間だけ、保存できていない
- * 理由は保存に失敗している間だけ出す。`other` はもう一方の言語の文言（どちらの言語の名前でも探せる）。
+ * 理由は保存に失敗している間だけ、更新して再起動は新しい版があるときだけ出す。`other` はもう一方の言語の文言（どちらの言語の名前でも探せる）。
  */
 export function paletteCommands(ctx: CommandContext, m: Messages, other: Messages): PaletteCommand[] {
   // 割当が使えない操作（同じキーをほかの操作が使っている）は、キーを出さない
@@ -221,6 +224,7 @@ export function paletteCommands(ctx: CommandContext, m: Messages, other: Message
   const list: { id: PaletteCommandId; label: (x: Messages) => string; key?: string; active?: boolean; when?: boolean }[] = [
     { id: "carryover", label: (x) => x.palette.commands.carryover, when: ctx.carryPending },
     { id: "saveDetail", label: (x) => x.palette.commands.saveDetail, when: ctx.saveFailing },
+    { id: "update", label: (x) => x.palette.commands.update, when: ctx.updateAvailable },
     { id: "today", label: (x) => x.palette.commands.today, key: key("today") },
     {
       id: "mode",

@@ -1877,6 +1877,24 @@ fn settings_commands(default_dir: &Path) {
     });
     assert_eq!(h.ok("get_settings", json!({})), defaults);
 
+    // 自動更新：確認の手段を入れていない（窓の無い試験）ので、状態はいつも `none`。新しい版が無いときの
+    // 「更新して再起動」は何もしない。更新の自動確認を変えても、保存は同じように通る
+    assert_eq!(
+        h.ok("get_update_state", json!({})),
+        json!({ "state": "none" })
+    );
+    h.ok("install_update", json!({}));
+    let off = h.ok(
+        "save_settings",
+        json!({ "patch": { "updateCheck": false } }),
+    );
+    assert_eq!(off["updateCheck"], json!(false));
+    h.ok("save_settings", json!({ "patch": { "updateCheck": true } }));
+    assert_eq!(
+        h.ok("get_update_state", json!({})),
+        json!({ "state": "none" })
+    );
+
     // 変える欄だけ。片方だけの始業・終業は、もう片方に今の値を使う
     let saved = h.ok(
         "save_settings",
