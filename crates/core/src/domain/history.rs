@@ -262,6 +262,22 @@ fn summarize(log: &ChangeLog, before_chars: Option<i64>, after_chars: Option<i64
     }
 }
 
+/// 変更履歴の画面で確認した記録 `ids` に、確認済みの印（`seen_at`）を付けて、付けた件数を返す
+/// （行が無い・すでに確認済みの記録は数えない。最初に確認した時刻を残す）。画面が実際に見せた
+/// 記録の ID だけを渡す：一覧を読んでから印を付けるまでの間に届いた変更を、見せずに確認済みに
+/// しないため。一覧（[`list_changes`]）自体は印を付けない。
+pub fn mark_seen(conn: &Connection, ids: &[Ulid], now: Timestamp) -> Result<usize, StorageError> {
+    in_transaction(conn, || {
+        let mut marked = 0;
+        for id in ids {
+            if change_log::set_seen_at(conn, *id, now)? {
+                marked += 1;
+            }
+        }
+        Ok(marked)
+    })
+}
+
 // ---- 取り消し ----
 
 /// 取り消しの対象が無い。
@@ -1249,6 +1265,37 @@ mod tests {
             }))
         ));
         assert_eq!(get(conn, b.id).text, "B2");
+    }
+
+    #[test]
+    fn only_the_shown_records_are_marked_seen_and_the_first_time_is_kept() {
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let a = add(conn, "A");
+        let b = add(conn, "B");
+        let (la, lb) = (last_log(conn, a.id), last_log(conn, b.id));
+        assert_eq!(change_log::count_unseen_by_agents(conn).unwrap(), 2);
+        // 一覧は印を付けない
+        list_changes(
+            conn,
+            &ChangeFilter {
+                limit: DEFAULT_LIMIT,
+                ..ChangeFilter::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(change_log::count_unseen_by_agents(conn).unwrap(), 2);
+        // 見せた記録だけに付ける（見せていない B は未確認のまま）。無い ID は数えない
+        let n = mark_seen(conn, &[la.id, Ulid::generate()], at(T1)).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(change_log::count_unseen_by_agents(conn).unwrap(), 1);
+        // 2回目は付けず、最初の時刻を残す
+        assert_eq!(mark_seen(conn, &[la.id], at(T2)).unwrap(), 0);
+        let seen = change_log::list_by_target(conn, Target::Item(a.id)).unwrap();
+        assert_eq!(seen[0].seen_at, Some(at(T1)));
+        assert_eq!(last_log(conn, b.id).seen_at, None);
+        assert_eq!(mark_seen(conn, &[lb.id], at(T2)).unwrap(), 1);
+        assert_eq!(change_log::count_unseen_by_agents(conn).unwrap(), 0);
     }
 
     #[test]

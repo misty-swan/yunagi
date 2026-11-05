@@ -6,6 +6,9 @@ import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENTS,
+  type AgentRow,
+  type AgentScope,
+  type ApiStatus,
   type Archive,
   type BackupEntry,
   type BackupFailed,
@@ -15,6 +18,7 @@ import {
   type CarryoverList,
   type CarryoverStatus,
   type Changed,
+  type ChangeList,
   type CloudService,
   type CommandError,
   type DataDirChanged,
@@ -30,6 +34,9 @@ import {
   type NoteMark,
   type Overview,
   type Position,
+  type RevertPlan,
+  type Reverted,
+  type ScopesChanged,
   type SearchHit,
   type SendResult,
   type Settings,
@@ -191,6 +198,28 @@ export const core = {
    * 画面が準備できたとき（起動した直後は、頼みが画面の準備より先に届く）と、`show-requested` を受けたときに呼ぶ。
    */
   takeShowNote: () => call<boolean>("take_show_note"),
+  /** 登録されているエージェントと、許可した権限・最後に接続した時刻・消せるか（登録した順）。 */
+  listAgents: () => call<AgentRow[]>("list_agents"),
+  /**
+   * エージェント `client` の権限を、`allow` を足し、`deny` を外して変える。`expect` は確認の画面で見せた変更前の
+   * 権限（いまと違えば `conflict` の `scopes_changed`）。
+   */
+  setAgentScopes: (client: string, allow: AgentScope[], deny: AgentScope[], expect: AgentScope[]) =>
+    call<ScopesChanged>("set_agent_scopes", { client, allow, deny, expect }),
+  /** 登録を消す（変更履歴にも項目にも指されていない登録だけ。設定のエージェント区分の整理）。 */
+  removeAgent: (client: string) => call<null>("remove_agent", { client }),
+  /** ローカル API の状態（動作中か・始められなかった理由の種類・処理中の接続数）。 */
+  apiStatus: () => call<ApiStatus>("api_status"),
+  /** 変更履歴の一覧（新しい順）。`before` はその記録より古いものだけ、`limit` は 1 以上。確認済みの印は付けない。 */
+  listChanges: (client: string | null, unseenOnly: boolean, before: Id | null, limit: number) =>
+    call<ChangeList>("list_changes", { client, unseenOnly, before, limit }),
+  /** 変更の取り消しで何が起きるか（何も書かない）。確認の画面に見せる。 */
+  previewRevert: (changeId: Id) => call<RevertPlan>("preview_revert", { changeId }),
+  /** 変更を取り消す。`expect` は `previewRevert` の `token`。`force` は人があとから変えた欄を上書きする。 */
+  revertChange: (changeId: Id, force: boolean, expect: string) =>
+    call<Reverted>("revert_change", { changeId, force, expect }),
+  /** 変更履歴の画面で見せた記録に、確認済みの印を付ける。付けた件数を返す。 */
+  markChangesSeen: (ids: Id[]) => call<number>("mark_changes_seen", { ids }),
 };
 
 /** イベントを聞き始められなかったとき、やり直すまでの時間。 */

@@ -119,12 +119,12 @@ export interface SettingsMessages {
     unsaved: string;
   };
   agents: {
+    /** 接続したことのあるエージェントと、その権限の一覧の行の名前。 */
     connected: string;
-    permissions: string;
     localApi: string;
+    apiState: string;
     history: string;
     openHistory: string;
-    notYet: string;
   };
 }
 
@@ -287,12 +287,11 @@ const ja: SettingsMessages = {
     unsaved: "保存できていない入力があるため、切り替えませんでした。保存できてから、もう一度行ってください。",
   },
   agents: {
-    connected: "接続中のエージェント",
-    permissions: "権限",
+    connected: "接続したエージェントと権限",
     localApi: "ローカル API",
+    apiState: "状態",
     history: "変更履歴",
     openHistory: "変更履歴を開く",
-    notYet: "まだ変えられません。",
   },
 };
 
@@ -455,12 +454,11 @@ const en: SettingsMessages = {
     unsaved: "Some input isn't saved yet, so nothing was switched. Try again once it is saved.",
   },
   agents: {
-    connected: "Connected agents",
-    permissions: "Permissions",
+    connected: "Agents that connected, and permissions",
     localApi: "Local API",
+    apiState: "Status",
     history: "Change history",
     openHistory: "Open change history",
-    notYet: "Can't be changed yet.",
   },
 };
 

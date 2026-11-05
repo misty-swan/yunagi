@@ -11,11 +11,105 @@
 use rusqlite::Connection;
 
 use crate::storage::table::agent_client::{self, AgentClient, Scope};
-use crate::storage::{StorageError, in_transaction};
+use crate::storage::{StorageError, in_read_transaction, in_transaction};
 
 /// 登録されているクライアントを、登録した順（固定の `cli`・`unknown` が先）で返す。
 pub fn list_clients(conn: &Connection) -> Result<Vec<AgentClient>, StorageError> {
     agent_client::list(conn)
+}
+
+/// 登録されているクライアントと、消せるか。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientEntry {
+    pub client: AgentClient,
+    /// 消せるか：固定の `cli`・`unknown` ではなく、変更履歴にも項目にも指されていない。
+    pub removable: bool,
+}
+
+/// 登録されているクライアントを、消せるかを添えて返す（登録した順）。
+pub fn list_entries(conn: &Connection) -> Result<Vec<ClientEntry>, StorageError> {
+    in_read_transaction(conn, || {
+        let used = agent_client::referenced_ids(conn)?;
+        Ok(agent_client::list(conn)?
+            .into_iter()
+            .map(|client| ClientEntry {
+                removable: is_removable(&client, &used),
+                client,
+            })
+            .collect())
+    })
+}
+
+fn is_removable(client: &AgentClient, used: &[crate::storage::Ulid]) -> bool {
+    client.id != agent_client::CLI_ID
+        && client.id != agent_client::UNKNOWN_ID
+        && !used.contains(&client.id)
+}
+
+/// 登録を消せない理由。どれも何も書いていない。
+#[derive(Debug)]
+pub enum RemoveError {
+    /// その識別子のクライアントが無い。
+    NotFound,
+    /// 固定の `cli`・`unknown`。
+    Fixed,
+    /// 変更履歴か項目が指している（履歴の表示に名前が要る）。
+    InUse,
+    Storage(StorageError),
+}
+
+impl std::fmt::Display for RemoveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("the client was not found"),
+            Self::Fixed => f.write_str("the fixed client cannot be removed"),
+            Self::InUse => f.write_str("the client is referenced by the change history"),
+            Self::Storage(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for RemoveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<StorageError> for RemoveError {
+    fn from(e: StorageError) -> Self {
+        Self::Storage(e)
+    }
+}
+
+impl From<rusqlite::Error> for RemoveError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Storage(e.into())
+    }
+}
+
+/// 登録を消す（登録の数が上限に達したときの整理。MCP・CLI 仕様書 9章の決定）。消せるのは、固定の
+/// `cli`・`unknown` ではなく、変更履歴にも項目にも指されていない登録だけ。指す記録の確認と削除は
+/// 同じトランザクションで行う。消した識別子が再び接続すると、`read` だけで登録し直される。
+///
+/// 画面（設定のエージェント区分）だけの口で、ローカル API・CLI には出さない（エージェントが自分の
+/// 登録を消して、権限を `read` に戻させないため）。
+pub fn remove_client(conn: &Connection, name: &str) -> Result<(), RemoveError> {
+    in_transaction(conn, || {
+        let Some(client) = agent_client::get_by_name(conn, name)? else {
+            return Err(RemoveError::NotFound);
+        };
+        if client.id == agent_client::CLI_ID || client.id == agent_client::UNKNOWN_ID {
+            return Err(RemoveError::Fixed);
+        }
+        if agent_client::is_referenced(conn, client.id)? {
+            return Err(RemoveError::InUse);
+        }
+        agent_client::delete(conn, client.id)?;
+        Ok(())
+    })
 }
 
 /// 権限の変更の引数の誤り（`invalid_argument`）。何も書いていない。
@@ -277,6 +371,76 @@ mod tests {
             agent_client::get(conn, CLI_ID).unwrap().unwrap().scopes,
             [Scope::Read]
         );
+    }
+
+    #[test]
+    fn only_registrations_nothing_refers_to_can_be_removed() {
+        use crate::domain::agent::test_support::grant;
+        use crate::domain::agent::{Agent, NO_UI};
+        use crate::domain::item;
+        use crate::storage::table::test_support::date;
+        let (db, _dir) = open();
+        let conn = db.connection();
+        let now = at("2026-11-04T00:00:00Z");
+        let id_of = |name: &str| match client_for(conn, Some(name), now).unwrap() {
+            ClientLookup::Registered(id) => id,
+            other => panic!("{other:?}"),
+        };
+        let idle = id_of("idle");
+        let worker = id_of("worker");
+        // 履歴のある登録（項目を足した）は消せない
+        grant(conn, worker, &[Scope::Todo]);
+        let agent = Agent {
+            client_id: worker,
+            ui: &NO_UI,
+        };
+        let tz = jiff::tz::TimeZone::get("Asia/Tokyo").unwrap();
+        item::add_todo(conn, &agent, date("2026-11-04"), "調べる", &tz, now).unwrap();
+
+        let entries = list_entries(conn).unwrap();
+        let flags: Vec<(&str, bool)> = entries
+            .iter()
+            .map(|e| (e.client.name.as_str(), e.removable))
+            .collect();
+        assert_eq!(
+            flags,
+            [
+                ("cli", false),
+                ("unknown", false),
+                ("idle", true),
+                ("worker", false)
+            ]
+        );
+
+        assert!(matches!(
+            remove_client(conn, "cli"),
+            Err(RemoveError::Fixed)
+        ));
+        assert!(matches!(
+            remove_client(conn, "unknown"),
+            Err(RemoveError::Fixed)
+        ));
+        assert!(matches!(
+            remove_client(conn, "worker"),
+            Err(RemoveError::InUse)
+        ));
+        assert!(matches!(
+            remove_client(conn, "nobody"),
+            Err(RemoveError::NotFound)
+        ));
+        remove_client(conn, "idle").unwrap();
+        assert!(agent_client::get(conn, idle).unwrap().is_none());
+        assert!(matches!(
+            remove_client(conn, "idle"),
+            Err(RemoveError::NotFound)
+        ));
+        // 消した識別子は、次に接続したとき read だけで登録し直される
+        assert!(matches!(
+            client_for(conn, Some("idle"), now).unwrap(),
+            ClientLookup::Registered(_)
+        ));
+        let again = agent_client::get_by_name(conn, "idle").unwrap().unwrap();
+        assert_eq!(again.scopes, [Scope::Read]);
     }
 
     #[test]

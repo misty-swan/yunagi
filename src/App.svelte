@@ -9,6 +9,7 @@
   // （src/startup/）を窓全体に出す。開く処理の状態は、起動時の画面の data-startup に出す（テストに使う）。定期バックアップの失敗（backup-failed）は上部のバーの知らせに出す。
   // 持ち越し（S-03。src/carryover/）は、開いたときと前面に出したときに確かめ、外枠の上に重ねて出す。
   // 検索パレット（S-04。src/palette/）も外枠の上に重ね、選んだもの（日付・コマンド・検索結果）はここで行う。
+  // 設定（S-05。src/settings/）とエージェント変更履歴（S-06。src/agents/）も外枠の上に重ねる（同時には開かない）。
   // ふりかえり（S-08。src/archive/）は、開いている間、整理モードとノートの代わりに本文へ出す（二つは消さずに隠す）。
   import type { EditorView } from "@codemirror/view";
   import type { LogicalDate, NoteSource } from "./lib/bindings";
@@ -46,6 +47,9 @@
   import { SettingsPanel } from "./lib/settings_panel.svelte";
   import { DataSettings } from "./lib/settings_data.svelte";
   import SettingsDialog from "./settings/SettingsDialog.svelte";
+  import { AgentAdmin } from "./lib/agent_admin.svelte";
+  import { AgentsScreen } from "./lib/agents.svelte";
+  import AgentsDialog from "./agents/Agents.svelte";
 
   const session = startSession();
   onDestroy(() => void session.stop());
@@ -72,6 +76,14 @@
     today: () => session.today,
   });
   onDestroy(() => dataSettings.stop());
+  // エージェントの一覧と権限・登録の整理（設定のエージェント区分と変更履歴 S-06 が共有する）、変更履歴 S-06。
+  // S-06 は取り消しの確認の前に、まだ保存していない入力を送る
+  const agentAdmin = new AgentAdmin();
+  agentAdmin.start();
+  onDestroy(() => agentAdmin.stop());
+  const agentsScreen = new AgentsScreen({ flush: () => save.flushAll() });
+  agentsScreen.start();
+  onDestroy(() => agentsScreen.stop());
   // データベースを開けたら、外枠を出す前に設定を読む（保存した値で描く。等幅のノートの書体は、読み込み終えて
   // から描く）。読めなければ既定の値で続ける
   let settingsStarted = false;
@@ -160,6 +172,10 @@
     if (settingsPanel.open) {
       settingsPanel.returnFocus = null;
       settingsPanel.close();
+    }
+    if (agentsScreen.open) {
+      agentsScreen.returnFocus = null;
+      agentsScreen.close();
     }
     closeArchive(false);
     shell.setMode("note");
@@ -338,6 +354,10 @@
         carry.returnFocus = settingsPanel.returnFocus;
         settingsPanel.returnFocus = null;
         settingsPanel.close();
+      } else if (agentsScreen.open) {
+        carry.returnFocus = agentsScreen.returnFocus;
+        agentsScreen.returnFocus = null;
+        agentsScreen.close();
       }
     });
   });
@@ -415,20 +435,51 @@
     }
   }
 
-  // 設定（S-05）とふりかえり（S-08）を開く。変更履歴（S-06）は、その画面の課題で開くようにする
-  // （それまでは何もしない）。サイドバー・上部のバー・キー・パレットのどこから開くときも、ここを通る
-  // （画面設計書 6章）。持ち越しを出している間は開かない（背後の操作を受け付けないため）
+  // 設定（S-05）・変更履歴（S-06）・ふりかえり（S-08）を開く。サイドバー・上部のバー・キー・パレット・設定の
+  // エージェント区分のどこから開くときも、ここを通る（画面設計書 6章）。持ち越しを出している間と、変更履歴を
+  // 出している間は開かない（背後の操作を受け付けないため）
   function openScreen(c: Exclude<ShellCommand, "palette">) {
     if (carry.open) return;
+    if (c === "agents") {
+      openAgents();
+      return;
+    }
+    if (agentsScreen.open) return;
     if (c === "settings") settingsPanel.show();
     else if (c === "dataSettings") settingsPanel.show("data");
     else if (c === "archive") openArchive();
   }
 
+  /**
+   * 変更履歴を開く。設定のエージェント区分から開くときは、設定を閉じて（重ねない）変更履歴を開き、利用者が
+   * 閉じたら設定のエージェント区分を開き直す（画面設計書 10章 S-06 ─Esc▶ S-05）。設定を開く前にフォーカスの
+   * あった所は、設定を開き直すときに引き継ぐ。
+   */
+  function openAgents() {
+    if (agentsScreen.open) {
+      agentsScreen.show();
+      return;
+    }
+    if (!settingsPanel.open) {
+      agentsScreen.show();
+      return;
+    }
+    const back = settingsPanel.returnFocus;
+    settingsPanel.returnFocus = null;
+    settingsPanel.close();
+    agentsScreen.show();
+    // 閉じたときのフォーカスは、設定を開き直すときに置く
+    agentsScreen.returnFocus = null;
+    agentsScreen.onBack = () => {
+      settingsPanel.show("agents");
+      settingsPanel.returnFocus = back;
+    };
+  }
+
   function onCommand(c: ShellCommand) {
     if (c === "palette") {
-      // 持ち越しを出している間は開かない（背後の操作を受け付けないため）
-      if (!carry.open) palette.show();
+      // 持ち越しを出している間と、変更履歴を出している間は開かない（背後の操作を受け付けないため）
+      if (!carry.open && !agentsScreen.open) palette.show();
       return;
     }
     openScreen(c);
@@ -441,7 +492,7 @@
   <StartupScreen startup={session.startup} actions={startupActions} />
 {:else if shown}
   <!-- 持ち越し・パレット・設定を出している間は、背後の外枠と本文を操作できなくする -->
-  <div inert={carry.open || palette.open || settingsPanel.open}>
+  <div inert={carry.open || palette.open || settingsPanel.open || agentsScreen.open}>
     <AppShell
       {session}
       {save}
@@ -513,9 +564,11 @@
     panel={settingsPanel}
     store={settingsStore}
     data={dataSettings}
+    admin={agentAdmin}
     {mac}
     onOpenAgents={() => openScreen("agents")}
   />
+  <AgentsDialog screen={agentsScreen} admin={agentAdmin} />
   <CarryoverPanel {carry} />
 {/if}
 

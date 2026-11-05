@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use tauri::State;
 use yunagi_core::domain::{
-    archive, board, carryover, export, handoff, item, note_send, settings, text_doc,
+    agent_admin, archive, board, carryover, export, handoff, history, item, note_send, settings,
+    text_doc,
 };
 use yunagi_core::storage::cloud_sync;
 use yunagi_core::storage::search::{self as storage_search, SearchQuery};
@@ -23,11 +24,12 @@ use crate::clipboard::HandoffClipboard;
 use crate::global_shortcut::GlobalShortcutController;
 use crate::ime::ImeWorker;
 use crate::types::{
-    Archive, BackupEntry, Board, CarryoverConfirmed, CarryoverDecision, CarryoverList,
-    CarryoverStatus, CloudService, CommandError, DataDirChanged, Date, Deleted,
-    GlobalShortcutStatus, Id, ImeStatus, Item, ItemFields, ItemKind, ItemOutcome, NoteMark,
-    Overview, Position, SearchHit, SendResult, Settings, SettingsPatch, Snapshot, SplitResult,
-    Startup, TextDoc, TextSave, UiReport,
+    AgentRow, AgentScope, ApiStatus, Archive, BackupEntry, Board, CarryoverConfirmed,
+    CarryoverDecision, CarryoverList, CarryoverStatus, ChangeEntry, ChangeList, CloudService,
+    CommandError, DataDirChanged, Date, Deleted, GlobalShortcutStatus, Id, ImeStatus, Item,
+    ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, RevertPlan, Reverted,
+    ScopesChanged, SearchHit, SendResult, Settings, SettingsPatch, Snapshot, SplitResult, Startup,
+    TextDoc, TextSave, UiReport,
 };
 
 type Core<'a> = State<'a, Arc<AppCore>>;
@@ -685,6 +687,173 @@ pub fn ime_leave_insert(ime: State<'_, ImeWorker>) -> Result<(), CommandError> {
 pub fn ime_enter_insert(ime: State<'_, ImeWorker>, restore: bool) -> Result<(), CommandError> {
     ime.enter_insert(restore);
     Ok(())
+}
+
+// ---- エージェントの管理（設定のエージェント区分・変更履歴 S-06。MCP・CLI 仕様書 4.4・7章） ----
+//
+// ローカル API の管理の操作と同じコア（`domain::agent_admin`・`domain::history`）を、画面向けの型で
+// 呼ぶ。確認は画面が行い、ここは確認を済ませた後の変更を行う。呼び出し元のスコープは確かめない。
+// 書き込みは `AppCore::admin_write`（画面の入力中・保存の失敗中を取り消しに見せ、変えたら `changed`）。
+
+/// 登録されているエージェント（クライアント）と、許可した権限・最後に接続した時刻・消せるか
+/// （登録した順。固定の `cli`・`unknown` が先）。
+#[tauri::command]
+pub async fn list_agents(core: Core<'_>) -> Result<Vec<AgentRow>, CommandError> {
+    blocking(&core, |core| {
+        core.read(|conn| {
+            agent_admin::list_entries(conn)
+                .map(|entries| entries.into_iter().map(AgentRow::from).collect())
+        })
+    })
+    .await
+}
+
+/// エージェント `client` の権限を、`allow` を足し、`deny` を外して変える。`expect` は確認の画面で見せた
+/// 変更前の権限（いまと違えば、書かずに `conflict`（`scopes_changed`））。足すものも外すものも無い・
+/// 同じものを両方に指定するのは画面の不具合（`internal`）。`unknown` に `read` 以外は足せない
+/// （`invalid_argument`）。変えたら `changed`（`by: agent`）を知らせる。
+#[tauri::command]
+pub async fn set_agent_scopes(
+    core: Core<'_>,
+    client: String,
+    allow: Vec<AgentScope>,
+    deny: Vec<AgentScope>,
+    expect: Vec<AgentScope>,
+) -> Result<ScopesChanged, CommandError> {
+    blocking(&core, move |core| {
+        let allow: Vec<_> = allow.into_iter().map(Into::into).collect();
+        let deny: Vec<_> = deny.into_iter().map(Into::into).collect();
+        let expect: Vec<_> = expect.into_iter().map(Into::into).collect();
+        core.admin_write(|conn, _| {
+            agent_admin::change_scopes(conn, &client, &allow, &deny, Some(&expect)).map(|c| {
+                ScopesChanged {
+                    updated: c.updated,
+                    scopes: c.client.scopes.into_iter().map(Into::into).collect(),
+                }
+            })
+        })
+    })
+    .await
+}
+
+/// 消した登録（結果は値を持たない）。
+struct Removed;
+
+impl Changes for Removed {
+    fn changed(&self) -> bool {
+        true
+    }
+}
+
+/// 登録を消す（登録の数の上限に達したときの整理。MCP・CLI 仕様書 9章）。消せるのは、固定の
+/// `cli`・`unknown` ではなく、変更履歴にも項目にも指されていない登録だけ（`invalid_argument` の
+/// `fixed_client`、`conflict` の `client_in_use`）。画面だけの口で、ローカル API・CLI には出さない。
+#[tauri::command]
+pub async fn remove_agent(core: Core<'_>, client: String) -> Result<(), CommandError> {
+    blocking(&core, move |core| {
+        core.admin_write(|conn, _| agent_admin::remove_client(conn, &client).map(|()| Removed))
+            .map(|Removed| ())
+    })
+    .await
+}
+
+/// ローカル API の状態（動作中か・始められなかった理由の種類・処理中の接続数。アーキテクチャ設計書 4.6）。
+/// データベースを開いていなくても答える。
+#[tauri::command]
+pub async fn api_status(core: Core<'_>) -> Result<ApiStatus, CommandError> {
+    blocking(&core, |core| Ok(core.api_state().into())).await
+}
+
+/// 変更履歴を新しい順に返す（MCP・CLI 仕様書 7.2）。確認済みの印は付けない。`client` はそのエージェントの
+/// 記録だけ（登録が無ければ `not_found`）、`unseen_only` は未確認のものだけ、`before` はその記録より古い
+/// ものだけ（続きを読む目印）。`limit` は 1 以上（200 を超えれば 200）。
+#[tauri::command]
+pub async fn list_changes(
+    core: Core<'_>,
+    client: Option<String>,
+    unseen_only: bool,
+    before: Option<Id>,
+    limit: usize,
+) -> Result<ChangeList, CommandError> {
+    blocking(&core, move |core| {
+        let filter = history::ChangeFilter {
+            client,
+            unseen_only,
+            before: before.map(|i| i.0),
+            limit,
+        };
+        core.read(|conn| {
+            let entries = history::list_changes(conn, &filter)?;
+            let shown = limit.min(history::MAX_LIMIT);
+            let next_before = (entries.len() == shown)
+                .then(|| entries.last().map(|e| Id(e.log.id)))
+                .flatten();
+            Ok::<_, history::HistoryError>(ChangeList {
+                changes: entries.iter().map(ChangeEntry::from).collect(),
+                next_before,
+            })
+        })
+    })
+    .await
+}
+
+/// 変更の取り消しで何が起きるかを返す（何も書かない。MCP・CLI 仕様書 7.3）。確認の画面に見せる。
+#[tauri::command]
+pub async fn preview_revert(core: Core<'_>, change_id: Id) -> Result<RevertPlan, CommandError> {
+    blocking(&core, move |core| {
+        core.read(|conn| history::preview(conn, change_id.0).map(|p| RevertPlan::from(&p)))
+    })
+    .await
+}
+
+/// 変更を取り消す（MCP・CLI 仕様書 7.3。判定の順もそこ）。`expect` は `preview_revert` の `token`
+/// （見せたときと状態が違えば、`force` でも書かずに `conflict`（`changed`、`afterPreview`））。`force` は
+/// 人があとから変えた欄を、見せた値で上書きする。取り消したときと、すでに戻っていた記録を取り消し済みに
+/// したときは `changed`（`by: agent`）を知らせる。
+#[tauri::command]
+pub async fn revert_change(
+    core: Core<'_>,
+    change_id: Id,
+    force: bool,
+    expect: String,
+) -> Result<Reverted, CommandError> {
+    blocking(&core, move |core| {
+        core.admin_write(|conn, screen| {
+            let request = history::RevertRequest {
+                force,
+                expect: Some(&expect),
+            };
+            history::revert(conn, change_id.0, &request, screen, &system_tz(), now()).map(|r| {
+                Reverted {
+                    updated: r.updated,
+                    state: r.plan.state.into(),
+                    marked: r.updated || r.plan.state == history::PlanState::AlreadyRestored,
+                }
+            })
+        })
+    })
+    .await
+}
+
+/// 確認した件数（印を付けた記録の数）。付けた記録があれば、上部のバーの件数が変わる。
+struct Marked(usize);
+
+impl Changes for Marked {
+    fn changed(&self) -> bool {
+        self.0 > 0
+    }
+}
+
+/// 変更履歴の画面で見せた記録 `ids` に、確認済みの印を付ける（MCP・CLI 仕様書 7.2）。見せていない記録には
+/// 付けない（一覧を読んでから届いた変更を、見せずに確認済みにしないため）。付けた件数を返す。
+#[tauri::command]
+pub async fn mark_changes_seen(core: Core<'_>, ids: Vec<Id>) -> Result<usize, CommandError> {
+    blocking(&core, move |core| {
+        let ids: Vec<_> = ids.into_iter().map(|i| i.0).collect();
+        core.admin_write(|conn, _| history::mark_seen(conn, &ids, now()).map(Marked))
+            .map(|Marked(n)| n)
+    })
+    .await
 }
 
 /// 画面の入力中の状態を知らせる（変わるたびに全体を知らせ直す。アーキテクチャ設計書 4.1）。

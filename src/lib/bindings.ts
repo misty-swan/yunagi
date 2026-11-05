@@ -766,6 +766,176 @@ export type GlobalShortcutStatus = { state: GlobalShortcutState,
 wayland: boolean, };
 
 /**
+ * 権限（スコープ。MCP・CLI 仕様書 2章）。
+ */
+export type AgentScope = "read" | "todo" | "blocker" | "append" | "note_edit";
+
+/**
+ * 登録されているエージェント（クライアント。`list_agents`）。
+ */
+export type AgentRow = { id: Id, 
+/**
+ * 識別子（`yunagi mcp --client claude-code` の `claude-code`。`cli`・`unknown` は固定）。
+ */
+name: string, 
+/**
+ * 許可したスコープ（`read`・`todo`・`blocker`・`append`・`note_edit` の順）。
+ */
+scopes: Array<AgentScope>, createdAt: Millis, 
+/**
+ * 最後に接続した時刻。まだ接続していなければ `None`。
+ */
+lastSeenAt: Millis | null, 
+/**
+ * 登録を消せるか（固定の `cli`・`unknown` ではなく、変更履歴にも項目にも指されていない）。
+ */
+removable: boolean, };
+
+/**
+ * 権限の変更の結果（`set_agent_scopes`）。
+ */
+export type ScopesChanged = { 
+/**
+ * 実際に変えたか（足すものがすでにあり、外すものがすでに無ければ `false`）。
+ */
+updated: boolean, 
+/**
+ * 変えた後のスコープ。
+ */
+scopes: Array<AgentScope>, };
+
+/**
+ * ローカル API の状態（`api_status`。アーキテクチャ設計書 4.6）。待ち受けられなかったときの原因の文
+ * （ログ用）は渡さず、種類だけを渡す。
+ */
+export type ApiStatus = { "state": "stopped" } | { "state": "listening", connections: number, } | { "state": "unavailable", cause: ApiCause, };
+
+/**
+ * 待ち受けを始められなかった理由の種類。
+ */
+export type ApiCause = "socket_path_too_long" | "path_occupied" | "pipe_name_taken" | "other";
+
+/**
+ * 変更をしたもの。
+ */
+export type ChangeActor = "agent" | "human";
+
+/**
+ * 変更履歴の対象の項目のいまの様子。
+ */
+export type ChangedItem = { date: LogicalDate, kind: ItemKind, text: string, 
+/**
+ * 削除されているか。
+ */
+deleted: boolean, };
+
+/**
+ * 変更履歴の対象。
+ */
+export type ChangeTarget = { "type": "item", id: Id, item: ChangedItem | null, } | { "type": "note", date: LogicalDate, } | { "type": "reflection", date: LogicalDate, };
+
+/**
+ * 項目の1つの欄の変更。値は文字列か、空（`None`）。
+ */
+export type FieldChange = { 
+/**
+ * 欄の名前（`text`・`status`・`close_reason`・`resolution_note`・`completed_at`・`sort_key`）。
+ */
+name: string, before: string | null, after: string | null, };
+
+/**
+ * 変更の中身の要約。
+ */
+export type ChangeSummary = { "type": "added", kind: string | null, text: string, } | { "type": "fields", fields: Array<FieldChange>, } | { "type": "text", beforeChars: number, afterChars: number, } | { "type": "unknown" };
+
+/**
+ * 変更履歴の1件（`list_changes`）。
+ */
+export type ChangeEntry = { id: Id, createdAt: Millis, actor: ChangeActor, 
+/**
+ * 操作したエージェントの識別子。人の取り消しの記録は `None`。
+ */
+client: string | null, 
+/**
+ * `<名詞>.<動詞>`（例：`todo.add`）。
+ */
+operation: string, target: ChangeTarget, summary: ChangeSummary, 
+/**
+ * 確認した時刻（未確認は `None`）。
+ */
+seenAt: Millis | null, 
+/**
+ * 取り消した時刻。
+ */
+revertedAt: Millis | null, 
+/**
+ * この記録が取り消しの記録なら、取り消した元の記録。
+ */
+revertOf: Id | null, };
+
+/**
+ * 変更履歴の一覧の1ページ。
+ */
+export type ChangeList = { changes: Array<ChangeEntry>, 
+/**
+ * 続きがあるとき、`before` に渡す記録の ID（これより古い記録が続く）。無ければ `None`。
+ */
+nextBefore: Id | null, };
+
+/**
+ * 取り消しで何が起きるか。
+ */
+export type RevertState = "apply" | "already_reverted" | "already_restored";
+
+/**
+ * 戻す1つの欄。
+ */
+export type RevertField = { name: string, 
+/**
+ * いまの値。
+ */
+current: string | null, 
+/**
+ * 戻す値。
+ */
+restore: string | null, 
+/**
+ * 記録の後に人が変えた欄か。
+ */
+changedSince: boolean, };
+
+/**
+ * 取り消しで書き込む内容。
+ */
+export type RevertEffect = { "type": "none" } | { "type": "delete_item", date: LogicalDate, kind: ItemKind, text: string, carriedToDate: LogicalDate | null, } | { "type": "fields", date: LogicalDate, kind: ItemKind, text: string, fields: Array<RevertField>, } | { "type": "text", doc: TextDoc, date: LogicalDate, removed: Array<string>, added: Array<string>, truncated: boolean, };
+
+/**
+ * 取り消しの計画（`preview_revert`。何も書かない）。
+ */
+export type RevertPlan = { id: Id, operation: string, client: string | null, createdAt: Millis, state: RevertState, 
+/**
+ * 見せたときの状態の目印。`revert_change` の `expect` に返す。
+ */
+token: string, 
+/**
+ * 記録の後に人が変えた欄の名前（ノートは `body`）。空でなければ、上書きの確認が要る。
+ */
+changedSince: Array<string>, effect: RevertEffect, };
+
+/**
+ * 取り消しの結果（`revert_change`）。
+ */
+export type Reverted = { 
+/**
+ * 値を書いたか（すでに取り消し済み・すでに戻っていたときは `false`）。
+ */
+updated: boolean, state: RevertState, 
+/**
+ * 記録を取り消し済みにしたか（値を書いたとき、またはすでに戻っていたとき）。
+ */
+marked: boolean, };
+
+/**
  * コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
  * （Display の文をそのまま使わない。README「エラーの表示」）。
  */
@@ -774,7 +944,7 @@ export type CommandError = { "kind": "not_ready" } | { "kind": "invalid_state" }
 /**
  * 引数の誤りの種類。
  */
-export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line" | "meter_hours" | "font_size" | "review_threshold" | "shortcuts" | "time_of_day";
+export type InvalidReason = "wrong_kind" | "dropped" | "empty_text" | "multiline_text" | "empty_note" | "multiline_note" | "invalid_position" | "not_linked_external" | "note_line" | "invalid_line" | "meter_hours" | "font_size" | "review_threshold" | "shortcuts" | "time_of_day" | "not_agent_change" | "unsupported_record" | "unknown_write" | "fixed_client";
 
 /**
  * 選んだバックアップ・保存先を使えない理由。
@@ -784,7 +954,7 @@ export type RejectReason = "invalid_path" | "not_a_directory" | "no_database" | 
 /**
  * 受け付けられない状態の理由。
  */
-export type Conflict = { "reason": "carried_over", carriedToId: Id, carriedToDate: LogicalDate, } | { "reason": "user_editing" } | { "reason": "note_exists", resolutionNote: string, } | { "reason": "previous_day_changed", previousDay: LogicalDate | null, } | { "reason": "carryover_done" };
+export type Conflict = { "reason": "carried_over", carriedToId: Id, carriedToDate: LogicalDate, } | { "reason": "user_editing" } | { "reason": "note_exists", resolutionNote: string, } | { "reason": "previous_day_changed", previousDay: LogicalDate | null, } | { "reason": "carryover_done" } | { "reason": "changed", fields: Array<string>, afterPreview: boolean, } | { "reason": "scopes_changed" } | { "reason": "save_failing" } | { "reason": "client_in_use" };
 
 /**
  * 削除を戻せない理由。

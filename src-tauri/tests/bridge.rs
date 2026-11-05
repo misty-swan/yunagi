@@ -44,7 +44,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 23] = [
+    let tests: [(&str, Test); 24] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -57,6 +57,7 @@ fn main() {
         ("copy_handoff_command", copy_handoff_command),
         ("overview_counts", overview_counts),
         ("archive_command", archive_command),
+        ("agent_admin_commands", agent_admin_commands),
         (
             "export_markdown_writes_one_file_per_day",
             export_markdown_writes_one_file_per_day,
@@ -913,6 +914,254 @@ fn overview_counts(_: &Path) {
             .iter()
             .all(|d| d["date"] != date)
     );
+}
+
+/// エージェントの管理（設定のエージェント区分・変更履歴 S-06）：一覧・権限の変更・登録の削除・変更履歴・
+/// 確認済み・取り消し。変えたら `changed`（`by: agent`）が届き、取り消しは画面の入力中を見る。
+fn agent_admin_commands(_: &Path) {
+    let h = Harness::opened();
+    let date = "2032-06-01";
+    // 既定ディレクトリのデータベースは、ほかのテストと共有する。名前は重ならないようにし、件数は最初の値との差で見る
+    let (worker, idle) = ("admin-worker", "admin-idle");
+    let agent = h.register_agent(worker, vec![Scope::Read, Scope::Todo]);
+    h.register_agent(idle, vec![Scope::Read]);
+    let unseen_now = || {
+        h.ok("get_overview", json!({ "date": date }))["unseenChanges"]
+            .as_u64()
+            .unwrap()
+    };
+    let base = unseen_now();
+
+    // 一覧：固定の cli・unknown が先。履歴が無い登録だけ消せる
+    let rows = h.ok("list_agents", json!({}));
+    let names: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names[..2], ["cli", "unknown"]);
+    assert!(names.contains(&worker) && names.contains(&idle));
+    let removable = |rows: &Value, name: &str| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap()["removable"]
+            .clone()
+    };
+    assert_eq!(removable(&rows, "cli"), false);
+    assert_eq!(removable(&rows, idle), true);
+
+    // 権限の変更：見せた権限を expect に付ける。変えたら changed（agent）。同じなら知らせない
+    h.drain();
+    let changed = h.ok(
+        "set_agent_scopes",
+        json!({ "client": idle, "allow": ["append"], "deny": [], "expect": ["read"] }),
+    );
+    assert_eq!(
+        changed,
+        json!({ "updated": true, "scopes": ["read", "append"] })
+    );
+    assert_eq!(h.next_event(), changed_by("agent"));
+    let same = h.ok(
+        "set_agent_scopes",
+        json!({ "client": idle, "allow": ["append"], "deny": [], "expect": ["read", "append"] }),
+    );
+    assert_eq!(same["updated"], false);
+    h.assert_no_event();
+    assert_eq!(
+        h.err(
+            "set_agent_scopes",
+            json!({ "client": idle, "allow": ["todo"], "deny": [], "expect": ["read"] })
+        ),
+        json!({ "kind": "conflict", "reason": "scopes_changed" })
+    );
+    assert_eq!(
+        h.err(
+            "set_agent_scopes",
+            json!({ "client": "unknown", "allow": ["todo"], "deny": [], "expect": ["read"] })
+        ),
+        json!({ "kind": "invalid_argument", "reason": "unknown_write" })
+    );
+    assert_eq!(
+        h.err(
+            "set_agent_scopes",
+            json!({ "client": "nobody", "allow": ["todo"], "deny": [], "expect": [] })
+        ),
+        json!({ "kind": "not_found" })
+    );
+    h.assert_no_event();
+
+    // エージェントが項目を足す → 変更履歴に未確認で出る
+    let t = h
+        .core
+        .agent_write(agent, |conn, a| {
+            item::add_todo(
+                conn,
+                a,
+                date.parse().unwrap(),
+                "調べる",
+                &jiff::tz::TimeZone::UTC,
+                yunagi_core::storage::table::now(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    h.drain();
+    let list = h.ok(
+        "list_changes",
+        json!({ "client": worker, "unseenOnly": true, "before": null, "limit": 50 }),
+    );
+    let changes = list["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["operation"], "todo.add");
+    assert_eq!(changes[0]["client"], worker);
+    assert_eq!(changes[0]["target"]["type"], "item");
+    assert_eq!(changes[0]["target"]["item"]["text"], "調べる");
+    assert_eq!(changes[0]["summary"]["type"], "added");
+    assert_eq!(changes[0]["seenAt"], Value::Null);
+    assert_eq!(list["nextBefore"], Value::Null);
+    // 一覧は確認済みにしない
+    assert_eq!(unseen_now(), base + 1);
+    // 件数ちょうどで返したときは、続きの目印を返す
+    let page = h.ok(
+        "list_changes",
+        json!({ "client": worker, "unseenOnly": false, "before": null, "limit": 1 }),
+    );
+    assert_eq!(page["nextBefore"], changes[0]["id"]);
+    assert_eq!(
+        h.err(
+            "list_changes",
+            json!({ "client": "nobody", "unseenOnly": false, "before": null, "limit": 1 })
+        ),
+        json!({ "kind": "not_found" })
+    );
+
+    // 履歴のある登録は消せない。履歴の無い登録は消せて、changed（agent）が届く
+    assert_eq!(
+        h.err("remove_agent", json!({ "client": worker })),
+        json!({ "kind": "conflict", "reason": "client_in_use" })
+    );
+    assert_eq!(
+        h.err("remove_agent", json!({ "client": "cli" })),
+        json!({ "kind": "invalid_argument", "reason": "fixed_client" })
+    );
+    h.ok("remove_agent", json!({ "client": idle }));
+    assert_eq!(h.next_event(), changed_by("agent"));
+    assert_eq!(
+        h.err("remove_agent", json!({ "client": idle })),
+        json!({ "kind": "not_found" })
+    );
+
+    // 取り消し：入力中の欄は書き戻さない。見せた token が合えば取り消し、記録は取り消し済みになる
+    let id = changes[0]["id"].as_str().unwrap().to_owned();
+    let plan = h.ok("preview_revert", json!({ "changeId": id }));
+    assert_eq!(plan["state"], "apply");
+    assert_eq!(plan["effect"]["type"], "delete_item");
+    assert_eq!(plan["changedSince"], json!([]));
+    let token = plan["token"].as_str().unwrap().to_owned();
+    h.ok(
+        "report_ui_state",
+        json!({ "state": {
+            "session": "t", "seq": 1,
+            "editingItems": [{ "itemId": t.id.to_string(), "field": "text" }],
+            "editors": [],
+        } }),
+    );
+    h.drain();
+    // 利用者が本文を入力中の項目は、取り消さない（入力を消さないため）
+    assert_eq!(
+        h.err(
+            "revert_change",
+            json!({ "changeId": id, "force": false, "expect": token })
+        ),
+        json!({ "kind": "conflict", "reason": "user_editing" })
+    );
+    h.assert_no_event();
+    h.ok(
+        "report_ui_state",
+        json!({ "state": { "session": "t", "seq": 2, "editingItems": [], "editors": [] } }),
+    );
+    // 見せた後に状態が変わっていれば（token が合わなければ）、書かずに止める
+    let wrong = h.err(
+        "revert_change",
+        json!({ "changeId": id, "force": false, "expect": "stale" }),
+    );
+    assert_eq!(wrong["reason"], "changed");
+    assert_eq!(wrong["afterPreview"], true);
+    h.assert_no_event();
+    let done = h.ok(
+        "revert_change",
+        json!({ "changeId": id, "force": false, "expect": token }),
+    );
+    assert_eq!(
+        done,
+        json!({ "updated": true, "state": "apply", "marked": true })
+    );
+    assert_eq!(h.next_event(), changed_by("agent"));
+    let board = h.ok("get_board", json!({ "date": date }));
+    assert_eq!(board["todos"], json!([]));
+    // 取り消し済みの記録をもう一度取り消しても、何も書かず、知らせない
+    let again = h.ok(
+        "revert_change",
+        json!({ "changeId": id, "force": false, "expect": token }),
+    );
+    assert_eq!(again["updated"], false);
+    assert_eq!(again["state"], "already_reverted");
+    h.assert_no_event();
+    // 取り消した記録は確認済みになり、取り消しの記録（人の操作）は取り消せない
+    assert_eq!(unseen_now(), base);
+    let all = h.ok(
+        "list_changes",
+        json!({ "client": null, "unseenOnly": false, "before": null, "limit": 50 }),
+    );
+    // 新しい順の先頭は、いま作った取り消しの記録（人の操作）
+    let revert = &all["changes"][0];
+    assert_eq!(revert["operation"], "agent.revert");
+    assert_eq!(revert["actor"], "human");
+    assert_eq!(
+        h.err("preview_revert", json!({ "changeId": revert["id"] })),
+        json!({ "kind": "invalid_argument", "reason": "not_agent_change" })
+    );
+    assert_eq!(
+        h.err(
+            "preview_revert",
+            json!({ "changeId": "01ARZ3NDEKTSV4RRFFQ69G5FAV" })
+        ),
+        json!({ "kind": "not_found" })
+    );
+
+    // 確認済み：見せた記録だけに付ける。付けたら件数が変わり changed が届く。付ける物が無ければ届かない
+    h.core
+        .agent_write(agent, |conn, a| {
+            item::add_todo(
+                conn,
+                a,
+                date.parse().unwrap(),
+                "もう一つ",
+                &jiff::tz::TimeZone::UTC,
+                yunagi_core::storage::table::now(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    h.drain();
+    assert_eq!(unseen_now(), base + 1);
+    let unseen = h.ok(
+        "list_changes",
+        json!({ "client": worker, "unseenOnly": true, "before": null, "limit": 50 }),
+    );
+    let new_id = unseen["changes"][0]["id"].clone();
+    assert_eq!(h.ok("mark_changes_seen", json!({ "ids": [new_id] })), 1);
+    assert_eq!(h.next_event(), changed_by("agent"));
+    assert_eq!(unseen_now(), base);
+    assert_eq!(h.ok("mark_changes_seen", json!({ "ids": [new_id] })), 0);
+    h.assert_no_event();
+
+    // ローカル API の状態は、種類だけを返す
+    let api = h.ok("api_status", json!({}));
+    assert!(["stopped", "listening", "unavailable"].contains(&api["state"].as_str().unwrap()));
 }
 
 /// ふりかえり（`get_archive`）：選んだ日の週・記録のある直近の日・プレビュー。何も変えないので

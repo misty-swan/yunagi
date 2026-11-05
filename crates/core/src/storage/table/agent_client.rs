@@ -169,6 +169,36 @@ pub fn update_last_seen(conn: &Connection, id: Ulid, now: Timestamp) -> Result<b
     Ok(n == 1)
 }
 
+/// このクライアントを指す記録があるか（変更履歴 `change_log` か、エージェントが作った項目 `item`）。
+/// あれば行を消せない（履歴の表示がクライアントの名前を使うため）。
+pub fn is_referenced(conn: &Connection, id: Ulid) -> Result<bool, StorageError> {
+    query_row(
+        conn,
+        "SELECT EXISTS (SELECT 1 FROM change_log WHERE agent_client_id = ?1) \
+         OR EXISTS (SELECT 1 FROM item WHERE agent_client_id = ?1)",
+        [id],
+        |r| r.get(0),
+    )
+    .map_err(Into::into)
+}
+
+/// 指す記録があるクライアントの id すべて（一覧で、消せるかを示すため）。
+pub fn referenced_ids(conn: &Connection) -> Result<Vec<Ulid>, StorageError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT agent_client_id FROM change_log WHERE agent_client_id IS NOT NULL \
+         UNION SELECT agent_client_id FROM item WHERE agent_client_id IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// 行を消す。行が無ければ `false`。指す記録があれば外部キーの制約で失敗する（呼び出し側が
+/// [`is_referenced`] で確かめてから呼ぶ）。
+pub fn delete(conn: &Connection, id: Ulid) -> Result<bool, StorageError> {
+    let n = execute(conn, "DELETE FROM agent_client WHERE id = ?1", [id])?;
+    Ok(n == 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
