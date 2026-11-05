@@ -38,8 +38,6 @@ test("about.toml の accepted は、license-policy.json の allowed と pending 
   // 07 3章・third-party-licenses.md 2章に書いた許可の一覧が、そのまま allowed に入っている
   expect(policy.allowed).toEqual(allowed);
   expect(policy.allowed.some((id) => policy.pending.includes(id))).toBe(false);
-  // 決定済み（YUN-96）：pending は、新しい未決のライセンスが出たときだけ使う。ふだんは空
-  expect(policy.pending).toEqual([]);
 });
 
 test("許可外の検出用の設定は、pending を accepted から除くだけで、ほかは変えない", () => {
@@ -47,6 +45,12 @@ test("許可外の検出用の設定は、pending を accepted から除くだ�
   const policy = JSON.parse(readFileSync("scripts/release/license-policy.json", "utf8")) as Policy;
   const strict = strictAboutToml(toml, policy.allowed);
   expect(readAccepted(strict)).toEqual(policy.allowed);
+  // pending が入っている場合（ふだんは空なので、作って確かめる）：pending だけが accepted から除かれ、ほかは変わらない
+  const withPending = toml.replace(/"Unicode-3\.0",\n/, '"Unicode-3.0",\n    "X-Pending-1.0",\n');
+  expect(readAccepted(withPending)).toContain("X-Pending-1.0");
+  const strictWithPending = strictAboutToml(withPending, policy.allowed);
+  expect(readAccepted(strictWithPending)).toEqual(policy.allowed);
+  expect(strictWithPending).toContain("ignore-build-dependencies = true");
   // accepted の書き方（1 行・行末のコメント・CRLF）に左右されない
   expect(readAccepted(strictAboutToml('accepted = ["MIT", "GPL-3.0-only"] # x\r\n', policy.allowed))).toEqual(policy.allowed);
   expect(strict).toContain("ignore-build-dependencies = true");

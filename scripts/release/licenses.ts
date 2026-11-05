@@ -6,6 +6,7 @@
 //
 // リポジトリ直下で動かす。cargo-about（Rust の依存）と pnpm（JavaScript の依存）が要る。
 // 許可するライセンスの一覧は license-policy.json。about.toml の accepted は、allowed と pending を合わせたもの。
+// pending は、一覧に無いライセンスが出たとき、オーナーが決めるまでの一時の置き場で、ふだんは空。
 import { escapeData } from "./audit.ts";
 import { exec } from "./exec.ts";
 import { readStringArray, replaceStringArray } from "./toml.ts";
