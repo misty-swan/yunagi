@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- アプリアイコン（夕凪版）。Windows・Linux 用の全面版。src/shell/Logo.svelte の絵を 1024px に拡大したもの。 -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2B2542" />
+      <stop offset="0.34" stop-color="#4A3550" />
+      <stop offset="0.54" stop-color="#D88A5E" />
+      <stop offset="0.58" stop-color="#EFA567" />
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A2236" />
+      <stop offset="1" stop-color="#0F1526" />
+    </linearGradient>
+    <clipPath id="round"><rect width="1024" height="1024" rx="256" /></clipPath>
+    <clipPath id="above"><rect width="1024" height="594" /></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect width="1024" height="594" fill="url(#sky)" />
+    <rect y="594" width="1024" height="430" fill="url(#sea)" />
+    <circle cx="512" cy="657" r="184" fill="#F6B57A" clip-path="url(#above)" />
+    <rect x="154" y="594" width="716" height="43" fill="rgba(255,236,220,0.85)" />
+  </g>
+</svg>

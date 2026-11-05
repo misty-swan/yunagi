@@ -30,6 +30,23 @@
 
 各配布物に対応する `.sha256` と、Tauri Updater 用の署名ファイル（`.sig`）を同時に公開する。あわせて、全配布物のハッシュをまとめた `SHA256SUMS` と、その minisign 署名 `SHA256SUMS.sig` を公開する。`SHA256SUMS.sig` の署名には、Updater 鍵とは別の配布用鍵を使う。配布用の公開鍵は公式サイトと公開リポジトリの両方に掲載し、検証手順を導入ガイドに載せる。更新情報 `latest.json` は `https://<公式サイト>/latest.json` に置き、取り下げ時にすぐ差し替えられるようにする。
 
+### アプリアイコン
+
+アプリアイコンの絵は、デザインガイド 8章の「夕凪版」。画面の左上のロゴ（`src/shell/Logo.svelte`）の絵を 1024px に拡大したもので、色・水平線の位置（58%）・半分沈んだ太陽・海面の光の道・角丸（一辺の 25%）はロゴと同じにする（2026-11-05 決定。YUN-33）。Design キャンバスの元の図は取り出せないため、ロゴの図形を元に組み直した。
+
+- **元画像（正本）**：`src-tauri/icons/source/` に置く。
+  - `app-icon.svg`：1024×1024 の全面版。Windows・Linux 用。
+  - `app-icon-macos.svg`：同じ絵を、四方に透明の余白（約 10%。一辺 824px の角丸を中央に置く）を残して縮めた版。macOS 用。macOS の Dock・Finder は角丸の下地を自分では付けず、アイコンの絵のとおりに出すため、余白が無いと他のアプリより大きく見える。
+  - `app-icon.png`・`app-icon-macos.png`：上の SVG を 1024px の PNG にしたもの（`pnpm tauri icon` の入力）。
+- **生成物**：`src-tauri/icons/` の `icon.ico`（Windows。16・24・32・48・64・256px）、`icon.icns`（macOS）、`icon.png`（512px）、`32x32.png`、`128x128.png`、`128x128@2x.png`。`tauri.conf.json` の `bundle.icon` が指すのはこの 5 つ。
+- **作り直す手順**（SVG を直したとき。リポジトリ直下で）：
+  1. `rsvg-convert -w 1024 -h 1024 src-tauri/icons/source/app-icon.svg -o src-tauri/icons/source/app-icon.png`（`app-icon-macos` も同様）。
+  2. `pnpm tauri icon src-tauri/icons/source/app-icon.png -o <一時フォルダ>/win`、`pnpm tauri icon src-tauri/icons/source/app-icon-macos.png -o <一時フォルダ>/mac`。Tauri 公式の生成で、各サイズの PNG・ico・icns が出る。
+  3. `<一時フォルダ>/win` の `icon.ico`・`icon.png`・`32x32.png`・`128x128.png`・`128x128@2x.png` と、`<一時フォルダ>/mac` の `icon.icns` を、`src-tauri/icons/` にコピーする。`tauri.conf.json` が使わない Android・iOS・Windows ストア用のファイルは置かない。
+  - `src-tauri/icons/` に `source/` を置いても、配布物には入らない（`bundle.icon` が列挙したファイルだけが入る）。
+- 絵の確認：16〜32px では、太陽は空の橙と色が近く見分けにくいが、空と海の明暗の境目と水平線の横線で夕凪の絵と分かる。ロゴ（24px）と同じ見え方なので、このままとする。
+- Linux の AppImage・デスクトップエントリには、いまのところアイコンを付けない（4.1 の決まりのまま）。実機での見た目は 08 4.10 で確かめる。
+
 ## 3. ビルド（CI）
 
 GitHub Actions で OS ごとのマトリクスビルドを行う。
