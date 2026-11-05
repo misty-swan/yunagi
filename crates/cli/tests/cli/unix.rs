@@ -44,7 +44,13 @@ struct World {
 
 impl World {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        // macOS の既定の一時フォルダ（/var/folders/…）は長く、ソケットのパスが上限（103 文字）を超えるので、
+        // 短い /tmp の下に作る（/tmp は macOS では /private/tmp への別名なので、実際の場所に直す）
+        let base = std::fs::canonicalize("/tmp").unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("yg")
+            .tempdir_in(base)
+            .unwrap();
         let w = Self { root };
         w.use_data_home("xdg");
         w
