@@ -1,0 +1,209 @@
+# 配布用 CI：タグ `v<ver>` の push で、依存の検査と OS ごとのマトリクスビルドを行う
+# （docs/release/07-build-and-distribution.md 3章）。開発用 CI（ci.yml）とは別のもの。
+#
+# この PR で作る範囲（YUN-97）：検査（既知の脆弱性・許可外ライセンス・フォント）、THIRD_PARTY_LICENSES.md の生成、
+# 6 組（OS × アーキテクチャ）のビルド、配布物の名前の付け替え、`.sha256`。できたファイルは Actions の
+# 成果物（artifact）として残すだけで、Release には置かない。
+# 後続（YUN-101）：アドホック署名・Updater の署名 `.sig` と `latest.json`・`SHA256SUMS` と minisign 署名・
+# GitHub Release の作成と添付・Homebrew tap への PR。署名鍵（YUN-100）が要るので、ここには置かない。
+#
+# 試運転：このファイルや、ビルドの設定・スクリプトを変える PR では、タグなしで同じ流れを走らせる
+# （`pull_request`）。タグの push と違い、arm の Linux のビルド（公開リポジトリでないと使えないランナー）を除く。
+# どちらの場合も、Release の作成・公開、署名鍵の使用はしない。
+#
+# `uses:` の action は、コミットの SHA で固定し、行末に版を書く（07 3章「action の固定」。更新は Dependabot）。
+# 配布物を作るので、キャッシュ（rust-cache・pnpm のキャッシュ）は使わない（キャッシュに混ぜ込まれた物が
+# 配布物に入らないようにする）。
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - src-tauri/release/**
+      - scripts/release/**
+      - about.toml
+      - .cargo/audit.toml
+      - pnpm-workspace.yaml
+      - Cargo.lock
+      - pnpm-lock.yaml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: 検査（脆弱性・ライセンス・フォント）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      # 依存はロックファイルのとおりに入れる（lock が合わなければ失敗する）
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # タグ v<ver> が Cargo.toml の版と同じことを確かめる（タグの push のときだけ）。
+      # 試運転（PR）では、Cargo.toml の版で名前を付けるだけ
+      - name: Check tag and version
+        id: version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "version=$(node scripts/release/version.ts "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(node scripts/release/version.ts)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build matrix
+        id: matrix
+        run: echo "matrix=$(node scripts/release/matrix.ts "$GITHUB_EVENT_NAME")" >> "$GITHUB_OUTPUT"
+
+      # 許可リストの期限と、検査の道具の設定との一致
+      - name: Allowlist (expiry and sync)
+        run: node scripts/release/check-allowlist.ts
+
+      # 脆弱性の指摘と、検査できなかったことは、終了コードとメッセージで分かれる（1 = 指摘、2 = 検査できなかった。
+      # 後者は、つなぎ直してから再実行する）。--ignore-registry-errors は使わない
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Vulnerabilities (Rust, cargo audit)
+        run: node scripts/release/audit.ts rust
+
+      - name: Vulnerabilities (JavaScript, pnpm audit)
+        run: node scripts/release/audit.ts js
+
+      # フォントのファイルの SHA-256 とライセンス文書（デザインガイド 4章）。知らないファイルの混入は licenses.ts が見る
+      - name: Fonts (SHA-256 and license documents)
+        run: pnpm exec vitest run src/styles/fonts.test.ts
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --version 0.9.2 --locked --features cli
+
+      # 許可外ライセンスの検出。許可するか決まっていないライセンス（scripts/release/license-policy.json の pending。
+      # YUN-96）があるうちは、タグの push では落ちる。試運転（PR）では結果を見せるだけで、落とさない。
+      # YUN-96 が決まって pending が空になったら、continue-on-error を外す
+      - name: Licenses (disallowed)
+        continue-on-error: ${{ github.event_name != 'push' }}
+        run: node scripts/release/licenses.ts check
+
+      - name: Generate THIRD_PARTY_LICENSES.md
+        run: node scripts/release/licenses.ts generate THIRD_PARTY_LICENSES.md
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: third-party-licenses
+          path: THIRD_PARTY_LICENSES.md
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    name: ビルド (${{ matrix.name }})
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.verify.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Tauri（yunagi-app）のコンパイルに要る Linux のライブラリ
+      - name: Install Tauri system dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # 版と clippy・rustfmt は rust-toolchain.toml から読む。交差ビルド（別の arch への）の target を足す
+      - name: Install Rust
+        run: |
+          rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: third-party-licenses
+          path: src-tauri
+
+      # CLI（yunagi）を先に作る。macOS は .app の中、Windows は bin\ に入れ（src-tauri/release/）、
+      # Linux は CLI だけの配布物にする
+      - name: Build CLI
+        run: cargo build --release --locked -p yunagi-cli --target "${{ matrix.target }}"
+
+      - name: Stage CLI
+        if: matrix.os != 'linux'
+        run: |
+          mkdir -p src-tauri/cli-bin
+          if [ "${{ matrix.os }}" = windows ]; then
+            cp "target/${{ matrix.target }}/release/yunagi.exe" src-tauri/cli-bin/yunagi.exe
+          else
+            cp "target/${{ matrix.target }}/release/yunagi" src-tauri/cli-bin/yunagi
+          fi
+
+      # AppImage の作成（linuxdeploy）は、FUSE が無いランナーでも動くよう、展開して実行させる
+      - name: Build app
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -- --ci --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" --config src-tauri/release/common.json
+          if [ "${{ matrix.os }}" != linux ]; then
+            set -- "$@" --config "src-tauri/release/${{ matrix.os }}.json"
+          fi
+          pnpm tauri build "$@"
+
+      # Tauri の名前（amd64・aarch64・x64 など）を、配布物の名前（x86_64・arm64。07 2章）に付け替え、.sha256 を添える
+      - name: Package
+        run: node scripts/release/package.ts "${{ matrix.os }}" "${{ matrix.arch }}" "${{ matrix.target }}" "${{ needs.verify.outputs.version }}" dist-release
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist-release/*
+          if-no-files-found: error
+          retention-days: 14

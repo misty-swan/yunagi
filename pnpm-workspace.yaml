@@ -1,0 +1,7 @@
+# pnpm audit が読む許可リスト（docs/release/07-build-and-distribution.md 3章「許可リスト」）。
+# 理由と見直す期限の正本は scripts/release/audit-allowlist.json で、ここの ID と同じ集まりに保つ
+# （`pnpm check:allowlist` が確かめる）。`pnpm audit --ignore` は、このファイルに ID を書き足してしまうので、
+# CI でも手元でも使わない。
+auditConfig:
+  ignoreGhsas:
+    - GHSA-gcqx-w48m-w2h4

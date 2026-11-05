@@ -9,7 +9,9 @@
     "checkJs": true,
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
   },
-  "include": ["vite.config.ts", "svelte.config.js", "install/**/*.ts"]
+  "include": ["vite.config.ts", "svelte.config.js", "install/**/*.ts", "scripts/**/*.ts"]
 }

@@ -1,0 +1,5 @@
+{
+  "$comment": "許可するライセンスの一覧（docs/legal/third-party-licenses.md 2章、docs/release/07-build-and-distribution.md 3章）。allowed は決まったもの。pending は、許可するか決まっていないもの（Linear の YUN-96 が決める）で、配布用 CI の許可外ライセンスの検査は落とし、THIRD_PARTY_LICENSES.md の生成では受け入れる（決まるまでも一覧は作れるように）。YUN-96 で許可が決まったら allowed に移し、許可しないと決まったら依存を外して pending から消す。about.toml の accepted は allowed と pending を合わせたものと同じに保つ（scripts/release/licenses.test.ts が確かめる）。",
+  "allowed": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "MPL-2.0"],
+  "pending": ["BSL-1.0", "CDLA-Permissive-2.0", "Unicode-3.0"]
+}

@@ -20,7 +20,7 @@
 - CLI は GUI とは別のコンソール用バイナリ `yunagi`（Windows は `yunagi.exe`）として同梱する。
 - **配布物の名前と中身**（2026-11-05 決定。YUN-95。インストールスクリプトと配布用 CI（YUN-97）が食い違わないための取り決め）：
   - `<ver>` は `1.2.3` の形（`v` を付けない）。Release のタグは `v<ver>`。ファイルは `<配布元>/v<ver>/<ファイル名>` に置く（`<配布元>` は公開リポジトリの Release のダウンロード先。公開リポジトリが決まるまで仮の表記）。
-  - `<arch>` は `x86_64` か `arm64` の 2 つだけ。Tauri がビルドで付ける名前（`amd64`・`aarch64`・`x64` など）は、配布用 CI がこの名前に付け替えてから Release に置く。インストールスクリプトは `uname -m` の `aarch64` を `arm64` に読み替える。
+  - `<arch>` は `x86_64` か `arm64` の 2 つだけ。Tauri がビルドで付ける名前（`amd64`・`aarch64`・`x64` など）は、配布用 CI がこの名前に付け替えてから Release に置く（付け替えは 3.3 で作った。Release に置くのは YUN-101）。インストールスクリプトは `uname -m` の `aarch64` を `arm64` に読み替える。
   - 配布物ごとに `<ファイル名>.sha256` を添える。中身は `sha256sum` の出力と同じ `<64 桁の 16 進のハッシュ>  <ファイル名>` の 1 行。スクリプトは最初の欄だけを読む。
   - Linux の `yunagi-cli_<ver>_<arch>.tar.gz` は CLI だけの配布物で、中身はルートに置いた実行ファイル `yunagi` 1 つ（AppImage の中の CLI は外から取り出せないため、別に出す。`install.sh` が使う）。
   - macOS の `.app.tar.gz` は、ルートに `Yunagi.app` を持ち、CLI は `Yunagi.app/Contents/MacOS/yunagi` に置く。
@@ -52,21 +52,97 @@
 
 ## 3. ビルド（CI）
 
-GitHub Actions で OS ごとのマトリクスビルドを行う。
+GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフローは `.github/workflows/release.yml`（開発用 CI の `ci.yml` とは別）。作る範囲は 2 つの課題に分けている（2026-11-05 決定）：1〜3 と 6 の `.sha256` までを YUN-97（検査・ビルド・配布物の名前と中身。3.1〜3.3）、4・5 と 6 の `SHA256SUMS` 以降・7 を YUN-101（署名と公開。3.4。秘密鍵（YUN-100）と公開リポジトリ・公式サイトが決まってから動かせる）が作る。
 
-1. タグ `v<ver>` の push を契機に起動する。
+1. タグ `v<ver>` の push を契機に起動する。タグの `<ver>` は、直下の `Cargo.toml` の `[workspace.package]` の `version` と同じでなければ中止する（版は 1 か所にだけ書く。README.md）。
 2. 依存を固定したまま（lock ファイルを厳守）ビルドする。
 3. 依存の既知脆弱性の検査と、許可外ライセンスの検出（third-party-licenses.md 2章）を行い、問題があれば中止する。同梱するフォントのファイルの SHA-256 がデザインガイド 4章に書いた値と一致し、ライセンス文書（UDEV Gothic HS は `LICENSE`・`LICENSE_JetBrainsMono`・`LICENSE_BIZUDGothic`、Inter は `LICENSE.txt`）がそろっていることも確かめ、違えば中止する。脆弱性の検査は次のとおり。
-   - Rust：`cargo audit`（`Cargo.lock` を調べる）。脆弱性（vulnerability）の指摘が1件でもあれば中止する。メンテナンス終了・取り下げ（yanked）の警告は、ログに残すだけで中止しない。
-   - JavaScript：`pnpm audit`（`pnpm-lock.yaml` を調べる）。指摘が1件でもあれば中止する。`--prod` は付けず、`devDependencies`（vite・`@tauri-apps/cli` など）も調べる。これらはビルドを動かす CI でシークレット（Updater の署名鍵）の近くで動き、配布物を作るため。
-   - 修正版がまだ無い指摘は、リポジトリに置いた許可リスト（Rust は `.cargo/audit.toml` の `ignore`、JavaScript は `pnpm audit --ignore <GHSA の ID>` に渡す ID の一覧）に、理由と見直す期限を添えて載せたときだけ通す。許可リストの変更は PR で見る。
-   - いまの許可リスト（2026-11-05。YUN-83）：Rust は `.cargo/audit.toml` に、`tauri-plugin-updater` が固定している `zip` 4.6.1 の脆弱性 4 件（RUSTSEC-2026-0367・0368・0369・0429。修正は `zip` 9.0.0 以上。Windows の zip 形式の更新の展開だけが使う部品で、Yunagi は NSIS の `.exe` で配るので通らず、通る場合も署名の検証の後。プラグインが `zip` 9 以上に上がったら外す。見直す期限 2027-02-05）。JavaScript は `deepmerge`（GHSA-gcqx-w48m-w2h4。`@sveltejs/vite-plugin-svelte` の依存。修正版なし。開発時にだけ使い、配布物に入らない）を `pnpm audit --ignore` に渡す ID の一覧に載せる（置き場所は配布用 CI で決める。YUN-97）。
-   - 検査は、その時点の脆弱性データベースと照合するので、同じタグを再実行すると結果が変わることがある（2 の「依存を固定したままビルドする」は、依存の版を固定する意味で、検査結果の固定ではない）。データベースやレジストリに届かず検査できなかったときも中止し（`--ignore-registry-errors` は使わない）、脆弱性による中止と区別して、つなぎ直してから再実行する。
+   - Rust：`cargo audit`（`Cargo.lock` を調べる）。脆弱性（vulnerability）の指摘が1件でもあれば中止する。メンテナンス終了（unmaintained）・健全性の問題（unsound）・取り下げ（yanked）の警告は、ジョブのログに警告の注釈として残すだけで中止しない（下の「警告の扱い」）。
+   - JavaScript：`pnpm audit`（`pnpm-lock.yaml` を調べる）。指摘が1件でもあれば中止する。重大度のしきい値（`--audit-level`）は付けない（low も止める。`--audit-level` は表示する指摘の絞り込みで、付けるとリリースを止めるべき指摘を見落とすため）。`--prod` は付けず、`devDependencies`（vite・`@tauri-apps/cli` など）も調べる。これらはビルドを動かす CI でシークレット（Updater の署名鍵）の近くで動き、配布物を作るため。
+   - 修正版がまだ無い指摘は、リポジトリに置いた許可リストに、理由と見直す期限を添えて載せたときだけ通す。許可リストの変更は PR で見る。置き場所と書き方は下の「許可リスト」。
+   - 検査は、その時点の脆弱性データベースと照合するので、同じタグを再実行すると結果が変わることがある（2 の「依存を固定したままビルドする」は、依存の版を固定する意味で、検査結果の固定ではない）。データベースやレジストリに届かず検査できなかったときも中止し（`--ignore-registry-errors` は使わない）、脆弱性による中止と区別して、つなぎ直してから再実行する。区別は `scripts/release/audit.ts` が道具の出力（JSON）を読んで行い、終了コード 1 = 脆弱性の指摘、2 = 検査できなかった、とメッセージ（「脆弱性の指摘が n 件ある」「検査できなかった（脆弱性の指摘ではない）」）で分ける。結果が読めても道具の終了コードが 0 でなければ、「指摘なし」とは言わない。
    - `THIRD_PARTY_LICENSES.md` を、同梱するフォントのライセンスも含めて生成し（third-party-licenses.md 2章）、配布物に含める。
-4. macOS：ビルド後にアドホック署名を行う（`codesign --force --deep -s - Yunagi.app`）。Apple Silicon では署名がないと起動できないため必須。
-5. Updater 用の署名を、CI のシークレットに保管した秘密鍵で付与する。
-6. SHA-256 を計算し、`.sha256` と `SHA256SUMS` を Release に添付する。`SHA256SUMS` に配布用鍵で署名し、`SHA256SUMS.sig` を添付する。
-7. Homebrew tap のリポジトリに、新しいバージョンとハッシュを自動でプルリクエストする。
+4. macOS：ビルド後にアドホック署名を行う（`codesign --force --deep -s - Yunagi.app`）。Apple Silicon では署名がないと起動できないため必須。（YUN-101 で作る。3.4）
+5. Updater 用の署名を、CI のシークレットに保管した秘密鍵で付与する。（YUN-101 で作る。3.4）
+6. SHA-256 を計算し、`.sha256` と `SHA256SUMS` を Release に添付する。`SHA256SUMS` に配布用鍵で署名し、`SHA256SUMS.sig` を添付する。（`.sha256` を配布物ごとに作るところまでは YUN-97 で作った。3.3。`SHA256SUMS` とその署名・Release への添付は YUN-101 で作る。3.4）
+7. Homebrew tap のリポジトリに、新しいバージョンとハッシュを自動でプルリクエストする。（YUN-101 で作る。3.4）
+
+### 3.1 検査（許可リスト・ライセンス・フォント）
+
+2026-11-05 決定（YUN-97）。検査は `release.yml` の `verify` ジョブが順に行い、1 つでも失敗するとビルドの前に止まる。手順の名前（ジョブのログの見出し）で、どの検査で止まったかが分かる。
+
+**許可リスト**
+
+- **正本は `scripts/release/audit-allowlist.json`。** Rust（`rust`）と JavaScript（`javascript`）の欄に、指摘の ID（`RUSTSEC-…`・`GHSA-…`）、理由（`reason`。なぜ今は直せないか・なぜ影響しないか）、外す条件（`remove_when`）、見直す期限（`expires`。`YYYY-MM-DD`）を 1 件ずつ書く。
+- **検査の道具が読む設定にも同じ ID を書く。** Rust は `.cargo/audit.toml` の `ignore`、JavaScript は `pnpm-workspace.yaml` の `auditConfig.ignoreGhsas`（pnpm 12 が `pnpm audit` で読む）。JavaScript の許可に `pnpm audit --ignore <GHSA>` は使わない：付けると pnpm が `pnpm-workspace.yaml` に ID を書き足してしまい（2026-11-05 に確かめた）、理由と期限の無いまま許可が増えるため。2 か所の ID が正本と同じ集まりであることは、`pnpm check:allowlist` と `scripts/release/allowlist.test.ts` が確かめる（どちらかだけ書き換えると落ちる）。道具が読む設定を使うので、手元の `cargo audit`・`pnpm audit` も CI と同じ結果になる。
+- **期限は `pnpm check:allowlist`（`scripts/release/check-allowlist.ts`）が確かめる。** `cargo audit`・`pnpm audit` は期限を見ないため、別の手順で見る。`pnpm check` に入れてあるので、手元と開発用 CI で毎回、今日の日付（UTC）で確かめ、期限の翌日から全 PR が落ちる（配布用 CI の `verify` も最初に確かめる）。落ちたら、まだ修正版が無いなら理由を見直して期限を延ばし、修正版があれば依存を上げて許可リストから外す。期限の置きっぱなしを防ぐため、期限は今日から 190 日（約 6 か月）先までしか置けない。ID の形・理由と外す条件が空でないこと・ID の重複も同じ手順で確かめる。
+- **いまの許可リスト**（2026-11-05。YUN-83）：Rust は `tauri-plugin-updater` が固定している `zip` 4.6.1 の脆弱性 4 件（RUSTSEC-2026-0367・0368・0369・0429。修正は `zip` 9.0.0 以上。Windows の zip 形式の更新の展開だけが使う部品で、Yunagi は NSIS の `.exe` で配るので通らず、通る場合も署名の検証の後。プラグインが `zip` 9 以上に上がったら外す。見直す期限 2027-02-05）。JavaScript は `deepmerge`（GHSA-gcqx-w48m-w2h4。`@sveltejs/vite-plugin-svelte` の依存。修正版なし。開発時とビルド時にだけ使い、配布物に入らない。見直す期限 2027-02-05）。
+
+**警告の扱い**
+
+- `cargo audit` の警告（メンテナンス終了・健全性の問題 `unsound`・取り下げ `yanked`）は、中止せず、ジョブの注釈（警告）に出す。`unsound` も同じ扱いにする：いま出ている `glib` 0.18.5（RUSTSEC-2024-0429。Tauri の GTK 3 の連携が固定していて上げられない）のように、自分たちでは直せないものが多く、中止にすると許可リストが警告で埋まるため。代わりに、リリースのたびに 7 章の確認表で、警告の一覧に新しいもの（特に `unsound`）が増えていないかを人が見る。
+- 取り下げ（`yanked`）：14 日の待ちのために意図して一つ前の版へ下げた依存（`clipboard-win` 5.4.1 など。SECURITY.md 4.4）は、取り下げの警告が出る。新しい版が 14 日を経たら上げる。
+
+**許可外ライセンス**
+
+- 許可するライセンスは `scripts/release/license-policy.json` の `allowed`（third-party-licenses.md 2章の一覧：MIT・Apache-2.0・BSD-2-Clause・BSD-3-Clause・ISC・Zlib・MPL-2.0）。ライセンスの式（`MIT OR Apache-2.0` など）は、`OR` はどれか 1 つ、`AND` はすべてが許可に入っていれば通る。
+- Rust は `cargo-about`（`about.toml`）で調べる。配布する 6 組の target の依存だけを数え、ビルド時とテスト時にだけ使う依存（ビルドスクリプト・proc-macro・dev-dependencies）は実行ファイルに入らないので数えない。自分たちのクレートは数えない。JavaScript は `pnpm licenses list --prod`（配布物に入る `dependencies` だけ。脆弱性の検査と違い `devDependencies` は数えない：ライセンスは配布する物にだけ付くため）。同梱するフォントは、知らないフォルダ・ファイル（デザインガイド 4章に無いもの）と、足りないライセンス文書を `scripts/release/licenses.ts` が見つける。
+- **許可するか決まっていないライセンス**（`pending`。2026-11-05 時点で BSL-1.0・CDLA-Permissive-2.0・Unicode-3.0。Linear の YUN-96 が決める）：配布用 CI のこの検査は落とす。決まるまでタグの push は止まるが、リリースは鍵（YUN-100）と公開リポジトリが決まってからなので、実害はない。`THIRD_PARTY_LICENSES.md` の生成は、`about.toml` の `accepted` に `pending` も入れて受け入れ、決まるまでも一覧を作れるようにしている（`accepted` は `allowed` と `pending` を合わせたものと同じに保つ。試験が確かめる）。YUN-96 の決定で、許可するものは `allowed` へ移し、許可しないものは依存を外して `pending` から消す。`pending` が空になったら、`release.yml` の試運転用の `continue-on-error` を外す。
+- **フォントのファイルの SHA-256 とライセンス文書**は `src/styles/fonts.test.ts`（`pnpm check` に含まれ、デザインガイド 4章の値と照合する）を `verify` ジョブでも動かす。違えば中止する。
+- `THIRD_PARTY_LICENSES.md`：`node scripts/release/licenses.ts generate <出力先>`。フォント → JavaScript の依存 → Rust の依存の順に、同じライセンス文書ごとにまとめて載せる。`verify` ジョブが作って成果物にし、ビルドの各ジョブが `src-tauri/THIRD_PARTY_LICENSES.md` に置いて、`bundle.resources`（`src-tauri/release/common.json`）で配布物に入れる（Linux の AppImage の中は `usr/lib/Yunagi/THIRD_PARTY_LICENSES.md` に入ることを確かめた）。アプリの「設定 → このアプリについて」でこのファイルを表示する画面は、まだ無い（画面の課題で作る。third-party-licenses.md 2章）。
+
+**使う道具の版**：`cargo-audit` 0.22.2、`cargo-about` 0.9.2（最新の 0.9.3 は公開から 14 日たっていないので、14 日を経た中で最も新しい版にした。`cargo install --locked` で入れる）。上げるときは、公開から 14 日を経た版を採る（SECURITY.md 4.4）。
+
+### 3.2 ビルド（マトリクス）
+
+2026-11-05 決定（YUN-97）。`build` ジョブが、検査（`verify`）の成功の後に、次の 6 組を並べて動かす（`fail-fast: false`。1 組の失敗で他の組を止めない）。組み合わせは `scripts/release/matrix.ts` が作る。
+
+| 名前 | ランナー | target | `--bundles` |
+| --- | --- | --- | --- |
+| linux-x86_64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `appimage` |
+| linux-arm64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `appimage` |
+| macos-arm64 | `macos-15` | `aarch64-apple-darwin` | `app` |
+| macos-x86_64 | `macos-15`（交差ビルド） | `x86_64-apple-darwin` | `app` |
+| windows-x86_64 | `windows-2025` | `x86_64-pc-windows-msvc` | `nsis` |
+| windows-arm64 | `windows-2025`（交差ビルド） | `aarch64-pc-windows-msvc` | `nsis` |
+
+- 手順：①Rust・pnpm・Node.js を入れる（版は `rust-toolchain.toml`・`package.json`・`.node-version` から読む。開発用 CI と同じ）。②`pnpm install --frozen-lockfile`。③`yunagi`（CLI）を `cargo build --release --locked -p yunagi-cli --target <target>` で作る。④`pnpm tauri build --ci --target <target> --bundles <bundles> --config src-tauri/release/common.json`（macOS・Windows は OS ごとの設定 `src-tauri/release/<os>.json` を重ねる）。⑤`scripts/release/package.ts` が配布物の名前と中身をそろえ、`.sha256` を添える（3.3）。⑥成果物（artifact `dist-<名前>`。14 日残す）として保存する。
+- **配布用のビルドの設定は `tauri.conf.json` に入れず、`src-tauri/release/` の設定を `--config` で重ねる。** `tauri.conf.json` の `bundle.active` は `false` のままにする：`bundle.resources`・`bundle.macOS.files` の元のファイル（`THIRD_PARTY_LICENSES.md`・`cli-bin/yunagi`）は CI が置くもので、普段の `cargo test`・`pnpm tauri dev` にその有無を要求させないため。試験（`scripts/release/package.test.ts`）が、`tauri.conf.json` に配布用の設定が入らないことを確かめる。
+- **Linux の arm64 だけ、arm のランナーが要る**（webkit2gtk の交差ビルドは難しいため）。`ubuntu-24.04-arm` は公開リポジトリでないと使えない（2026-11-05 時点。リポジトリは非公開なので、公開リポジトリが決まるまで確かめられない）。macOS の x86_64 は arm のランナー上で交差ビルドし、Windows の arm64 は x64 のランナー上で交差ビルドする。交差ビルドの組が実際に通るかは、試運転（下）と実機で確かめる。
+- **試運転：** このファイルやビルドの設定・スクリプト・`about.toml`・ロックファイルを変える PR では、タグなしで同じ流れを走らせる（`release.yml` の `pull_request`）。公開リポジトリが決まるまで使えない `linux-arm64` を除く 5 組が動く。成果物は残るだけで、Release の作成・公開、署名鍵の使用は、タグの push でも試運転でもこの課題の範囲では行わない。試運転では許可外ライセンスの検査の失敗を落とさない（YUN-96 の決定待ち。3.1）。
+- **キャッシュは使わない。** 開発用 CI の `Swatinem/rust-cache` や pnpm のキャッシュは、配布物を作る流れに、過去の実行が置いた物が混ざる経路になるため。ビルドの時間は長くなる。
+- **Tauri が取得する道具は固定していない（既知の制限）。** Tauri のバンドラーは、Linux の AppImage の作成に `linuxdeploy`・AppRun・`linuxdeploy-plugin-appimage`（取得元の `continuous` は移動するリリース）、Windows の NSIS に NSIS 本体とプラグインを、ビルドの中でダウンロードする。action の SHA の固定（下の「action の固定」）の対象外で、Tauri の版を固定する以外の手段が今は無い。許容する理由：取得元は Tauri 公式の `binary-releases` と各プロジェクトの GitHub リリースで、ビルドの結果は 6 章の署名と `.sha256` で利用者が確かめる。署名鍵を持つ段階（YUN-101）では、取得物をハッシュで確かめる手順を足すかを決める（YUN-101 の完了の条件に書いた）。
+- **ビルドの入力：** AppImage の作成は、FUSE の無いランナーでも動くよう `APPIMAGE_EXTRACT_AND_RUN=1` を付ける。
+
+### 3.3 配布物の名前と中身
+
+2026-11-05 決定（YUN-97）。2章の取り決めを、`scripts/release/package.ts` が作る（試験は `scripts/release/package.test.ts`）。
+
+| OS | 配布物（出力先に置くもの） | 中身 |
+| --- | --- | --- |
+| macOS | `Yunagi_<ver>_<arch>.app.tar.gz` | ルートに `Yunagi.app`。CLI は `Yunagi.app/Contents/MacOS/yunagi`（`src-tauri/release/macos.json` の `bundle.macOS.files`）。`yunagi` が無ければ失敗する |
+| Linux | `Yunagi_<ver>_<arch>.AppImage` | Tauri が作った AppImage の名前の付け替え |
+| Linux | `yunagi-cli_<ver>_<arch>.tar.gz` | ルートの実行ファイル `yunagi` 1 つ |
+| Windows | `Yunagi_<ver>_<arch>-setup.exe` | NSIS。`bin\yunagi.exe`（`src-tauri/release/windows.json` の `bundle.resources`）と、アプリ本体の `Yunagi.exe`（同 `mainBinaryName`）を含む |
+
+- 配布物ごとに `<ファイル名>.sha256`（`<64 桁の 16 進>  <ファイル名>` の 1 行。2章）を作る。
+- Tauri がビルドで付ける名前（Linux の `amd64`・`aarch64`、Windows の `x64`・`arm64` など）は、出力から配布物を探して `<arch>` を `x86_64`・`arm64` に付け替える（出力先に該当のファイルがちょうど 1 つでなければ失敗する）。
+- macOS の本体の実行ファイルは `Contents/MacOS/yunagi-app`（Tauri の既定）のままにする：`mainBinaryName` を `Yunagi` にすると、`Contents/MacOS/Yunagi` と CLI の `Contents/MacOS/yunagi` が、大文字小文字を区別しない既定のファイルシステムで同じ名前になってしまうため。Windows はディレクトリが違う（本体はインストール先、CLI は `bin\`）ので `Yunagi.exe` にできる。`yunagi show` の探し方（`crates/cli/src/show.rs`）はどちらにも合っている。
+- macOS の `.app.tar.gz` は、いまは `tar` で自分たちが作る。Updater 用の署名 `.sig` を付ける段階（YUN-101）で、Tauri の `createUpdaterArtifacts` が作るものに置き換えるか、`tauri signer sign` でこの tar.gz に署名するかを決める。アドホック署名（3 の 4）は、`.app.tar.gz` を作る前と、`.sig` を付ける前に済ませる（署名が変わると `.sig` が合わなくなるため）。
+- Linux の `.tar.gz`（アプリ全体）と `.deb`（2章で任意）は、置き場所（4.1 の末尾）を決めていないので、まだ作らない。決めるときに足す。
+- `bundle.createUpdaterArtifacts` はまだ有効にしない：署名の秘密鍵が無いとビルドが失敗するため（5.2 の②は、鍵ができてから。YUN-100・YUN-101）。
+- 実機・実際のリリースでしか確かめられない点（NSIS の中身に `bin\yunagi.exe` と `Yunagi.exe` があること、各 OS の配布物の起動、交差ビルドの組、arm の Linux のビルド）は、08 の 4.9 に足した。
+
+### 3.4 署名と公開（YUN-101 で作る）
+
+3 の 4・5・6（`SHA256SUMS` 以降）・7 は、秘密鍵（YUN-100）と、公開リポジトリ・公式サイトが決まってから動かせるので、子課題 YUN-101 が作る。YUN-97 では作らず、動かしてもいない。作るもの：
+
+- macOS のアドホック署名（3 の 4）。
+- Updater 用の署名 `.sig`（`bundle.createUpdaterArtifacts`。5.1 の「署名に版を入れる」）と、`latest.json`（5.1。トップレベルの `version` を入れ子の項目（`platforms` など）より前に置く：4.1 の 2）。
+- 全配布物の `SHA256SUMS` と、配布用鍵での `SHA256SUMS.sig`（2章・6.2）。
+- GitHub Release の作成と、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig`・`THIRD_PARTY_LICENSES.md` の添付。
+- Homebrew tap への自動 PR（3 の 7。4.3）。
+- 「署名鍵を持つジョブの権限」：鍵を使うジョブだけに `contents: write` と鍵のシークレットを渡し、検査・ビルドのジョブには渡さない（このファイルの `permissions` は `contents: read`）。
 
 ### action の固定
 
@@ -202,7 +278,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - `pubkey`：更新署名鍵（6.1）の公開鍵（`tauri signer generate` が作る `.pub` の中身）。公開鍵は秘密ではないので、リポジトリに置く。
 - `endpoints`：`["https://<公式サイト>/latest.json"]`。`https` 以外はプラグインが断る。
 
-手順（鍵と配布元が決まったときに、オーナーが行う。Linear の YUN-100 が追う。②の `.sig` と `latest.json` を作るのは配布用 CI（YUN-97）で、完了の条件に書いてある）：①`tauri signer generate` で鍵を作り、秘密鍵とパスフレーズを CI のシークレットとオフラインのバックアップに置く（6.1）。②`tauri.conf.json` に `bundle.createUpdaterArtifacts` を有効にする（配布用 CI で署名ファイル `.sig` を作る）。③`plugins.updater.pubkey` と `endpoints` に値を入れる。④配布用 CI が、署名と `latest.json` を公開する。窓の無い試験は、配る設定ファイルの `plugins.updater` がプラグインに読めること（`https` のみ・署名に版を入れる設定・Windows の入れ替え方）を確かめるので、③で形を誤ると `pnpm check` が止める。
+手順（鍵と配布元が決まったときに、オーナーが行う。Linear の YUN-100 が追う。②の `.sig` と `latest.json` を作るのは配布用 CI の署名と公開（YUN-101。3.4）で、完了の条件に書いてある）：①`tauri signer generate` で鍵を作り、秘密鍵とパスフレーズを CI のシークレットとオフラインのバックアップに置く（6.1）。②配布用のビルドの設定（`src-tauri/release/common.json`。3.2）に `bundle.createUpdaterArtifacts` を有効にする（配布用 CI で署名ファイル `.sig` を作る。`tauri.conf.json` には入れない：入れると、鍵の無い手元のビルドが失敗する）。③`plugins.updater.pubkey` と `endpoints` に値を入れる。④配布用 CI が、署名と `latest.json` を公開する。窓の無い試験は、配る設定ファイルの `plugins.updater` がプラグインに読めること（`https` のみ・署名に版を入れる設定・Windows の入れ替え方）を確かめるので、③で形を誤ると `pnpm check` が止める。
 
 プラグインの設定が誤っていて初期化できないときは、アプリは起動を続け、更新の確認だけが使えなくなる（ログに理由を出す）。
 
@@ -224,12 +300,12 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 ## 7. リリース手順チェックリスト
 
 - [ ] CHANGELOG.md を更新した
-- [ ] バージョン番号を `Cargo.toml`・`tauri.conf.json`・`package.json` で揃えた
+- [ ] バージョン番号を直下の `Cargo.toml` の `[workspace.package]` の `version` で上げた（版を書くのはここ 1 か所。`tauri.conf.json`・`package.json` は版を持たない。README.md）。タグは `v<この版>` にする（違えば配布用 CI が中止する。3 の 1）
 - [ ] テスト計画書のリリース前テストを完了した
-- [ ] `THIRD_PARTY_LICENSES.md` を生成し、許可外ライセンスと既知脆弱性が無いことを確認した
+- [ ] 配布用 CI の検査ジョブ（`verify`）が成功した：許可外ライセンスと既知脆弱性が無く、許可リストの期限内で、`THIRD_PARTY_LICENSES.md` が生成された（3.1）。検査が「検査できなかった」で止まったときは、つなぎ直して再実行する。あわせて、許可リスト（`scripts/release/audit-allowlist.json`）の全件の理由がまだ成り立つことと、`cargo audit` の警告の一覧に新しいもの（特に `unsound`）が増えていないことを目で見た（3.1「警告の扱い」）
 - [ ] 型チェックの道具（svelte-check）の新しい版が TypeScript 7 系に正式に対応したかを、アーキテクチャ設計書 3.2 の目安で確かめた（対応していれば移行を判断する）
 - [ ] タグを作成して push した
-- [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている
+- [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている（`.sig` 以降は YUN-101 が作る。3.4。YUN-97 の範囲では、全 6 組のビルドが成功し、配布物と `.sha256` が成果物に揃っているまで）
 - [ ] `https://<公式サイト>/latest.json` を新しい版に更新した
 - [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
 - [ ] Homebrew tap の更新がマージされ、Cask で導入したアプリが起動することを確認した

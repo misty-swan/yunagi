@@ -10,3 +10,8 @@ node_modules/
 dist/
 target/
 src-tauri/gen/
+
+# 配布用のビルド（.github/workflows/release.yml）が作るもの
+src-tauri/THIRD_PARTY_LICENSES.md
+src-tauri/cli-bin/
+dist-release/
