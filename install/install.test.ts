@@ -429,7 +429,8 @@ describe("install.sh：Wayland の案内（Linux だけ）", () => {
 const pwsh = spawnSync("pwsh", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], { encoding: "utf8" });
 const hasPwsh = pwsh.status === 0;
 
-describe.skipIf(!hasPwsh)("install.ps1（pwsh がある環境だけ）", () => {
+// pwsh は1回の起動が重く（負荷のかかった CI では数秒）、1つの試験で何度も起動するので、制限を長くする。
+describe.skipIf(!hasPwsh)("install.ps1（pwsh がある環境だけ）", { timeout: 60_000 }, () => {
   function ps(script: string) {
     const r = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",

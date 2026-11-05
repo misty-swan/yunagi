@@ -147,3 +147,14 @@ git log -1 --format=%s | yunagi reflection append -
 yunagi uninstall          # アプリと CLI を削除（データは残ります）
 yunagi uninstall --purge  # データも削除
 ```
+
+`--purge` で消えるのは、次のものです。
+
+- ノートのデータ（既定の保存先のフォルダ。設定で保存先を変えているときは、その保存先の `yunagi.db` とバックアップ）
+- 画面の表示のために Yunagi が作ったキャッシュなど（OS ごとの場所は、`io.github.misty-swan.yunagi` という名前のフォルダやファイル。Linux・Windows は 1 つのフォルダ、macOS は `~/Library` の下の数か所）
+
+保存先のフォルダそのものは、ほかのファイルがあるかもしれないので消しません。Yunagi が動いているときは、何も消さずに止まります。先に Yunagi を終了してください。
+
+この PC への入れ方が分からないとき（手で置いた、開発用のビルド、tar.gz など）は、見つけた場所を示して何も消さずに止まります。設定ファイル（`config.json`）が壊れているときも、保存先が分からないので、何も消さずに止まります。
+
+Homebrew で入れたときは、`yunagi uninstall` は何も消さず、Homebrew のコマンドを案内します。アプリだけ消すときは `brew uninstall --cask yunagi`、データも消すときは `brew uninstall --cask --zap yunagi` です。設定で保存先を変えている場合、`--zap` では変えた先のデータは消えないので、手で消してください。
