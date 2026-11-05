@@ -116,7 +116,7 @@ Yunagi は、AIコーディングエージェント（Claude Code、Codex など
 | `yunagi agent permissions [CLIENT] [--allow S]... [--deny S]...` | エージェントごとの権限を見る。`--allow`・`--deny` があれば変える（A-08）。変える場合は、変更内容を表示し、対話端末（TTY）での確認を得てから書く。端末でなければ何も書かず `permission_denied`（終了コード 3）。動きは 7.1 |
 | `yunagi agent history [--client NAME] [--unseen] [--limit N] [--before ID]` | エージェントの変更の一覧を、新しい順に出す（A-08）。確認は要らない。動きは 7.2 |
 | `yunagi agent revert CHANGE_ID [--force]` | エージェントの変更を 1 件取り消す（A-08）。取り消す内容を表示し、対話端末（TTY）での確認を得てから書く。端末でなければ何も書かず `permission_denied`（終了コード 3）。動きは 7.3 |
-| `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータも削除 |
+| `yunagi uninstall [--purge]` | アプリと CLI を削除する。`--purge` でデータと WebView のデータも削除する（消すものはビルド・配布手順書 4.4、アーキテクチャ設計書 6.5。まだ実装は無い。YUN-99） |
 | `yunagi --version` | 版を表示する |
 
 ### 3.2 項目への書き込みの判定の順と、何も変えない成功（2026-11-03 決定）

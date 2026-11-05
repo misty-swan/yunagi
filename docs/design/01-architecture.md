@@ -420,7 +420,7 @@ CLI・MCP は、データベースを新しく作らない（6.3）ので、ず�
 - macOS の識別子に使える文字は英数字・ハイフン・ピリオドだけで、下線（`_`）は使えない。このため、アカウント名のハイフンはそのまま使う。Linux の慣習（D-Bus の名前、Flathub）はハイフンを勧めないが、使えないわけではない。Flathub での配布は予定していない（配布物はビルド・配布手順書 2章のとおり）。
 - 上のデータディレクトリは識別子ではなく、アプリ名 `Yunagi`（Linux は `yunagi`）で決める。Tauri の保存場所を返す関数（`app_data_dir` など）は識別子でフォルダ名を作るため、データディレクトリを求めるのには使わない。コアの同じ関数を、アプリと CLI の両方が使う。
 - Linux では、識別子が画面の窓の名前（Wayland の app_id）になる。install.sh が作るデスクトップエントリのファイル名は、識別子にそろえる（ビルド・配布手順書 4.1）。
-- 識別子は、WebView が自分のデータを置くフォルダの名前にも使われる（Windows の `%LOCALAPPDATA%` の下、macOS の `~/Library/WebKit/` の下など）。このフォルダは上のデータディレクトリとは別の場所にできる。
+- 識別子は、WebView が自分のデータを置くフォルダの名前にも使われる（Linux・Windows は `data_local_dir` の下、macOS は `~/Library/WebKit/` などの下）。このフォルダは上のデータディレクトリとは別の場所にある。OS ごとの場所と、`yunagi uninstall --purge` で消す決まりは 6.5。
 
 ### 6.2 自動バックアップと復元（2026-11-03 決定）
 
@@ -507,6 +507,31 @@ CLI・MCP は、データベースを新しく作らない（6.3）ので、ず�
 - 解消メモ：解消した障害に解消メモ（前後の空白を除いて空でないもの）があれば、次の行に字下げして `  - Resolution: 解消メモ` と書く。未解消に戻した障害に残っている解消メモは出さない（画面にも出ないため。画面設計書 3章）。
 - 振り返り・ノート：振り返り・ノートの順に、本文をそのまま書く。先頭の空白だけの行と、末尾の空白・改行を除き、改行（CRLF・CR）を LF にそろえることだけを行う。ノートの時刻付き見出し `## 10:00 定例` などの見出しの段も変えないので、`## Notes` と同じ段に並ぶ（見出しの段を下げると、利用者が書いた本文と、ノートの会議区切りの形（データモデル設計書 3章 note）がファイルの上で変わり、`## 10:00` で探したり、ほかの端末で同じ本文として読んだりできなくなるため）。
 
+### 6.5 WebView のデータの置き場所と、`uninstall --purge` で消すもの（2026-11-05 決定。YUN-44）
+
+WebView（画面を描く部品）は、キャッシュや保存領域（Cookie・`localStorage` など）を、データディレクトリ（6章）とは別の場所に作る。`yunagi uninstall --purge`（ビルド・配布手順書 4.4）が「データも削除する」約束を守るには、これも消す必要がある。アプリは画面の側に業務データを置かない（業務データは 4.3 のとおりコアが持つ）ので、画面の側は `localStorage` などを使っていない（2026-11-05 に `src/` を調べた）ので、残るのは WebView が自分で作るキャッシュや Cookie の類である。業務データではないが、アプリを使った跡なので、`--purge` では消す。
+
+**置き場所**（`<id>` は識別子 `io.github.misty-swan.yunagi`。6.1）：
+
+| OS | 場所 | 確かめた範囲 |
+| --- | --- | --- |
+| Linux | `$XDG_DATA_HOME/<id>/`（未設定・空・相対パスのとき `~/.local/share/<id>/`）。キャッシュ（`WebKitCache/`・`CacheStorage/`）も同じフォルダの中 | ソースと実機。Tauri は Linux・Windows で、WebView のデータの場所が未指定なら `app_local_data_dir`（`dirs::data_local_dir()/<id>`）を渡す（`tauri` 2.12.5 の `src/manager/webview.rs`、`src/path/desktop.rs`）。wry の WebKitGTK 版は、それを `base_data_directory` と `base_cache_directory` の両方に使う（`wry` 0.57.1 の `src/webkitgtk/web_context.rs`）。開発機（Linux）で動かしたアプリが、`~/.local/share/<id>/` に `WebKitCache/`・`CacheStorage/`・`storage/`・`mediakeys/`・`hsts-storage.sqlite` を作り、`~/.cache/` には何も作っていないことを見た |
+| Windows | `%LOCALAPPDATA%\<id>\`（その下の `EBWebView\` に WebView2 が実際のデータを置く） | ソースまで。Linux と同じ Tauri の処理で場所が決まり、wry が WebView2 の「ユーザーデータフォルダ」にそのまま渡す（`wry` の `src/webview2/mod.rs` の `create_environment`）。`EBWebView` という名前は WebView2 の決まりで、ソースでは確かめていない。Windows の実機では未確認（08 4.9） |
+| macOS | 下の「消すもの」の 5 か所のうち、実際にあるもの | ソースまで。Tauri は macOS では場所を渡さず（上の処理は Linux・Windows だけ）、wry は `WKWebsiteDataStore.defaultDataStore` を使う（`wry` の `src/wkwebview/mod.rs`）。実際の場所は WebKit と OS が決めるため、Mac の実機で確かめるまで未確認（08 4.9） |
+
+macOS で想定する場所（サンドボックスに入れない通常のアプリのとき。どれも識別子の名前）：`~/Library/WebKit/<id>/`（保存領域）、`~/Library/Caches/<id>/`（キャッシュ）、`~/Library/HTTPStorages/<id>/`（Cookie など）、`~/Library/Preferences/<id>.plist`（アプリの設定）、`~/Library/Saved Application State/<id>.savedState/`（窓の状態の記憶）。Application Support の下には識別子のフォルダを作らない（データは `~/Library/Application Support/Yunagi/`。6章）。
+
+**`--purge` の決まり**：
+
+- 消すのは、データ（既定ディレクトリの全体と、設定で保存先を変えているときはその保存先の `yunagi.db`・`yunagi.db-wal`・`yunagi.db-shm`・`yunagi.db-journal`・`backups/`。保存先のフォルダ自体は、利用者のほかのファイルがあるかもしれないので消さない）と、上の表の WebView の場所である。macOS は 5 か所を 1 つずつ見て、あるものだけを消す（無いものは飛ばし、エラーにしない。どれが実際にできるかは Mac の実機で確かめるまで分からないため）。
+- 消す場所は上に書いた完全なパスだけである（識別子の一部で探したり、`~/Library/WebKit/` のような親のフォルダを消したりしない）。シンボリックリンクは、リンクだけを消して先には触れない。
+- 場所は環境変数から求める（Linux は `XDG_DATA_HOME`・`HOME`、Windows は `LOCALAPPDATA`、macOS は `HOME`。6章の既定ディレクトリと同じ決まり。試験は一時フォルダの値に差し替えて行える）。求められないときは、その場所を飛ばさずエラーにする。
+- アプリが動いている間は、`yunagi.lock`（4章）が取れないので、何も消さずに止まり、アプリを終了するよう知らせる（WebView がファイルを使っている間に消すと、一部だけ消えて残るため）。
+- 消せなかったものがあっても、ほかは消し続け、最後に消したものと消せなかったものを一覧にして、終了コードを 0 以外にする。
+- 保存先を変えたまま Homebrew の Cask の `zap` で消すときは、Cask が `config.json` を読めないので、変えた先は消えない（ビルド・配布手順書 4.3）。利用者ガイドの「アンインストール」に書く。
+
+`yunagi uninstall` の実装はまだ無い（Linear の YUN-99 が作る。完了の条件でこの章とビルド・配布手順書 4.4 を参照する）。
+
 ## 7. OS 連携
 
 | 機能 | macOS | Windows | Linux |
@@ -522,6 +547,6 @@ CLI・MCP は、データベースを新しく作らない（6.3）ので、ず�
 ## 9. 未決事項
 
 - Windows の名前付きパイプの権限・先取りの防ぎ・読みの中断・閉じ方は型検査までで、実機では確かめていない（4.6。テスト計画書 4.5。YUN-87）。実機で挙動が違えば 4.6 を直す
-- WebView が識別子の名前で作るフォルダの OS ごとの場所と、`uninstall --purge` で消すかどうか（6.1）
+- macOS の WebView のデータの実際の場所（6.5。Mac の実機で、アプリを動かした後に `~/Library` の下の識別子の名前のものを調べる。08 4.9。YUN-87）。Windows の `EBWebView` も同じ実機の確認で見る
 - Linux のデスクトップ連携：.deb・AppImage に Tauri が入れるデスクトップエントリの名前と、X11 で窓とエントリを結び付ける `StartupWMClass` の値（6.1）
 - クラウド同期で、タイムゾーンが異なる端末同士の論理日付の扱い（例：その日のボードを最初に作った端末のタイムゾーンで確定する）

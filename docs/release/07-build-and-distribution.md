@@ -102,11 +102,30 @@ brew install <tap名>/yunagi
 
 tap 内の Cask でアプリと CLI を配置する。アプリは Cask の既定どおり `/Applications/Yunagi.app` に置き、CLI は Cask の `binary` で Homebrew の bin にリンクする。
 
+**アンインストール（`zap`）**（2026-11-05 決定。YUN-44）：Cask は `uninstall` でアプリと CLI のリンクを外し（Cask の既定）、`zap` で `yunagi uninstall --purge`（4.4）と同じものを消す。`brew uninstall --cask --zap yunagi` で、アプリとデータをまとめて消せる。`zap` の内容は、アーキテクチャ設計書 6.5 の macOS の場所と、データディレクトリ（6章）である：
+
+```ruby
+zap trash: [
+  "~/Library/Application Support/Yunagi",
+  "~/Library/Caches/io.github.misty-swan.yunagi",
+  "~/Library/HTTPStorages/io.github.misty-swan.yunagi",
+  "~/Library/Preferences/io.github.misty-swan.yunagi.plist",
+  "~/Library/Saved Application State/io.github.misty-swan.yunagi.savedState",
+  "~/Library/WebKit/io.github.misty-swan.yunagi",
+]
+```
+
+`trash:` は無いものを飛ばすので、6.5 で実機が未確認の場所を含めても害はない。識別子（アーキテクチャ設計書 6.1）か 6.5 の場所を変えたら、この一覧も同時に直す。`zap` は `config.json` を読めないので、設定で変えた保存先は消えない（利用者ガイドの「アンインストール」に書く）。tap のリポジトリはまだ無い。作るときにこの内容で書く。
+
 Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine`）を付けるため、アドホック署名のままでは初回起動が Gatekeeper に止められる見込みである（要確認：Homebrew の挙動は変わりうるため、実機で確認する）。Cask の `postflight` で隔離属性を外す。外せない場合は、導入ガイドに対処（`xattr -dr com.apple.quarantine /Applications/Yunagi.app`）を載せる。
 
 ### 4.4 アンインストール
 
-`yunagi uninstall` で、アプリ本体と CLI のリンク、Linux ではデスクトップエントリ（4.1）を削除する。データディレクトリは既定では残し、`--purge` 指定時のみ削除する。消すものは、インストールスクリプトが最後に一覧表示するもの（4.1 の 6、4.2）と一致させる：macOS は `~/Applications/Yunagi.app` と `~/.local/bin/yunagi`、Linux は `~/.local/opt/yunagi/`・`~/.local/bin/yunagi`・デスクトップエントリ、Windows は Yunagi 自身のアンインストーラーと、ユーザーの PATH に足した `bin`（`yunagi uninstall` の実装はまだ無い。作るときに、この一覧を消す対象にする。置く物を変えたら、ここと 4.1・4.2 を同時に直す。Linear の YUN-44 の完了の条件に、この一覧を参照する 1 行を足した）。
+`yunagi uninstall` で、アプリ本体と CLI のリンク、Linux ではデスクトップエントリ（4.1）を削除する。データディレクトリは既定では残し、`--purge` 指定時のみ、データと WebView のデータ（アーキテクチャ設計書 6.5。置き場所と消す決まり）を削除する。アプリが動いているときは何も消さずに止まる。消すものは、インストールスクリプトが最後に一覧表示するもの（4.1 の 6、4.2）と一致させる：macOS は `~/Applications/Yunagi.app` と `~/.local/bin/yunagi`、Linux は `~/.local/opt/yunagi/`・`~/.local/bin/yunagi`・デスクトップエントリ、Windows は Yunagi 自身のアンインストーラー（インストール先とスタートメニューのショートカットを消す）と、ユーザーの PATH に足した `bin`。Linux のデスクトップエントリは `$XDG_DATA_HOME/applications/io.github.misty-swan.yunagi.desktop`（4.1 の 4 と同じ決め方）。macOS の `Yunagi.app.old`（置換の途中で退けるもの）は、置換が終わると消えるので、消す対象に数えない。
+
+Homebrew の Cask で入れたとき（`yunagi` の実体が `~/Applications/Yunagi.app` や `~/.local/opt/yunagi/` の外にあるとき）は、何も消さずに `brew uninstall --cask --zap yunagi`（`--purge` なら `--zap` 付き、なしなら付けない）を案内して止まる。Cask が置いたものを `yunagi` が消すと、Homebrew の記録と食い違うため（2026-11-05 決定。YUN-44）。
+
+`yunagi uninstall` の実装はまだ無い（Linear の YUN-99 が作る。完了の条件でこの一覧を参照する）。置く物を変えたら、ここと 4.1・4.2・4.3 の `zap` を同時に直す。2026-11-05 に、この一覧が `install/install.sh`・`install/install.ps1` の置くものと一致していることを確かめた。
 
 ### 4.5 インストールスクリプトの試験
 
