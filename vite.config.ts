@@ -36,8 +36,9 @@ export default defineConfig({
   resolve: process.env.VITEST ? { conditions: ["browser", ...defaultClientConditions] } : undefined,
   test: {
     environment: "jsdom",
-    // install/ はインストールスクリプトの試験（install/install.test.ts。配布手順書 4.5）
-    include: ["src/**/*.test.ts", "install/**/*.test.ts"],
+    // install/ はインストールスクリプトの試験（install/install.test.ts。配布手順書 4.5）、
+    // scripts/release/ は配布用 CI が使うスクリプトの試験（配布手順書 3章）
+    include: ["src/**/*.test.ts", "install/**/*.test.ts", "scripts/**/*.test.ts"],
     // テストでは CSS を空にするが、色のトークンは中身を確かめる（src/styles/tokens.test.ts）
     css: { include: [/src\/styles\/tokens\.css/] },
   },

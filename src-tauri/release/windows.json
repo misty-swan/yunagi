@@ -1,0 +1,8 @@
+{
+  "mainBinaryName": "Yunagi",
+  "bundle": {
+    "resources": {
+      "cli-bin/yunagi.exe": "bin/yunagi.exe"
+    }
+  }
+}

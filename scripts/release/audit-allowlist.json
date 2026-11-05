@@ -1,0 +1,37 @@
+{
+  "$comment": "既知の脆弱性の検査の許可リスト（docs/release/07-build-and-distribution.md 3章「許可リスト」）。修正版がまだ使えない指摘だけを、理由と見直す期限を添えて載せる。載せるときも消すときも PR で見る。ここは理由と期限の正本で、検査の道具が読む設定（Rust は .cargo/audit.toml の ignore、JavaScript は pnpm-workspace.yaml の auditConfig.ignoreGhsas）の ID と食い違わないことを scripts/release/allowlist.test.ts と `pnpm check:allowlist` が確かめる。",
+  "rust": [
+    {
+      "id": "RUSTSEC-2026-0367",
+      "reason": "zip 4.6.1 の展開（ZipArchive::extract）の脆弱性（SUID/SGID の保持）。修正は zip 9.0.0 以上だが、自動更新のプラグイン（tauri-plugin-updater 2.14.0）が zip ^4 に固定していて、こちらでは上げられない。zip はプラグインの Windows 用の「zip 形式の更新の展開」だけが使う。Yunagi は Windows に NSIS の .exe で配る（07 2章）ので通らず、通る場合も署名の検証（minisign）の後の展開になる。tar.gz の展開（macOS・Linux）は zip を使わない。",
+      "remove_when": "tauri-plugin-updater が zip 9 以上に上がったら、プラグインを上げて外す。",
+      "expires": "2027-02-05"
+    },
+    {
+      "id": "RUSTSEC-2026-0368",
+      "reason": "zip 4.6.1 の展開の脆弱性（展開先の外を指すシンボリックリンクを作る）。理由と使わない経路は RUSTSEC-2026-0367 と同じ。",
+      "remove_when": "tauri-plugin-updater が zip 9 以上に上がったら、プラグインを上げて外す。",
+      "expires": "2027-02-05"
+    },
+    {
+      "id": "RUSTSEC-2026-0369",
+      "reason": "zip 4.6.1 の展開の脆弱性（シンボリックリンクを通して、展開先の外に権限を設定する）。理由と使わない経路は RUSTSEC-2026-0367 と同じ。",
+      "remove_when": "tauri-plugin-updater が zip 9 以上に上がったら、プラグインを上げて外す。",
+      "expires": "2027-02-05"
+    },
+    {
+      "id": "RUSTSEC-2026-0429",
+      "reason": "zip 4.6.1 の展開の脆弱性（巨大なサイズを宣言したシンボリックリンクの項目で、プロセスが異常終了する）。理由と使わない経路は RUSTSEC-2026-0367 と同じ。",
+      "remove_when": "tauri-plugin-updater が zip 9 以上に上がったら、プラグインを上げて外す。",
+      "expires": "2027-02-05"
+    }
+  ],
+  "javascript": [
+    {
+      "id": "GHSA-gcqx-w48m-w2h4",
+      "reason": "deepmerge の mergeObject() のプロトタイプ汚染（重大度 low）。@sveltejs/vite-plugin-svelte の依存で、修正版は無い。開発時とビルド時にだけ使い（devDependencies の連鎖）、配布物に入らない。",
+      "remove_when": "deepmerge または @sveltejs/vite-plugin-svelte が修正版を出したら、上げて外す。",
+      "expires": "2027-02-05"
+    }
+  ]
+}
