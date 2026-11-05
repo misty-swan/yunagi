@@ -29,7 +29,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。
 
 1. タグ `v<ver>` の push を契機に起動する。
 2. 依存を固定したまま（lock ファイルを厳守）ビルドする。
-3. 依存の既知脆弱性の検査（`cargo audit`、`pnpm audit` 等。JavaScript 側は `pnpm-lock.yaml` で固定した版を調べる）と、許可外ライセンスの検出（third-party-licenses.md 2章）を行い、問題があれば中止する。同梱するフォントのファイルの SHA-256 がデザインガイド 4章に書いた値と一致し、ライセンス文書（UDEV Gothic HS は `LICENSE`・`LICENSE_JetBrainsMono`・`LICENSE_BIZUDGothic`、Inter は `LICENSE.txt`）がそろっていることも確かめ、違えば中止する。`THIRD_PARTY_LICENSES.md` を、同梱するフォントのライセンスも含めて生成し（third-party-licenses.md 2章）、配布物に含める。
+3. 依存の既知脆弱性の検査（Rust は `cargo audit`（`Cargo.lock` を調べる）、JavaScript は `pnpm audit --prod`（`pnpm-lock.yaml` を調べる）。どちらも指摘が1件でもあれば中止し、重大度では分けない。`--prod` は配布物に入る依存（`package.json` の `dependencies`）だけを調べる指定で、開発用の依存（`devDependencies`。vite など）の指摘は配布を止めず、通常の開発で上げ直して対応する）と、許可外ライセンスの検出（third-party-licenses.md 2章）を行い、問題があれば中止する。同梱するフォントのファイルの SHA-256 がデザインガイド 4章に書いた値と一致し、ライセンス文書（UDEV Gothic HS は `LICENSE`・`LICENSE_JetBrainsMono`・`LICENSE_BIZUDGothic`、Inter は `LICENSE.txt`）がそろっていることも確かめ、違えば中止する。`THIRD_PARTY_LICENSES.md` を、同梱するフォントのライセンスも含めて生成し（third-party-licenses.md 2章）、配布物に含める。
 4. macOS：ビルド後にアドホック署名を行う（`codesign --force --deep -s - Yunagi.app`）。Apple Silicon では署名がないと起動できないため必須。
 5. Updater 用の署名を、CI のシークレットに保管した秘密鍵で付与する。
 6. SHA-256 を計算し、`.sha256` と `SHA256SUMS` を Release に添付する。`SHA256SUMS` に配布用鍵で署名し、`SHA256SUMS.sig` を添付する。
