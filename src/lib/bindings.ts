@@ -644,6 +644,13 @@ export type BackupFailed = { detail: string, };
 export type ShowRequested = { note: boolean, };
 
 /**
+ * 自動更新の状態（`get_update_state` の返り値と `update-state` イベントの中身。
+ * ビルド・配布手順書 5章、画面設計書 3章「New version」）。確認して新しい版が無いとき・確認できないとき・
+ * 更新の自動確認が無効のとき・自動更新の対象でない配布のときは、どれも `none`（画面には何も出さない）。
+ */
+export type UpdateState = { "state": "none" } | { "state": "available", version: string, notes: string | null, } | { "state": "downloading", version: string, progress: number | null, } | { "state": "failed", version: string, } | { "state": "restarting" };
+
+/**
  * テーマ（画面設計書 7章「表示」）。
  */
 export type Theme = "system" | "light" | "dark";
@@ -968,4 +975,5 @@ export const EVENTS = {
   todayChanged: "today-changed",
   backupFailed: "backup-failed",
   showRequested: "show-requested",
+  updateState: "update-state",
 } as const;

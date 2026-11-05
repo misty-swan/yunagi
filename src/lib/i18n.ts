@@ -9,6 +9,7 @@ import type { CloseReason, RejectReason, StartupFailure } from "./bindings";
 import type { CarryMessage } from "./carryover.svelte";
 import { AGENTS_MESSAGES, type AgentsMessages } from "./i18n_agents";
 import { ARCHIVE_MESSAGES, type ArchiveMessages } from "./i18n_archive";
+import { UPDATE_MESSAGES, type UpdateMessages } from "./i18n_update";
 import { SETTINGS_MESSAGES, type SettingsMessages } from "./i18n_settings";
 import { prefs, type Lang } from "./prefs.svelte";
 
@@ -271,6 +272,7 @@ export interface Messages {
   settings: SettingsMessages;
   archive: ArchiveMessages;
   agents: AgentsMessages;
+  update: UpdateMessages;
   /** 保存できていない原因の表示の「保存先を変える」（設定のデータ区分を開く。画面設計書 3章）。 */
   changeDataDir: string;
 }
@@ -296,6 +298,7 @@ export interface PaletteMessages {
   commands: {
     carryover: string;
     saveDetail: string;
+    update: string;
     today: string;
     toNote: string;
     toBoard: string;
@@ -616,6 +619,7 @@ const ja: Messages = {
   settings: SETTINGS_MESSAGES.ja,
   archive: ARCHIVE_MESSAGES.ja,
   agents: AGENTS_MESSAGES.ja,
+  update: UPDATE_MESSAGES.ja,
   changeDataDir: "保存先を変える",
   palette: {
     label: "検索・日付・コマンド",
@@ -631,6 +635,7 @@ const ja: Messages = {
     commands: {
       carryover: "持ち越しを開く",
       saveDetail: "保存できていない理由を見る",
+      update: "更新して再起動",
       today: "今日へ移動",
       toNote: "ノートモードにする",
       toBoard: "整理モードにする",
@@ -721,6 +726,7 @@ const en: Messages = {
   settings: SETTINGS_MESSAGES.en,
   archive: ARCHIVE_MESSAGES.en,
   agents: AGENTS_MESSAGES.en,
+  update: UPDATE_MESSAGES.en,
   changeDataDir: "Change the data folder",
   palette: {
     label: "Search, dates, and commands",
@@ -736,6 +742,7 @@ const en: Messages = {
     commands: {
       carryover: "Open carry-over",
       saveDetail: "Show why it isn't saved",
+      update: "Update and restart",
       today: "Go to today",
       toNote: "Switch to Note mode",
       toBoard: "Switch to Board mode",

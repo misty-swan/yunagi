@@ -6,11 +6,14 @@
   import { t } from "../lib/i18n";
   import { keyLabel } from "../lib/keys";
   import { progressOf } from "../lib/meter";
+  import type { UpdateStore } from "../lib/update.svelte";
   import Logo from "./Logo.svelte";
   import MiniWave from "./MiniWave.svelte";
+  import UpdateNotice from "./UpdateNotice.svelte";
   import type { ShellCommand } from "./commands";
 
   let {
+    update = null,
     overview,
     date,
     today,
@@ -21,6 +24,8 @@
     onToday,
     onCommand,
   }: {
+    /** 自動更新の状態。新しい版があるとき、下端に「New version」を出す。 */
+    update?: UpdateStore | null;
     overview: Overview | null;
     /** 表示している日（ふりかえり S-08 の間は、そこで選んでいる日）。 */
     date: LogicalDate | null;
@@ -121,6 +126,7 @@
     {:else}
       <div><span class="dot hollow"></span>{m.labels.savedLocally}</div>
     {/if}
+    {#if update}<UpdateNotice {update} placement="side" />{/if}
   </div>
 </aside>
 

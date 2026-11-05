@@ -10,9 +10,12 @@
   import type { Mode } from "../lib/shell.svelte";
   import type { ShellCommand } from "./commands";
   import { untrack } from "svelte";
+  import type { UpdateStore } from "../lib/update.svelte";
   import Logo from "./Logo.svelte";
+  import UpdateNotice from "./UpdateNotice.svelte";
 
   let {
+    update = null,
     date,
     today,
     mode,
@@ -29,6 +32,11 @@
     saveDetailRequest = 0,
     archive = false,
   }: {
+    /**
+     * 自動更新の状態。サイドバーを閉じている（`showLogo`）間、新しい版があるときだけ、右側（保存状態の左）に
+     * 「New version」を出す。サイドバーを開いているときは、サイドバーの下端に出る。
+     */
+    update?: UpdateStore | null;
     /** ふりかえり（S-08）を開いている。日付と Board / Note の切り替えの代わりに「Archive」の見出しを出す。 */
     archive?: boolean;
     date: LogicalDate | null;
@@ -196,6 +204,8 @@
       {unseen}
     </button>
   {/if}
+
+  {#if showLogo && update}<UpdateNotice {update} placement="top" />{/if}
 
   {#if save.failing}
     <div

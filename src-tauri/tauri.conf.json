@@ -21,6 +21,16 @@
       "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws:; style-src 'self' 'unsafe-inline'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": false,
     "icon": [

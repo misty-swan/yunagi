@@ -49,6 +49,7 @@ import {
   type TextSave,
   type TodayChanged,
   type UiReport,
+  type UpdateState,
 } from "./bindings";
 
 /**
@@ -156,6 +157,13 @@ export const core = {
   getSettings: () => call<Settings>("get_settings"),
   /** 設定を保存する（変える欄だけ）。保存した後の設定を返す。 */
   saveSettings: (patch: SettingsPatch) => call<Settings>("save_settings", { patch }),
+  /** 自動更新の状態（`update-state` イベントを聞き始めてから呼ぶ）。 */
+  getUpdateState: () => call<UpdateState>("get_update_state"),
+  /**
+   * 「更新して再起動」：ダウンロードして署名を検証し、データベースを閉じて入れ替え、再起動する。進み具合と
+   * 失敗は `update-state` で届く。再起動するので、返ってこないことがある。先に入力中の内容を保存し終えてから呼ぶ。
+   */
+  installUpdate: () => call<null>("install_update"),
   /** いまの保存先のフォルダ。 */
   getDataDir: () => call<string>("get_data_dir"),
   /** 保存先の候補 `dir` がクラウド同期フォルダ（の中）と判定できるか（判定できなければ `null`）。 */
@@ -259,6 +267,8 @@ export const coreEvents = {
     listen<TodayChanged>(EVENTS.todayChanged, (e) => cb(e.payload)),
   onBackupFailed: (cb: (p: BackupFailed) => void): Promise<UnlistenFn> =>
     listen<BackupFailed>(EVENTS.backupFailed, (e) => cb(e.payload)),
+  onUpdateState: (cb: (p: UpdateState) => void): Promise<UnlistenFn> =>
+    listen<UpdateState>(EVENTS.updateState, (e) => cb(e.payload)),
   onShowRequested: (cb: (p: ShowRequested) => void): Promise<UnlistenFn> =>
     listen<ShowRequested>(EVENTS.showRequested, (e) => cb(e.payload)),
 };

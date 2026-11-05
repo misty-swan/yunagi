@@ -11,6 +11,7 @@
   import { shellActionOf, type ShellAction } from "../lib/keys";
   import { meterScene, minutesOfDay } from "../lib/meter";
   import { prefs } from "../lib/prefs.svelte";
+  import type { UpdateStore } from "../lib/update.svelte";
   import type { Session } from "../lib/session.svelte";
   import type { Mode, Shell } from "../lib/shell.svelte";
   import type { ArchiveControl, ShellCommand } from "./commands";
@@ -28,8 +29,11 @@
     onCommand,
     saveDetailRequest = 0,
     archive = null,
+    update = null,
     children,
   }: {
+    /** 自動更新の状態（サイドバー下端・上部のバーの「New version」）。 */
+    update?: UpdateStore | null;
     /**
      * ふりかえり（S-08）を開いているとき、そのキー・サイドバーの動き。上部のバーは「Archive」の見出しにし、
      * 凪メーターは出さず、Mod+[ / Mod+] は週の移動、Mod+J は受けず、Mod+T は今日を選ぶ（画面設計書 9章）。
@@ -120,6 +124,7 @@
 >
   {#if shell.sidebarOpen}
     <Sidebar
+      {update}
       {overview}
       date={archive ? archive.date : date}
       {today}
@@ -143,6 +148,7 @@
   <div class="main" style:--sun-t={scene ? (4 + scene.progress * 92) / 100 : 0.8}>
     <div class="sky" aria-hidden="true"></div>
     <TopBar
+      {update}
       {date}
       {today}
       mode={shell.mode}

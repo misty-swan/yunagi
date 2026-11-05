@@ -43,7 +43,7 @@ test.skipIf(!import.meta.env.YUNAGI_PERF)("1文字ごとの処理と、答えが
     props: {
       palette,
       today: "2026-11-03",
-      context: { mode: "board", sidebarOpen: true, layout: "A", carryPending: true, saveFailing: false, mac: false },
+      context: { mode: "board", sidebarOpen: true, layout: "A", carryPending: true, saveFailing: false, updateAvailable: false, mac: false },
       onRun: () => {},
     },
   });

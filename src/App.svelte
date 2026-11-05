@@ -29,6 +29,7 @@
   import { applyPrefs, prefs } from "./lib/prefs.svelte";
   import { startSession } from "./lib/session.svelte";
   import { Shell } from "./lib/shell.svelte";
+  import { UpdateStore } from "./lib/update.svelte";
   import { InputTracker } from "./lib/ui_report.svelte";
   import Board from "./board/Board.svelte";
   import NoteView from "./note/NoteView.svelte";
@@ -55,6 +56,11 @@
   onDestroy(() => void session.stop());
   const save = new SaveStatus();
   const shell = new Shell();
+  // 自動更新（ビルド・配布手順書 5章）。確認はコアが行い、画面は状態を出して「更新して再起動」を頼む。
+  // 再起動の前に、入力中の内容を保存し終える（保存できていなければ始めない）
+  const update = new UpdateStore({ flush: () => save.flushAll(), saveFailing: () => save.failing });
+  update.start();
+  onDestroy(() => update.stop());
   const notice = new Notice();
   onDestroy(() => notice.clear());
   const mac = isMacPlatform();
@@ -408,6 +414,9 @@
       case "saveDetail":
         saveDetailRequest++;
         return;
+      case "update":
+        void update.install();
+        return;
       case "today":
         // ふりかえりの間は、今日を選ぶ（Mod+T と同じ）
         if (session.today === null) return;
@@ -492,7 +501,7 @@
   <StartupScreen startup={session.startup} actions={startupActions} />
 {:else if shown}
   <!-- 持ち越し・パレット・設定を出している間は、背後の外枠と本文を操作できなくする -->
-  <div inert={carry.open || palette.open || settingsPanel.open || agentsScreen.open}>
+  <div inert={carry.open || palette.open || settingsPanel.open || agentsScreen.open || update.restarting}>
     <AppShell
       {session}
       {save}
@@ -502,6 +511,7 @@
       {onCommand}
       {saveDetailRequest}
       archive={archiveControl}
+      {update}
     >
       <main
         class="content"
@@ -556,6 +566,7 @@
       layout: prefs.layout,
       carryPending: carry.pending !== null,
       saveFailing: save.failing,
+      updateAvailable: update.canInstall,
       mac,
     }}
     onRun={runPalette}

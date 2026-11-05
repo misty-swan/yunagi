@@ -29,8 +29,9 @@ use crate::types::{
     CommandError, DataDirChanged, Date, Deleted, GlobalShortcutStatus, Id, ImeStatus, Item,
     ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, RevertPlan, Reverted,
     ScopesChanged, SearchHit, SendResult, Settings, SettingsPatch, Snapshot, SplitResult, Startup,
-    TextDoc, TextSave, UiReport,
+    TextDoc, TextSave, UiReport, UpdateState,
 };
+use crate::updater::UpdateService;
 
 type Core<'a> = State<'a, Arc<AppCore>>;
 
@@ -416,9 +417,15 @@ impl Changes for SettingsSaved {
 /// 設定の保存は、保存の失敗中（アーキテクチャ設計書 4.1）を始め・終えない（再試行を待つ入力では
 /// なく、失敗は画面に出して選び直すため）。日付の切り替わり時刻を変えたときは、すぐに今日を求め直す。
 #[tauri::command]
-pub async fn save_settings(core: Core<'_>, patch: SettingsPatch) -> Result<Settings, CommandError> {
+pub async fn save_settings(
+    core: Core<'_>,
+    update: State<'_, Arc<UpdateService>>,
+    patch: SettingsPatch,
+) -> Result<Settings, CommandError> {
+    let update = Arc::clone(&update);
     blocking(&core, move |core| {
         let moves_today = patch.day_boundary.is_some();
+        let update_check = patch.update_check.is_some();
         let saved = core.screen_write(ScreenWrite::Operation, |conn| {
             // 片方だけの始業・終業にもう片方の今の値を当てるのは、書く処理と同じ接続の中で行う
             // （続けて届いた保存が、古い値と組にならないように。接続は1つで順に使う）
@@ -432,9 +439,34 @@ pub async fn save_settings(core: Core<'_>, patch: SettingsPatch) -> Result<Setti
         if moves_today && saved.changed {
             core.check_today(now());
         }
+        // 更新の自動確認を変えたときは、すぐ確かめ直す（有効なら確認し、無効なら表示を消す）
+        if update_check && saved.changed {
+            update.settings_changed();
+        }
         Ok(saved.settings)
     })
     .await
+}
+
+/// 自動更新の状態（ビルド・配布手順書 5章）。画面は、`update-state` イベントを聞き始めてからこれを呼ぶ
+/// （聞き始める前に見つかっても取りこぼさないため）。
+#[tauri::command]
+pub fn get_update_state(update: State<'_, Arc<UpdateService>>) -> UpdateState {
+    update.state()
+}
+
+/// 「更新して再起動」。新しい版があるとき（または前の更新に失敗したとき）だけ動く。ダウンロードして署名を
+/// 検証し、データベースを閉じて入れ替え、再起動する（`crate::updater::UpdateService::install`）。進み具合と
+/// 失敗は `update-state` イベントで知らせ、このコマンドは入れ替えの前までに終えて再起動するので、
+/// 返ってこないことがある。画面は、先に入力中の内容を保存し終えてから呼ぶ（画面設計書 3章）。
+#[tauri::command]
+pub async fn install_update(update: State<'_, Arc<UpdateService>>) -> Result<(), CommandError> {
+    let update = Arc::clone(&update);
+    tauri::async_runtime::spawn_blocking(move || update.install())
+        .await
+        .map_err(|e| CommandError::Internal {
+            detail: e.to_string(),
+        })
 }
 
 /// いまの保存先のフォルダ（設定画面のデータ区分に示す）。
