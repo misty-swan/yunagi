@@ -54,6 +54,7 @@ If `~/.local/bin` is not in your `PATH`, the install script shows how to add it.
 - When an update changes the data format, Yunagi makes a backup before the new version first opens your data. If converting the data fails, it goes back to the backup automatically without changing your data, and shows how to reinstall the previous version.
 - To stop the checks, turn off "Check for updates automatically" in the General section of Settings. When it is off, Yunagi does not make this connection at all.
 - On Linux, the tar.gz and .deb packages do not update themselves from within the app. To update, install the new version the same way (the AppImage updates automatically).
+- The steps for updating a Homebrew install will be decided and written here before release (to be confirmed).
 
 To install a specific version (for example, to go back to an older one), run the install script with the environment variable `YUNAGI_VERSION` set to that version.
 

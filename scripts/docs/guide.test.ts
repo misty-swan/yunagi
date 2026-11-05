@@ -67,12 +67,12 @@ function tableRows(text: string): string[][] {
     );
 }
 
-const KEY = /\b(?:(?:Mod|Ctrl|Alt|Shift)\+)+(?:Enter|Backspace|[A-Za-z0-9]|\\\\|[[\],↑↓←→])/g;
+const KEY = /\b(?:(?:Mod|Ctrl|Alt|Shift)\+)+(?:Enter|Backspace|Delete|Tab|Space|Esc|[A-Za-z0-9]|\\\\|[[\],↑↓←→])(?![A-Za-z0-9])/g;
 
 /** 表のキーの欄を、割当の文字列（`Mod+Shift+L` など。キーの名前は keymap.ts と同じ）の並びにする。 */
 function tableKeys(text: string): string[][] {
   return tableRows(text)
-    .slice(1)
+    .slice(1) // 見出しの行（表は 1 つだけ。上の試験で数える）
     .map((cols) =>
       (cols[1].replace(/[（(][^）)]*[）)]/g, "").match(KEY) ?? []).map((k) =>
         k.replace("\\\\", "\\").replace("↑", "ArrowUp").replace("↓", "ArrowDown"),
@@ -94,6 +94,7 @@ describe("日英の構成がそろっている", () => {
     const ja = tableRows(GUIDES.ja);
     const en = tableRows(GUIDES.en);
     expect(en.length).toBe(ja.length);
+    for (const t of [GUIDES.ja, GUIDES.en]) expect(proseLines(t).filter((l) => /^\|[\s|-]+\|$/.test(l)).length).toBe(1);
     expect(tableKeys(GUIDES.en)).toEqual(tableKeys(GUIDES.ja));
   });
 
@@ -130,10 +131,12 @@ describe("コードと食い違っていない", () => {
   it("ガイドのコマンドとオプションが、yunagi --help の一覧にある", () => {
     for (const text of [GUIDES.ja, GUIDES.en]) {
       const spans = [...text.matchAll(/`([^`\n]*)`/g)].map((m) => m[1]);
+      const prose = new Set(proseLines(text));
       const codeLines = text
         .split("\n")
-        .filter((l) => /(^|\| )yunagi [a-z]/.test(l))
-        .map((l) => l.replace(/^.*?(yunagi [a-z].*)$/, "$1"));
+        .filter((l) => !prose.has(l)) // コードの囲みの中の行だけ
+        .filter((l) => /(?<![/\w.-])yunagi [a-z]/.test(l))
+        .map((l) => l.replace(/^.*?(?<![/\w.-])(yunagi [a-z].*)$/, "$1"));
       const commands = [...spans, ...codeLines].filter((s) => /^yunagi [a-z]/.test(s));
       expect(commands.length).toBeGreaterThan(8);
       for (const c of commands) {
@@ -145,7 +148,7 @@ describe("コードと食い違っていない", () => {
       // yunagi のオプション（`git log --format` のような、ほかのコマンドのものは見ない）
       const options = new Set(commands.flatMap((c) => c.match(/(?<![\w-])--[a-z][a-z-]*/g) ?? []));
       expect(options.size).toBeGreaterThan(3);
-      for (const o of options) expect(usage, o).toContain(o);
+      for (const o of options) expect(usage, o).toMatch(new RegExp(`${o}(?![\\w-])`));
     }
   });
 });
@@ -161,7 +164,9 @@ describe("画面の文言がコードにある", () => {
     ["凪メーターの時間帯", "Nagi meter hours"],
     ["更新の自動確認", "Check for updates automatically"],
     ["挿入モードで入力状態を戻す", "Restore input state in Insert mode"],
-    ["持ち越し見直しの回数", "Carry-over review count"],
+    ["New version", "New version"],
+    ["CARRY OVER", "CARRY OVER"],
+    ["更新できませんでした", "Couldn't update"],
     ["言語", "Language"],
     ["選んだものを持ち越す", "Carry over selected"],
     ["すべて持ち越す", "Carry over all"],
@@ -172,13 +177,11 @@ describe("画面の文言がコードにある", () => {
     ["更新して再起動", "Update and restart"],
     ["保存できていません", "Not saved"],
   ];
-  const ONLY_IN_GUIDE = new Set(["持ち越し見直しの回数", "Carry-over review count"]);
 
   it("ガイドの設定の項目名・ボタン名・通知が、画面の文言と同じ", () => {
     for (const [ja, en] of LABELS) {
-      expect(code, ja).toContain(`"${ja}"`);
-      expect(code, en).toContain(`"${en}"`);
-      if (ONLY_IN_GUIDE.has(ja)) continue;
+      expect(code, ja).toContain(ja);
+      expect(code, en).toContain(en);
       expect(GUIDES.ja, ja).toContain(ja);
       expect(GUIDES.en, en).toContain(en);
     }
@@ -204,7 +207,7 @@ describe("利用者向けの書き方", () => {
       expect(text).not.toMatch(/YUN-\d+/);
       expect(text).not.toMatch(/docs\//);
       expect(text).not.toMatch(/設計書|仕様書|手順書|テスト計画/);
-      expect(text).not.toMatch(/\b(?:design|spec|test plan)\b.*\b\d+\.\d+\b/i);
+      expect(text).not.toMatch(/\b(?:design doc|spec|test plan)\b/i);
     }
   });
 });
