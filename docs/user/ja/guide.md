@@ -40,7 +40,7 @@ irm https://<公式サイト>/install.ps1 | iex
 
 インストールスクリプトで入れると、ログインしている利用者だけが使う形で入ります（管理者の権限は要りません）。
 
-- macOS：`~/Applications/Yunagi.app`。コマンドの `yunagi` は `~/.local/bin/yunagi` にリンクされます。
+- macOS：`~/Applications/Yunagi.app`（Homebrew で入れた場合は `/Applications/Yunagi.app`）。コマンドの `yunagi` は `~/.local/bin/yunagi` にリンクされます。
 - Linux：`~/.local/opt/yunagi/`（アプリの AppImage とコマンド）。コマンドは `~/.local/bin/yunagi` にリンクされ、アプリ一覧に Yunagi が加わります。
 - Windows：`%LOCALAPPDATA%\Programs\Yunagi`。スタートメニューに Yunagi が加わり、`bin` フォルダがユーザーの `PATH` に加わります。
 

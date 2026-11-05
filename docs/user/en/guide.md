@@ -40,7 +40,7 @@ If you prefer to read the script first, open the URL, review it, and run the sav
 
 The install script installs Yunagi for the signed-in user only (no administrator rights needed).
 
-- macOS: `~/Applications/Yunagi.app`. The `yunagi` command is linked at `~/.local/bin/yunagi`.
+- macOS: `~/Applications/Yunagi.app` (`/Applications/Yunagi.app` if you installed with Homebrew). The `yunagi` command is linked at `~/.local/bin/yunagi`.
 - Linux: `~/.local/opt/yunagi/` (the AppImage and the command). The command is linked at `~/.local/bin/yunagi`, and Yunagi is added to your application list.
 - Windows: `%LOCALAPPDATA%\Programs\Yunagi`. Yunagi is added to the Start menu, and its `bin` folder is added to your user `PATH`.
 

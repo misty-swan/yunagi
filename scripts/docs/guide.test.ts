@@ -59,12 +59,14 @@ function fences(text: string): string[] {
 function tableRows(text: string): string[][] {
   return proseLines(text)
     .filter((l) => l.startsWith("|") && !/^\|[\s|-]+\|$/.test(l))
-    .map((l) =>
-      l
+    .map((l) => {
+      const cols = l
         .slice(1, -1)
         .split(" | ")
-        .map((c) => c.trim().replace(/^\||\|$/g, "").trim()),
-    );
+        .map((c) => c.trim().replace(/^\||\|$/g, "").trim());
+      if (cols.length !== 2) throw new Error(`表の行が 2 列ではありません: ${l}`);
+      return cols;
+    });
 }
 
 const KEY = /\b(?:(?:Mod|Ctrl|Alt|Shift)\+)+(?:Enter|Backspace|Delete|Tab|Space|Esc|[A-Za-z0-9]|\\\\|[[\],↑↓←→])(?![A-Za-z0-9])/g;
@@ -103,6 +105,11 @@ describe("日英の構成がそろっている", () => {
     expect(keys(GUIDES.en)).toEqual(keys(GUIDES.ja));
   });
 
+  it("「要確認」の但し書きが、日英で同じ数だけ残っている（公開前に消す。docs/release/07-build-and-distribution.md 4.3・5章）", () => {
+    const count = (t: string, s: string) => t.split(s).length - 1;
+    expect(count(GUIDES.en, "to be confirmed")).toBe(count(GUIDES.ja, "要確認"));
+  });
+
   it("公開前に決まる仮の表記が、日英で同じ数だけ残っている", () => {
     const count = (t: string, s: string) => t.split(s).length - 1;
     expect(count(GUIDES.en, "<official-site>")).toBe(count(GUIDES.ja, "<公式サイト>"));
@@ -126,7 +133,9 @@ describe("コードと食い違っていない", () => {
   });
 
   // `yunagi --help` の本文（args.rs の `USAGE`）
-  const usage = /pub const USAGE: &str = "\\\n([\s\S]*?)";\n/.exec(read("crates/cli/src/args.rs"))![1];
+  const usageMatch = /pub const USAGE: &str = "\\\n([\s\S]*?)";\n/.exec(read("crates/cli/src/args.rs"));
+  if (usageMatch === null) throw new Error("crates/cli/src/args.rs の USAGE が読めません（書き方を変えたなら、この試験の読み方も直す）");
+  const usage = usageMatch[1];
 
   it("ガイドのコマンドとオプションが、yunagi --help の一覧にある", () => {
     for (const text of [GUIDES.ja, GUIDES.en]) {
@@ -143,12 +152,15 @@ describe("コードと食い違っていない", () => {
         const [, first, second] = /^yunagi ([a-z]+)(?: ([a-z]+))?/.exec(c)!;
         const lines = usage.split("\n").filter((l) => new RegExp(`^  ${first}\\b`).test(l));
         expect(lines.length, c).toBeGreaterThan(0);
-        if (second !== undefined) expect(lines.some((l) => l.includes(second)), c).toBe(true);
+        if (second !== undefined) {
+          expect(lines.some((l) => new RegExp(`^  ${first} \\[?${second}\\b`).test(l)), c).toBe(true);
+        }
+        // オプションは、そのコマンドの行にあるものだけ
+        for (const o of c.match(/(?<![\w-])--[a-z][a-z-]*/g) ?? []) {
+          expect(lines.some((l) => new RegExp(`${o}(?![\\w-])`).test(l)), `${c} の ${o}`).toBe(true);
+        }
       }
-      // yunagi のオプション（`git log --format` のような、ほかのコマンドのものは見ない）
-      const options = new Set(commands.flatMap((c) => c.match(/(?<![\w-])--[a-z][a-z-]*/g) ?? []));
-      expect(options.size).toBeGreaterThan(3);
-      for (const o of options) expect(usage, o).toMatch(new RegExp(`${o}(?![\\w-])`));
+      expect(new Set(commands.flatMap((c) => c.match(/(?<![\w-])--[a-z][a-z-]*/g) ?? [])).size).toBeGreaterThan(3);
     }
   });
 });
@@ -180,8 +192,9 @@ describe("画面の文言がコードにある", () => {
 
   it("ガイドの設定の項目名・ボタン名・通知が、画面の文言と同じ", () => {
     for (const [ja, en] of LABELS) {
-      expect(code, ja).toContain(ja);
-      expect(code, en).toContain(en);
+      // 文言の全体か、その後に文が続くもの（「更新できませんでした。…」）
+      expect(code, ja).toMatch(new RegExp(`"${ja}(?:"|。)`));
+      expect(code, en).toMatch(new RegExp(`"${en}(?:"|\\.)`));
       expect(GUIDES.ja, ja).toContain(ja);
       expect(GUIDES.en, en).toContain(en);
     }
@@ -195,8 +208,12 @@ describe("画面の文言がコードにある", () => {
     }
     for (const section of ["General", "Display", "Operation", "Data", "Agents"]) {
       expect(code).toContain(`${section.toLowerCase()}: "${section}"`);
-      expect(GUIDES.ja).toContain(section);
-      expect(GUIDES.en).toContain(section);
+      expect(GUIDES.ja).toContain(`「${section}」区分`);
+      expect(GUIDES.en).toContain(`${section} section`);
+    }
+    for (const text of [GUIDES.ja, GUIDES.en]) {
+      expect(text).not.toMatch(/「(?:一般|表示|操作|データ|エージェント)」区分/);
+      expect(text).not.toMatch(/Settings\s*(?:→|>)\s*Input/);
     }
   });
 });
