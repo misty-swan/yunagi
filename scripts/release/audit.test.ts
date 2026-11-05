@@ -138,4 +138,22 @@ other = ["C-3"]`;
   expect(readStringArray(toml, "ignore")).toEqual(["A-1", "B-2"]);
   expect(readStringArray(toml, "other")).toEqual(["C-3"]);
   expect(readStringArray(toml, "ignore-build-dependencies")).toEqual([]);
+  // 表を指定したときは、その表の中のものだけを読む
+  const tables = `[packages]\nignore = ["X-1"]\n[advisories]\nignore = ["A-1"]\n`;
+  expect(readStringArray(tables, "ignore", "advisories")).toEqual(["A-1"]);
+  expect(readStringArray(tables, "ignore")).toEqual([]);
+});
+
+test("注釈のエスケープ：外部の文字列の改行や % で、別のワークフローコマンドを差し込めない", async () => {
+  const { escapeData } = await import("./audit.ts");
+  const evil = "title\n::add-mask::secret 100%\r";
+  const escaped = escapeData(evil);
+  expect(escaped).not.toMatch(/[\r\n]/);
+  expect(escaped).toBe("title%0A::add-mask::secret 100%25%0D");
+  // 結果の表示では、複数行の理由が行頭の :: で始まらない
+  const lines: string[] = [];
+  vi.mocked(console.error).mockImplementation((s: unknown) => void lines.push(String(s)));
+  report("cargo audit", { kind: "unavailable", reason: "first\n::stop-commands::x" });
+  expect(lines.join("\n").split("\n").filter((l) => l.startsWith("::stop-commands")).length).toBe(0);
+  vi.mocked(console.error).mockImplementation(() => {});
 });

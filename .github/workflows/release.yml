@@ -78,16 +78,22 @@ jobs:
       - name: Check tag and version
         id: version
         shell: bash
+        # `echo "x=$(コマンド)"` のように書くと、コマンドが失敗しても echo の終了コードで進んでしまう。
+        # 先に変数へ代入して、失敗でこの手順を止める
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "version=$(node scripts/release/version.ts "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+            version=$(node scripts/release/version.ts "$GITHUB_REF_NAME")
           else
-            echo "version=$(node scripts/release/version.ts)" >> "$GITHUB_OUTPUT"
+            version=$(node scripts/release/version.ts)
           fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build matrix
         id: matrix
-        run: echo "matrix=$(node scripts/release/matrix.ts "$GITHUB_EVENT_NAME")" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          matrix=$(node scripts/release/matrix.ts "$GITHUB_EVENT_NAME")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
       # 許可リストの期限と、検査の道具の設定との一致
       - name: Allowlist (expiry and sync)

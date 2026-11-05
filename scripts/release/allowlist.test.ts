@@ -54,6 +54,11 @@ other:
   - not-an-id
 `;
   expect(readPnpmIgnore(yaml)).toEqual(["GHSA-gcqx-w48m-w2h4"]);
+  // 引用符で囲んだ書き方も、pnpm は同じに読む
+  expect(readPnpmIgnore('auditConfig:\n  ignoreGhsas:\n    - "GHSA-aaaa-bbbb-cccc"\n    - \'GHSA-dddd-eeee-ffff\'\n')).toEqual([
+    "GHSA-aaaa-bbbb-cccc",
+    "GHSA-dddd-eeee-ffff",
+  ]);
 });
 
 test("正本と設定の ID の食い違いを、足りない側・多い側の両方で見つける", () => {

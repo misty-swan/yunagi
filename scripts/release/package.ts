@@ -8,7 +8,7 @@
 // Updater 用の `.sig`・`latest.json`・`SHA256SUMS` は、ここでは作らない（YUN-101）。
 import { execOrThrow as run } from "./exec.ts";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type Os = "linux" | "macos" | "windows";
@@ -27,15 +27,34 @@ export function sha256Line(hash: string, name: string): string {
   return `${hash}  ${name}\n`;
 }
 
+/** 大きな配布物を丸ごと読み込まないよう、少しずつ読んでハッシュを求める */
 function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(1024 * 1024);
+    for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) {
+      hash.update(buf.subarray(0, n));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
-/** ディレクトリの中で、拡張子が合うファイルがちょうど 1 つあることを確かめて返す */
-function only(dir: string, suffix: string): string {
+/** Tauri がファイル名に付ける arch の名前（`Yunagi_<ver>_<ここ>.AppImage`・`..._<ここ>-setup.exe`） */
+export const TAURI_ARCH: Record<"linux" | "windows", Record<Arch, string>> = {
+  linux: { x86_64: "amd64", arm64: "aarch64" },
+  windows: { x86_64: "x64", arm64: "arm64" },
+};
+
+/** ディレクトリの中で、拡張子が合い、対象の arch の名前を持つファイルがちょうど 1 つあることを確かめて返す（別の arch の古いファイルを取り違えない） */
+function only(dir: string, suffix: string, tauriArch: string): string {
   if (!existsSync(dir)) throw new Error(`${dir} が無い（Tauri のビルドが作っていない）`);
-  const found = readdirSync(dir).filter((f) => f.endsWith(suffix));
-  if (found.length !== 1) throw new Error(`${dir} に ${suffix} のファイルがちょうど 1 つあるはずが、${found.length} 個ある: ${found.join(", ")}`);
+  const found = readdirSync(dir).filter((f) => f.endsWith(suffix) && f.includes(`_${tauriArch}`));
+  if (found.length !== 1) {
+    throw new Error(`${dir} に ${suffix} で ${tauriArch} のファイルがちょうど 1 つあるはずが、${found.length} 個ある: ${found.join(", ")}`);
+  }
   return join(dir, found[0]);
 }
 
@@ -55,7 +74,7 @@ export function packageArtifacts(os: Os, arch: Arch, target: string, ver: string
     made.push(name);
   } else if (os === "linux") {
     const appImage = names.appImage(ver, arch);
-    copyFileSync(only(join(bundle, "appimage"), ".AppImage"), join(out, appImage));
+    copyFileSync(only(join(bundle, "appimage"), ".AppImage", TAURI_ARCH.linux[arch]), join(out, appImage));
     made.push(appImage);
     // CLI だけの配布物。中身はルートの実行ファイル yunagi 1 つ（install.sh が使う）
     const cli = names.cli(ver, arch);
@@ -66,7 +85,7 @@ export function packageArtifacts(os: Os, arch: Arch, target: string, ver: string
   } else {
     // bin\yunagi.exe と Yunagi.exe を含む（src-tauri/release/windows.json）。中身は Windows でしか見られないので、実機で確かめる（08 4.9）
     const setup = names.setup(ver, arch);
-    copyFileSync(only(join(bundle, "nsis"), "-setup.exe"), join(out, setup));
+    copyFileSync(only(join(bundle, "nsis"), "-setup.exe", TAURI_ARCH.windows[arch]), join(out, setup));
     made.push(setup);
   }
 

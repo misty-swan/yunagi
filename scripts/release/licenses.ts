@@ -6,8 +6,9 @@
 //
 // リポジトリ直下で動かす。cargo-about（Rust の依存）と pnpm（JavaScript の依存）が要る。
 // 許可するライセンスの一覧は license-policy.json。about.toml の accepted は、allowed と pending を合わせたもの。
+import { escapeData } from "./audit.ts";
 import { exec } from "./exec.ts";
-import { readStringArray } from "./toml.ts";
+import { readStringArray, replaceStringArray } from "./toml.ts";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,11 +66,9 @@ export function readAccepted(toml: string): string[] {
   return readStringArray(toml, "accepted");
 }
 
-/** about.toml から、許可が決まっていないもの（pending）を除いた設定を作る（許可外の検出用） */
-export function strictAboutToml(toml: string, pending: readonly string[]): string {
-  let out = toml;
-  for (const id of pending) out = out.replace(new RegExp(`^\\s*"${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}",?\\n`, "m"), "");
-  return out;
+/** about.toml の accepted を、許可が決まったもの（allowed）だけにした設定を作る（許可外の検出用） */
+export function strictAboutToml(toml: string, allowed: readonly string[]): string {
+  return replaceStringArray(toml, "accepted", allowed);
 }
 
 /** 同梱するフォント（デザインガイド 4章）。ここに無いファイルは、同梱を認めない（third-party-licenses.md 2章の 5） */
@@ -144,15 +143,21 @@ function jsPackages(): JsPackage[] {
   return Object.values(byLicense).flat();
 }
 
-const LICENSE_FILE = /^(licen[cs]e|copying|notice)/i;
+/** `LICENSE`・`LICENSE.md`・`LICENSE-MIT`・`LICENSE_APACHE-2.0`・`COPYING`・`NOTICE` など。ソースファイル（`license-utils.js`）は含めない */
+export const LICENSE_FILE = /^(licen[cs]e|copying|notice)([-_.][A-Za-z0-9._-]*)?$/i;
+const SOURCE_EXT = /\.(js|cjs|mjs|ts|json|spdx|d\.ts|map)$/i;
 
+/** パッケージ（入っている版すべて）のライセンス文書。ディレクトリ（`LICENSES/` など）は読まない */
 function licenseTexts(pkg: JsPackage): string[] {
-  const dir = pkg.paths[0];
-  const texts: string[] = [];
-  for (const name of readdirSync(dir).sort()) {
-    if (LICENSE_FILE.test(name) && !name.endsWith(".spdx")) texts.push(readFileSync(join(dir, name), "utf8").trim());
+  const texts = new Set<string>();
+  for (const dir of pkg.paths) {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.isFile() && LICENSE_FILE.test(entry.name) && !SOURCE_EXT.test(entry.name)) {
+        texts.add(readFileSync(join(dir, entry.name), "utf8").trim());
+      }
+    }
   }
-  return texts;
+  return [...texts];
 }
 
 function fence(text: string): string {
@@ -222,7 +227,7 @@ function main(argv: string[]): number {
     const dir = mkdtempSync(join(tmpdir(), "yunagi-about-"));
     try {
       const strict = join(dir, "about-strict.toml");
-      writeFileSync(strict, strictAboutToml(aboutToml, policy.pending));
+      writeFileSync(strict, strictAboutToml(aboutToml, policy.allowed));
       const rust = cargoAbout(strict);
       if (!rust.ok) problems.push(`Rust の依存に許可外のライセンスがある（cargo-about）:\n${rust.error}`);
     } finally {
@@ -233,8 +238,9 @@ function main(argv: string[]): number {
     }
     problems.push(...checkFonts());
     if (problems.length > 0) {
-      for (const p of problems) console.error(`::error title=許可外ライセンス::${p.split("\n")[0]}`);
-      console.error(problems.join("\n\n"));
+      for (const p of problems) console.error(`::error title=許可外ライセンス::${escapeData(p.split("\n")[0])}`);
+      // 外部の出力（cargo-about の stderr）が、行頭の `::` でワークフローコマンドとして読まれないよう字下げする
+      console.error(problems.map((p) => p.split("\n").map((l) => `  ${l}`).join("\n")).join("\n\n"));
       console.error(
         `\n許可しているライセンス：${policy.allowed.join("、")}。許可するか決まっていないもの（YUN-96）：${policy.pending.join("、")}`,
       );

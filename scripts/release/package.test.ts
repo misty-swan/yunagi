@@ -43,6 +43,31 @@ test("組み合わせ：タグの push は 6 組すべて、試運転は arm の
   expect(new Set(ALL.map((e) => e.name)).size).toBe(ALL.length);
 });
 
+test("version.ts・matrix.ts の CLI：版の不一致と形の誤りは終了コード 1、matrix は JSON を出す", () => {
+  const dir = mkdtempSync(join(tmpdir(), "yunagi-version-"));
+  const node = (args: string[], cwd = ".") => spawnSync(process.execPath, args, { encoding: "utf8", cwd });
+  try {
+    const script = join(process.cwd(), "scripts/release/version.ts");
+    writeFileSync(join(dir, "Cargo.toml"), cargo);
+    expect(node([script], dir).stdout.trim()).toBe("1.2.3");
+    expect(node([script, "v1.2.3"], dir).status).toBe(0);
+    const mismatch = node([script, "v9.9.9"], dir);
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stdout + mismatch.stderr).toContain("違う");
+    // 試運転（タグ無し）でも、版の形が誤っていれば止める（版は workflow の run: に埋め込まれる）
+    writeFileSync(join(dir, "Cargo.toml"), cargo.replace("1.2.3", "1.0.0$(echo x)"));
+    expect(node([script], dir).status).toBe(1);
+    writeFileSync(join(dir, "Cargo.toml"), "[workspace]\n");
+    expect(node([script], dir).status).toBe(1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const push = JSON.parse(node(["scripts/release/matrix.ts", "push"]).stdout);
+  const dry = JSON.parse(node(["scripts/release/matrix.ts", "pull_request"]).stdout);
+  expect(push.include).toHaveLength(6);
+  expect(dry.include.map((e: { name: string }) => e.name)).not.toContain("linux-arm64");
+});
+
 test("配布物の名前は 07 2章のとおり（v を付けない・arch は x86_64 か arm64）", () => {
   expect(names.macApp("1.2.3", "arm64")).toBe("Yunagi_1.2.3_arm64.app.tar.gz");
   expect(names.appImage("1.2.3", "x86_64")).toBe("Yunagi_1.2.3_x86_64.AppImage");
@@ -107,7 +132,9 @@ test("Windows：-setup.exe を付け替える。Tauri の出力が 0 個・2 個
     "Yunagi_1.2.3_arm64-setup.exe",
     "Yunagi_1.2.3_arm64-setup.exe.sha256",
   ]);
-  put(join(nsis, "Other-setup.exe"), "other");
+  put(join(nsis, "Yunagi_1.2.3_x64-setup.exe"), "other arch"); // 別の arch の古いファイルは数えない
+  expect(packageArtifacts("windows", "arm64", t, "1.2.3", out, join(root, "win")).sort()).toContain("Yunagi_1.2.3_arm64-setup.exe");
+  put(join(nsis, "Yunagi_0.9.0_arm64-setup.exe"), "stale");
   expect(() => packageArtifacts("windows", "arm64", t, "1.2.3", out, join(root, "win"))).toThrow("ちょうど 1 つ");
 });
 

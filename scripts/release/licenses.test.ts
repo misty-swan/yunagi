@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { type Policy, checkFonts, readAccepted, satisfies, strictAboutToml } from "./licenses.ts";
+import { LICENSE_FILE, type Policy, checkFonts, readAccepted, satisfies, strictAboutToml } from "./licenses.ts";
 
 const allowed = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "MPL-2.0"];
 
@@ -41,10 +41,19 @@ test("about.toml の accepted は、license-policy.json の allowed と pending 
 test("許可外の検出用の設定は、pending を accepted から除くだけで、ほかは変えない", () => {
   const toml = readFileSync("about.toml", "utf8");
   const policy = JSON.parse(readFileSync("scripts/release/license-policy.json", "utf8")) as Policy;
-  const strict = strictAboutToml(toml, policy.pending);
+  const strict = strictAboutToml(toml, policy.allowed);
   expect(readAccepted(strict)).toEqual(policy.allowed);
+  // accepted の書き方（1 行・行末のコメント・CRLF）に左右されない
+  expect(readAccepted(strictAboutToml('accepted = ["MIT", "BSL-1.0"] # x\r\n', policy.allowed))).toEqual(policy.allowed);
   expect(strict).toContain("ignore-build-dependencies = true");
   expect(strict).toContain("targets = [");
+});
+
+test("ライセンス文書のファイル名：LICENSE 系は読み、ソースファイルや別の名前は読まない", () => {
+  for (const ok of ["LICENSE", "LICENSE.md", "LICENSE-MIT", "LICENSE_APACHE-2.0", "License.txt", "COPYING", "NOTICE"]) {
+    expect(LICENSE_FILE.test(ok), ok).toBe(true);
+  }
+  for (const no of ["licenses", "licensee.js", "README.md", "unlicense-x"]) expect(LICENSE_FILE.test(no), no).toBe(false);
 });
 
 test("同梱するフォントの確認：今のフォルダは通り、知らないファイル・フォルダ・足りないライセンス文書を見つける", () => {

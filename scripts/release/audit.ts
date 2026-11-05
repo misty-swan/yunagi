@@ -54,7 +54,10 @@ export function classifyCargoAudit(run: Run): Outcome {
   }
   // 指摘なしと言うのは、道具が成功したときだけ（結果の形が読めても、終了コードが 0 でなければ信用しない）
   if (run.status !== 0) {
-    return { kind: "unavailable", reason: `cargo audit の終了コードが ${run.status}\n${lastLines(run.stderr)}` };
+    return {
+      kind: "unavailable",
+      reason: `cargo audit は結果を返したが、終了コードが ${run.status}（脆弱性の指摘は無い。道具の設定が警告を拒否している・道具の失敗など。つなぎ直しても直らないときは設定を見る）\n${lastLines(run.stderr)}`,
+    };
   }
   return { kind: "ok", notes };
 }
@@ -80,26 +83,45 @@ export function classifyPnpmAudit(run: Run): Outcome {
     return { kind: "vulnerable", findings, notes: [] };
   }
   if (run.status !== 0) {
-    return { kind: "unavailable", reason: `pnpm audit の終了コードが ${run.status}\n${lastLines(run.stderr)}` };
+    return {
+      kind: "unavailable",
+      reason: `pnpm audit は結果を返したが、終了コードが ${run.status}（脆弱性の指摘は無い。道具の失敗など。つなぎ直しても直らないときは設定を見る）\n${lastLines(run.stderr)}`,
+    };
   }
   return { kind: "ok", notes: [] };
+}
+
+/**
+ * GitHub Actions の注釈（`::error::` など）の本文に入れる文字列を、ワークフローコマンドの決まりで
+ * エスケープする。助言の題名などは外部のデータなので、改行や `%` で別のコマンドを差し込めないようにする。
+ */
+export function escapeData(text: string): string {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+/** 複数行の文を、行頭が `::` で始まらないよう字下げして出す（外部の出力が、コマンドとして読まれないように） */
+function indent(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => `  ${l}`)
+    .join("\n");
 }
 
 /** 結果を表示して、終了コードを返す */
 export function report(name: string, outcome: Outcome): number {
   if (outcome.kind === "ok") {
-    for (const n of outcome.notes) console.log(`::warning title=${name}（中止しない警告）::${n}`);
+    for (const n of outcome.notes) console.log(`::warning title=${name}（中止しない警告）::${escapeData(n)}`);
     console.log(`${name}: 指摘なし（警告 ${outcome.notes.length} 件は中止しない）`);
     return 0;
   }
   if (outcome.kind === "vulnerable") {
-    for (const n of outcome.notes) console.log(`::warning title=${name}（中止しない警告）::${n}`);
-    for (const f of outcome.findings) console.error(`::error title=${name}: 脆弱性の指摘::${f}`);
+    for (const n of outcome.notes) console.log(`::warning title=${name}（中止しない警告）::${escapeData(n)}`);
+    for (const f of outcome.findings) console.error(`::error title=${name}: 脆弱性の指摘::${escapeData(f)}`);
     console.error(`${name}: 脆弱性の指摘が ${outcome.findings.length} 件ある。依存を上げるか、修正版が無ければ許可リストに載せる（07 3章）`);
     return 1;
   }
-  console.error(`::error title=${name}: 検査できなかった::${outcome.reason.split("\n")[0]}`);
-  console.error(`${name}: 検査できなかった（脆弱性の指摘ではない）。つなぎ直してから再実行する\n${outcome.reason}`);
+  console.error(`::error title=${name}: 検査できなかった::${escapeData(outcome.reason.split("\n")[0])}`);
+  console.error(`${name}: 検査できなかった（脆弱性の指摘ではない）。つなぎ直してから再実行する\n${indent(outcome.reason)}`);
   return 2;
 }
 

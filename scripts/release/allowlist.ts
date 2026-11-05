@@ -71,7 +71,7 @@ export function checkAllowlist(list: Allowlist, today: string): string[] {
 
 /** `.cargo/audit.toml` の `ignore = [...]` にある ID（コメントの行は読まない） */
 export function readCargoIgnore(toml: string): string[] {
-  return readStringArray(toml, "ignore");
+  return readStringArray(toml, "ignore", "advisories");
 }
 
 /** `pnpm-workspace.yaml` の `auditConfig.ignoreGhsas` にある ID（コメントの行は読まない） */
@@ -86,8 +86,8 @@ export function readPnpmIgnore(yaml: string): string[] {
       continue;
     }
     if (inList) {
-      const m = /^\s*-\s*(\S+)\s*$/.exec(line);
-      if (m) ids.push(m[1]);
+      const m = /^\s*-\s*(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/.exec(line);
+      if (m) ids.push(m[1] ?? m[2] ?? m[3]);
       else inList = false;
     }
   }
