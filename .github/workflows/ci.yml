@@ -1,6 +1,9 @@
 # 開発用 CI：PR と main への push のたびに、手元と同じ `pnpm check` を走らせる。
 # 配布用のビルド（docs/release/07-build-and-distribution.md 3章）とは別のもの。
 # 検査の中身は package.json の `check` にだけ書き、ここには書かない（手元と CI をずらさないため）。
+# 例外は macOS・Windows の `rust-test`：Node.js・pnpm を入れずに時間を省くため、`check:rust`・`check:clippy`
+# と同じコマンドを直接書く（変えるときは package.json の同じ行と合わせる。テストには OS ごとの失敗を
+# 一度に全部出す `--no-fail-fast` を足している）。
 # `uses:` の action は、コミットの SHA で固定し、行末に版を書く（決まりと更新の仕方は
 # docs/release/07-build-and-distribution.md 3章「action の固定」。更新は .github/dependabot.yml の Dependabot）。
 name: CI
@@ -74,12 +77,46 @@ jobs:
       - name: pnpm check
         run: pnpm check
 
+  # この PR が Rust に関係するファイルを変えたか（macOS・Windows のジョブを走らせるか）を決める。
+  # main への push は常に走らせる。関係するファイル：コア・CLI・API・アプリ本体（crates/・src-tauri/）、
+  # 依存と道具の版（Cargo.toml・Cargo.lock・rust-toolchain.toml・clippy.toml・.cargo/）、この定義。
+  changes:
+    name: 変更の確認
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE" HEAD | grep -qE '^(crates/|src-tauri/|\.cargo/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|clippy\.toml$|\.github/workflows/ci\.yml$)'; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # macOS・Windows では、Rust のテスト（`cargo test --workspace`）と clippy だけを走らせる。
   # OS ごとに分かれたコード（`yunagi.lock` のロック、Windows だけの再試行など）は Linux ではコンパイルもされないため、
   # 各 OS でのコンパイルとテストが要る。画面の型チェック・テスト、書式、文書の生成は OS で変わらないので Linux だけで足りる
   # （範囲と時間の見込みの理由は docs/release/08-test-plan.md 2章）。
+  #
+  # macOS は 1 分が Linux の約 10 倍、Windows は約 1.7 倍の料金になる（非公開リポジトリ。08 の 2章）ので、
+  # PR では Rust に関係するファイルを変えたときだけ走らせる。main への push では常に走らせる。
   rust-test:
     name: cargo test (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -112,15 +149,3 @@ jobs:
       - name: cargo clippy
         if: success() || failure()
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-      - name: TEMP each CLI test (macOS)
-        if: (success() || failure()) && matrix.name == 'macOS'
-        run: |
-          names=$(sed -n '/let tests: \[(&str, fn())\]/,/^    \];/p' crates/cli/tests/cli/uninstall.rs | grep -oE '"uninstall_[a-z_]+"' | tr -d '"')
-          for n in $names; do
-            cargo test -p yunagi-cli --test cli --locked -- "$n" > /tmp/out.txt 2>&1 || { echo "FAIL $n"; grep -E 'panicked|assertion|left:|right:' -A2 /tmp/out.txt | head -8; }
-          done
-
-      - name: TEMP timing (Windows slow tests)
-        if: always() && matrix.name == 'Windows'
-        run: RUSTC_BOOTSTRAP=1 cargo test -p yunagi-core --lib --locked -- -Z unstable-options --report-time --test-threads=1 corrupted use_existing_data_dir_refuses
