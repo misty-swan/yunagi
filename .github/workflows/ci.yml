@@ -1,9 +1,7 @@
 # 開発用 CI：PR と main への push のたびに、手元と同じ `pnpm check` を走らせる。
 # 配布用のビルド（docs/release/07-build-and-distribution.md 3章）とは別のもの。
 # 検査の中身は package.json の `check` にだけ書き、ここには書かない（手元と CI をずらさないため）。
-# 例外は macOS・Windows の `rust-test`：Node.js・pnpm を入れずに時間を省くため、`check:rust`・`check:clippy`
-# と同じコマンドを直接書く（変えるときは package.json の同じ行と合わせる。テストには OS ごとの失敗を
-# 一度に全部出す `--no-fail-fast` を足している）。
+# macOS・Windows の `rust-test` も、`pnpm run check:rust`・`check:clippy`・`check:doc` を呼ぶ（コマンドを写さない）。
 # `uses:` の action は、コミットの SHA で固定し、行末に版を書く（決まりと更新の仕方は
 # docs/release/07-build-and-distribution.md 3章「action の固定」。更新は .github/dependabot.yml の Dependabot）。
 name: CI
@@ -79,7 +77,10 @@ jobs:
 
   # この PR が Rust に関係するファイルを変えたか（macOS・Windows のジョブを走らせるか）を決める。
   # main への push は常に走らせる。関係するファイル：コア・CLI・API・アプリ本体（crates/・src-tauri/）、
-  # 依存と道具の版（Cargo.toml・Cargo.lock・rust-toolchain.toml・clippy.toml・.cargo/）、この定義。
+  # Rust のテストが読む画面側の生成物（src/lib/bindings.ts）、依存と道具の版（Cargo.toml・Cargo.lock・
+  # rust-toolchain.toml・clippy.toml・.cargo/）、この定義。
+  # PR の検査は「PR を main に合わせた結合コミット」で動くので、その第 1 の親（main の先頭）との差が
+  # この PR の変更になる（main が進んでいても、ほかの PR の変更を含めない）。差が求められないときは走らせる側に倒す。
   changes:
     name: 変更の確認
     runs-on: ubuntu-24.04
@@ -89,26 +90,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Changed files
         id: diff
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "rust=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only "$BASE" HEAD | grep -qE '^(crates/|src-tauri/|\.cargo/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|clippy\.toml$|\.github/workflows/ci\.yml$)'; then
-            echo "rust=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "rust=false" >> "$GITHUB_OUTPUT"
+          rust=true
+          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only HEAD^1 HEAD); then
+            if printf '%s\n' "$files" | grep -qE '^(crates/|src-tauri/|\.cargo/|src/lib/bindings\.ts$|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|clippy\.toml$|\.github/workflows/ci\.yml$)'; then
+              rust=true
+            else
+              rust=false
+            fi
           fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "rust=$rust"
 
-  # macOS・Windows では、Rust のテスト（`cargo test --workspace`）と clippy だけを走らせる。
-  # OS ごとに分かれたコード（`yunagi.lock` のロック、Windows だけの再試行など）は Linux ではコンパイルもされないため、
-  # 各 OS でのコンパイルとテストが要る。画面の型チェック・テスト、書式、文書の生成は OS で変わらないので Linux だけで足りる
+  # macOS・Windows では、Rust のテスト・clippy・文書の生成だけを走らせる（手元と同じ `pnpm run check:rust`・
+  # `check:clippy`・`check:doc`）。OS ごとに分かれたコード（`yunagi.lock` のロック、Windows だけの再試行など）は
+  # Linux ではコンパイルもされず、clippy の警告や文書のリンク切れも見えないため、各 OS で検査が要る。
+  # 書式・画面の型チェック・テストは OS で変わらないので Linux だけで足りる
   # （範囲と時間の見込みの理由は docs/release/08-test-plan.md 2章）。
   #
   # macOS は 1 分が Linux の約 10 倍、Windows は約 1.7 倍の料金になる（非公開リポジトリ。08 の 2章）ので、
@@ -143,9 +147,27 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
+      # 検査の中身を package.json の `check:*` にだけ置くため、pnpm 経由で動かす
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # どれかが落ちても、残りも走らせて、OS ごとの失敗を 1 回の実行で全部出す
       - name: cargo test
-        run: cargo test --workspace --locked --no-fail-fast
+        run: pnpm run check:rust
 
       - name: cargo clippy
         if: success() || failure()
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: pnpm run check:clippy
+
+      - name: cargo doc
+        if: success() || failure()
+        run: pnpm run check:doc

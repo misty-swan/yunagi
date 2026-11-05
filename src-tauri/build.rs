@@ -4,6 +4,8 @@ fn main() {
     // Windows の結合テスト（tests/）の実行ファイルにも、Common Controls v6 を要求するマニフェストを埋め込む。
     // tauri-build は本体の実行ファイルにだけマニフェストを埋めるので、`tauri::test` で窓を作るテストは、
     // 起動の前に STATUS_ENTRYPOINT_NOT_FOUND（0xc0000139）で落ちる。
+    // `-tests` は tests/ の結合テストだけに効き、src/ の中の単体テスト（`cfg(test)`）には効かない。
+    // 窓を作る試験は tests/ に置くこと（単体テストで窓を作る必要が出たら、ここを見直す）。
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {

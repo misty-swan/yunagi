@@ -42,7 +42,7 @@ fn own_vars() -> &'static [&'static str] {
     yunagi_core::storage::dir_mismatch::default_dir_vars(data_dir::Platform::current())
 }
 
-/// 試験の場所。環境変数 `XDG_DATA_HOME` を試験ごとに変える（1 つのスレッドで順に走らせるので安全）。
+/// 試験の場所。環境変数（`own_vars`）を試験ごとに変える（1 つのスレッドで順に走らせるので安全）。
 struct World {
     root: tempfile::TempDir,
 }
@@ -65,21 +65,24 @@ impl World {
         self.root.path().join(name)
     }
 
-    /// 自分の既定ディレクトリの元（`XDG_DATA_HOME`）を `name` の下にする。
+    /// 自分の既定ディレクトリの元を `name` の下にする。Linux は `XDG_DATA_HOME` を `name` にし
+    /// （`HOME` は別の `home`）、macOS は既定ディレクトリが `HOME` だけから決まる（`XDG_DATA_HOME` を
+    /// 見ない）ので `HOME` を `name` にする。
     fn use_data_home(&self, name: &str) {
-        let home = self.path("home");
+        let home = if cfg!(target_os = "macos") {
+            self.path(name)
+        } else {
+            self.path("home")
+        };
         // SAFETY: 試験は 1 つのスレッドで順に走り、環境変数を読む処理は呼び出しの間だけ動く
         unsafe {
             std::env::set_var("HOME", &home);
             std::env::set_var("XDG_DATA_HOME", self.path(name));
-            // macOS の既定ディレクトリは XDG_DATA_HOME を見ず、HOME だけから決まる
-            if cfg!(target_os = "macos") {
-                std::env::set_var("HOME", self.path(name));
-            }
         }
     }
 
-    /// 自分の既定ディレクトリ（`XDG_DATA_HOME/yunagi`）。
+    /// 自分の既定ディレクトリ（動いている OS のもの。Linux は `XDG_DATA_HOME/yunagi`、
+    /// macOS は `HOME/Library/Application Support/Yunagi`）。
     fn own(&self) -> DefaultDir {
         data_dir::default_dir().unwrap()
     }

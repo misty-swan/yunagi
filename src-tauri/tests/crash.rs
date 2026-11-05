@@ -290,6 +290,8 @@ fn kill_while_typing_loses_at_most_half_a_second(after: Duration) -> Vec<Duratio
     let typed = t.typed.clone();
     let saves = std::mem::take(&mut t.saves);
     let slowest = saves.iter().max().copied().unwrap_or_default();
+    // 失敗したときの切り分け用：送ったまま書き終えていない保存の経過時間（ランナーの停止か、書き込みの遅さか）
+    let waiting = t.in_flight.map(|(_, sent_at)| sent_at.elapsed());
     t.core.kill();
     let len = persisted_len();
     assert!(len <= typed.len());
@@ -300,8 +302,9 @@ fn kill_while_typing_loses_at_most_half_a_second(after: Duration) -> Vec<Duratio
         .count();
     assert!(
         len >= must_keep,
-        "kept {len} of {} characters; {must_keep} were typed more than {MAX_LOSS:?} before the kill (slowest save {slowest:?})",
-        typed.len()
+        "kept {len} of {} characters; {must_keep} were typed more than {MAX_LOSS:?} before the kill (slowest save {slowest:?}, {} saves finished, a save still waiting for {waiting:?})",
+        typed.len(),
+        saves.len()
     );
     saves
 }

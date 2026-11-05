@@ -1198,15 +1198,15 @@ mod tests {
             // Windows は開いたままのファイルを消せないので、閉じていない接続の元のデータベース
             // （と WAL・共有メモリ）が「消せなかったもの」として返る（backups/ は消えている）。
             // 移した後の確認のため、閉じた今、自分で消す
-            let mut expected = vec![
-                database_path(&d.default),
-                db_files::side_files(&database_path(&d.default))[0].clone(),
-                db_files::side_files(&database_path(&d.default))[1].clone(),
-            ];
-            let mut leftovers = report.leftovers.clone();
-            expected.sort();
-            leftovers.sort();
-            assert_eq!(leftovers, expected);
+            // 残るのは元のデータベースと、その横のファイルだけ（WAL・共有メモリが残るかは SQLite の
+            // タイミング次第なので、本体を含み、すべてがそれらのどれかであることを確かめる）
+            let old_files = db_files::with_side_files(&database_path(&d.default));
+            assert!(report.leftovers.contains(&database_path(&d.default)));
+            assert!(
+                report.leftovers.iter().all(|p| old_files.contains(p)),
+                "{:?}",
+                report.leftovers
+            );
             // 接続を閉じると、SQLite が WAL と共有メモリを自分で消すことがある（もう無くてよい）
             for path in &report.leftovers {
                 let _ = fs::remove_file(path);
