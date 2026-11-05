@@ -39,7 +39,12 @@ const TIMING: Timing = Timing {
 
 /// 既定ディレクトリを求める環境変数の名前（この OS のもの。Linux は `XDG_DATA_HOME` と `HOME`、macOS は `HOME`）。
 fn own_vars() -> &'static [&'static str] {
-    yunagi_core::storage::dir_mismatch::default_dir_vars(data_dir::Platform::current())
+    // 製品の `default_dir_vars` を使わず、期待を別に書く（同じ関数で求めると、試験が当たり前になるため）
+    if cfg!(target_os = "macos") {
+        &["HOME"]
+    } else {
+        &["XDG_DATA_HOME", "HOME"]
+    }
 }
 
 /// 試験の場所。環境変数（`own_vars`）を試験ごとに変える（1 つのスレッドで順に走らせるので安全）。
@@ -50,12 +55,16 @@ struct World {
 impl World {
     fn new() -> Self {
         // macOS の既定の一時フォルダ（/var/folders/…）は長く、ソケットのパスが上限（103 文字）を超えるので、
-        // 短い /tmp の下に作る（/tmp は macOS では /private/tmp への別名なので、実際の場所に直す）
-        let base = std::fs::canonicalize("/tmp").unwrap();
-        let root = tempfile::Builder::new()
-            .prefix("yg")
-            .tempdir_in(base)
-            .unwrap();
+        // macOS だけ、短い /tmp の下に作る（/tmp は /private/tmp への別名なので、実際の場所に直す）
+        let root = if cfg!(target_os = "macos") {
+            let base = std::fs::canonicalize("/tmp").unwrap();
+            tempfile::Builder::new()
+                .prefix("yg")
+                .tempdir_in(base)
+                .unwrap()
+        } else {
+            tempfile::tempdir().unwrap()
+        };
         let w = Self { root };
         w.use_data_home("xdg");
         w

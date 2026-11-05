@@ -114,7 +114,9 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # main への push のほか、手動の実行も保存する（非公開の間は main で走らないため。走らないと、
+          # 手動の実行が毎回キャッシュなしで、Windows の約 15 分の料金がかかる）
+          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
           cache-on-failure: true
 
       # 検査の中身を package.json の `check:*` にだけ置くため、pnpm 経由で動かす
