@@ -111,3 +111,7 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: TEMP timing (Windows slow tests)
+        if: always() && matrix.name == 'Windows'
+        run: RUSTC_BOOTSTRAP=1 cargo test -p yunagi-core --lib --locked -- -Z unstable-options --report-time --test-threads=1 corrupted use_existing_data_dir_refuses

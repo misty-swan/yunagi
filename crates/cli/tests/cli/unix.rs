@@ -2306,6 +2306,9 @@ fn show_too_long(w: &World) {
     // 頼り。起動したプロセスが、引き渡して成功で終われば成功
     let long = "a".repeat(120);
     w.use_data_home(&long);
+    // macOS の既定ディレクトリは XDG_DATA_HOME ではなく HOME から決まるので、HOME も長くする
+    // SAFETY: 試験は 1 つのスレッドで順に走り、環境変数を読む処理は呼び出しの間だけ動く
+    unsafe { std::env::set_var("HOME", w.path(&long)) };
     assert!(yunagi_api::socket_path(&w.own()).as_os_str().len() > 107);
     let marker = w.path("launched");
     let handover = app_script(

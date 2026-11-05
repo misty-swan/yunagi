@@ -1022,10 +1022,16 @@ mod tests {
 
     #[test]
     fn default_dir_macos() {
-        let env = env_of(&[("HOME", "/Users/a")]);
+        // Windows 上でテストしても Unix 形式のパスは絶対と判定されないので、動いている OS で絶対のパスを使う
+        let home = if cfg!(windows) {
+            r"C:\Users\a"
+        } else {
+            "/Users/a"
+        };
+        let env = env_of(&[("HOME", home)]);
         assert_eq!(
             default_dir_for(Platform::MacOs, env).unwrap(),
-            PathBuf::from("/Users/a/Library/Application Support/Yunagi")
+            Path::new(home).join("Library/Application Support/Yunagi")
         );
     }
 
@@ -1188,7 +1194,25 @@ mod tests {
         let report = d.change(&new_dir).unwrap();
         drop(conn);
 
-        assert_eq!(report, ChangeReport::default());
+        if cfg!(windows) {
+            // Windows は開いたままのファイルを消せないので、閉じていない接続の元のデータベース
+            // （と WAL・共有メモリ）が「消せなかったもの」として返る（backups/ は消えている）。
+            // 移した後の確認のため、閉じた今、自分で消す
+            let mut expected = vec![
+                database_path(&d.default),
+                db_files::side_files(&database_path(&d.default))[0].clone(),
+                db_files::side_files(&database_path(&d.default))[1].clone(),
+            ];
+            let mut leftovers = report.leftovers.clone();
+            expected.sort();
+            leftovers.sort();
+            assert_eq!(leftovers, expected);
+            for path in &report.leftovers {
+                fs::remove_file(path).unwrap();
+            }
+        } else {
+            assert_eq!(report, ChangeReport::default());
+        }
         assert_eq!(resolve_data_dir(&d.dd).unwrap(), new_dir);
         assert_eq!(read_note(&new_dir), "kept in wal");
         assert_eq!(
