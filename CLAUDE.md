@@ -48,6 +48,7 @@ PC画面全体を「その日の仕事ノート1枚」として使う、エン�
 ### ブランチと PR
 
 - ブランチ名は `yun-<番号>-<英語の短い説明>`（例：`yun-12-autosave`）。
+- 例外：Dependabot が出す PR（GitHub Actions の action の更新。`docs/release/07-build-and-distribution.md` 3章「action の固定」）は、課題を作らず、タイトルとブランチ名も既定のままにする。`/code-review` は行わず、オーナーが差分と release notes を見てマージする。
 - PR のタイトルに課題番号を入れ、本文に `Fixes YUN-<番号>` を書く。
   - これで Linear の課題に PR が紐付き、マージすると自動で Done になる。
   - 課題の一部だけを進める PR は `Part of YUN-<番号>` と書く（マージしても Done にならない）。
