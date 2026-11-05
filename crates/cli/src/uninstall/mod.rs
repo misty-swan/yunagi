@@ -285,16 +285,29 @@ fn execute(purge: bool, env: &Env, io: &mut Io<'_>) -> Result<i32, ErrorObject> 
     }
 
     let mut report = Report::default();
-    // 2. データと WebView のデータ
-    if purge {
-        purge_data(s, &plan, &dir, &mut report)?;
-    }
-    // 3. アプリ本体と CLI のリンク
-    remove_app(s, &layout, &dir, purge, &mut report)?;
-    // 4. macOS・Linux は、最後にロックファイルと既定ディレクトリ（開いたまま消せる）
-    if purge && s.platform != Platform::Windows {
-        report.remove(&s.guard, &dir.path().join(LOCK_FILE_NAME));
-        remove_default_dir_if_empty(s, dir.path(), &mut report);
+    if s.platform == Platform::Windows {
+        // 後片付け（終了を待つので、先に始めても消し始めない）を始められなければ、データも消さない
+        // （アプリが残ったままデータだけ消えるのを避ける）
+        if !remove_windows_app(s, &layout, &dir, purge, &mut report) {
+            report.notes.push("Nothing else was removed.".to_owned());
+        } else if purge {
+            purge_data(s, &plan, &dir, &mut report)?;
+        }
+    } else {
+        // 2. データと WebView のデータ
+        if purge {
+            purge_data(s, &plan, &dir, &mut report)?;
+        }
+        // 3. アプリ本体と CLI のリンク
+        remove_app(s, &layout, &mut report);
+        // 4. 最後にロックファイルと既定ディレクトリ（開いたまま消せる）。既定ディレクトリが
+        // リンクのときは、先のロックファイルには触れず、リンクだけを消す
+        if purge {
+            if !is_symlink(dir.path()) {
+                report.remove(&s.guard, &dir.path().join(LOCK_FILE_NAME));
+            }
+            remove_default_dir_if_empty(s, dir.path(), &mut report);
+        }
     }
     drop(lock);
     Ok(print_report(io, &report, purge, &dir))
@@ -398,7 +411,10 @@ impl Plan {
             }
             default_dir = exists(dir.path()).then(|| dir.path().to_path_buf());
         }
-        let windows_path = (s.platform == Platform::Windows).then(|| layout.root.join("bin"));
+        // Windows：`PATH` に `bin` がある（読めないときも、あるものとして挙げる）ときだけ
+        let windows_path = (s.platform == Platform::Windows)
+            .then(|| layout.root.join("bin"))
+            .filter(|bin| path_has_entry(s, bin).unwrap_or(true));
         Ok(Self {
             app,
             webview,
@@ -482,8 +498,9 @@ fn purge_data(
         }
     }
     for path in &plan.webview {
+        let failed_before = report.failed.len();
         report.remove(&s.guard, path);
-        if Some(path) == plist.as_ref() && exists(path) {
+        if Some(path) == plist.as_ref() && report.failed.len() == failed_before && exists(path) {
             report.fail(
                 path,
                 "it came back after it was removed (macOS wrote it again)",
@@ -497,18 +514,8 @@ fn purge_data(
     Ok(())
 }
 
-/// アプリ本体と CLI のリンクを消す。Windows は、`PATH` から `bin` を外し、アンインストーラーを切り離す。
-fn remove_app(
-    s: &Setup,
-    layout: &Layout,
-    dir: &DefaultDir,
-    purge: bool,
-    report: &mut Report,
-) -> Result<(), ErrorObject> {
-    if s.platform == Platform::Windows {
-        remove_windows_app(s, layout, dir, purge, report);
-        return Ok(());
-    }
+/// macOS・Linux：アプリ本体と CLI のリンク（Linux はデスクトップエントリも）を消す。
+fn remove_app(s: &Setup, layout: &Layout, report: &mut Report) {
     if let Some(link) = &layout.link {
         remove_link(s, link, &layout.root, report);
     }
@@ -516,7 +523,6 @@ fn remove_app(
         report.remove(&s.guard, entry);
     }
     report.remove(&s.guard, &layout.root);
-    Ok(())
 }
 
 /// `~/.local/bin/yunagi`：この導入を指すシンボリックリンクのときだけ消す。そうでなければ（手で置いた
@@ -553,13 +559,15 @@ fn points_into(link: &Path, root: &Path) -> bool {
     fs::canonicalize(link).is_ok_and(|real| real.starts_with(real_root))
 }
 
+/// Windows：切り離した後片付けを始め、ユーザーの `PATH` から `bin` を外す。後片付けを始められたら
+/// `true`（始められなければ、何も変えずに `false`）。
 fn remove_windows_app(
     s: &Setup,
     layout: &Layout,
     dir: &DefaultDir,
     purge: bool,
     report: &mut Report,
-) {
+) -> bool {
     let bin = layout.root.join("bin");
     let uninstaller = layout.root.join("uninstall.exe");
     let uninstaller = exists(&uninstaller).then_some(uninstaller);
@@ -573,15 +581,14 @@ fn remove_windows_app(
     // 既定ディレクトリがシンボリックリンクなら、後片付け（`Remove-Item -Recurse`）に渡さない
     // （先に触れないため）。リンクだけ消し、先は消し残りとして挙げる
     let mut default_dir = purge.then(|| dir.path().to_path_buf());
-    if default_dir.is_some() && is_symlink(dir.path()) {
-        note_linked_data(dir.path(), report);
-        report.remove_empty_dir(&s.guard, dir.path());
+    let linked_dir = default_dir.is_some() && is_symlink(dir.path());
+    if linked_dir {
         default_dir = None;
     }
     for path in std::iter::once(&layout.root).chain(default_dir.iter()) {
         if let Err(why) = s.guard.check(path) {
             report.fail(path, why);
-            return;
+            return false;
         }
     }
     let detach = Detach {
@@ -608,8 +615,12 @@ fn remove_windows_app(
                 &layout.root,
                 format!("could not start the uninstaller ({e}); nothing else was changed"),
             );
-            return;
+            return false;
         }
+    }
+    if linked_dir {
+        note_linked_data(dir.path(), report);
+        report.remove_empty_dir(&s.guard, dir.path());
     }
     // 後片付けを始めてから `PATH` を直す（始められなかったときに、半端に外した状態にしない）
     match remove_from_user_path(s, &bin) {
@@ -622,10 +633,11 @@ fn remove_windows_app(
             format!("could not take it out of your user PATH ({e}); remove it by hand in the environment variable settings"),
         ),
     }
+    true
 }
 
-/// ユーザーの `PATH` から `bin` を外す。外したら `true`。
-fn remove_from_user_path(s: &Setup, bin: &Path) -> Result<bool, String> {
+/// `bin` を外した後のユーザーの `PATH`。外すものが無ければ `None`。
+fn path_without_entry(s: &Setup, bin: &Path) -> Result<Option<String>, String> {
     let current = s.ops.read_user_path()?;
     let lookup = |name: &str| {
         s.vars
@@ -633,7 +645,20 @@ fn remove_from_user_path(s: &Setup, bin: &Path) -> Result<bool, String> {
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .and_then(|(_, v)| v.to_str().map(str::to_owned))
     };
-    match windows::remove_entry(&current, &bin.to_string_lossy(), &lookup) {
+    Ok(windows::remove_entry(
+        &current,
+        &bin.to_string_lossy(),
+        &lookup,
+    ))
+}
+
+fn path_has_entry(s: &Setup, bin: &Path) -> Result<bool, String> {
+    path_without_entry(s, bin).map(|new| new.is_some())
+}
+
+/// ユーザーの `PATH` から `bin` を外す。外したら `true`。
+fn remove_from_user_path(s: &Setup, bin: &Path) -> Result<bool, String> {
+    match path_without_entry(s, bin)? {
         Some(new) => s.ops.write_user_path(&new).map(|()| true),
         None => Ok(false),
     }

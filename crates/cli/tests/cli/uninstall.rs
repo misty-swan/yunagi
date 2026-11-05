@@ -715,14 +715,17 @@ fn windows_does_not_change_the_path_when_the_cleanup_cannot_start() {
     let root = w.root.join("local/Programs/Yunagi");
     let exe = root.join("bin/yunagi.exe");
     w.write(&exe, "cli");
+    w.use_app();
     w.ops.state().user_path = root.join("bin").display().to_string();
     w.ops.state().spawn_fails = true;
     let out = w.run(
         w.setup(Platform::Windows, &exe),
-        &["uninstall"],
+        &["uninstall", "--purge"],
         "y\n",
         true,
     );
+    // アプリが残ったままデータだけ消えることもない
+    assert!(w.default_dir().join("yunagi.db").exists() && w.webview_dir().exists());
     assert_eq!(out.code, 1);
     assert_eq!(w.ops.state().written_path, None);
 }

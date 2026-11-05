@@ -59,7 +59,8 @@ fn comparable(entry: &str, vars: Vars<'_>) -> String {
     let expanded = expand_env(entry.trim(), vars);
     expanded
         .trim_matches('"')
-        .trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .trim_end_matches('\\')
         .to_lowercase()
 }
 
@@ -216,6 +217,7 @@ mod tests {
             r"c:\users\A\appdata\local\programs\yunagi\BIN\",
             r"%LOCALAPPDATA%\Programs\Yunagi\bin",
             r#""C:\Users\a\AppData\Local\Programs\Yunagi\bin""#,
+            "C:/Users/a/AppData/Local/Programs/Yunagi/bin/",
         ] {
             assert_eq!(
                 remove_entry(&format!("C:\\x;{same}"), bin, &vars).as_deref(),
