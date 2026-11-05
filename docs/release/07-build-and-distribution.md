@@ -14,10 +14,17 @@
 | OS | アーキテクチャ | 配布物 | CLI の配置 |
 | --- | --- | --- | --- |
 | macOS | arm64、x86_64 | `Yunagi_<ver>_<arch>.app.tar.gz` | アプリに同梱した `yunagi` を `~/.local/bin` にリンク（Homebrew の場合は Cask の `binary` で Homebrew の bin にリンク） |
-| Linux | x86_64、arm64 | `Yunagi_<ver>_<arch>.AppImage`、`.tar.gz`、`.deb`（任意） | `~/.local/opt/yunagi/bin/yunagi` を `~/.local/bin/yunagi` からリンク |
+| Linux | x86_64、arm64 | `Yunagi_<ver>_<arch>.AppImage`、`yunagi-cli_<ver>_<arch>.tar.gz`、`.tar.gz`、`.deb`（任意） | `~/.local/opt/yunagi/bin/yunagi` を `~/.local/bin/yunagi` からリンク |
 | Windows | x86_64、arm64 | `Yunagi_<ver>_<arch>-setup.exe`（NSIS、ユーザー単位インストール） | `%LOCALAPPDATA%\Programs\Yunagi\bin` を PATH に追加 |
 
 - CLI は GUI とは別のコンソール用バイナリ `yunagi`（Windows は `yunagi.exe`）として同梱する。
+- **配布物の名前と中身**（2026-11-05 決定。YUN-95。インストールスクリプトと配布用 CI（YUN-97）が食い違わないための取り決め）：
+  - `<ver>` は `1.2.3` の形（`v` を付けない）。Release のタグは `v<ver>`。ファイルは `<配布元>/v<ver>/<ファイル名>` に置く（`<配布元>` は公開リポジトリの Release のダウンロード先。公開リポジトリが決まるまで仮の表記）。
+  - `<arch>` は `x86_64` か `arm64` の 2 つだけ。Tauri がビルドで付ける名前（`amd64`・`aarch64`・`x64` など）は、配布用 CI がこの名前に付け替えてから Release に置く。インストールスクリプトは `uname -m` の `aarch64` を `arm64` に読み替える。
+  - 配布物ごとに `<ファイル名>.sha256` を添える。中身は `sha256sum` の出力と同じ `<64 桁の 16 進のハッシュ>  <ファイル名>` の 1 行。スクリプトは最初の欄だけを読む。
+  - Linux の `yunagi-cli_<ver>_<arch>.tar.gz` は CLI だけの配布物で、中身はルートに置いた実行ファイル `yunagi` 1 つ（AppImage の中の CLI は外から取り出せないため、別に出す。`install.sh` が使う）。
+  - macOS の `.app.tar.gz` は、ルートに `Yunagi.app` を持ち、CLI は `Yunagi.app/Contents/MacOS/yunagi` に置く。
+  - Windows の `-setup.exe` は、`bin\yunagi.exe` と `Yunagi.exe` を含む（インストール先の `bin\yunagi.exe` が `install.ps1` の確認の対象。4.2）。
 - アプリ内自動更新の対象は、macOS の `.app.tar.gz`、Linux の AppImage、Windows の NSIS 版に限る。Linux の `.tar.gz`・`.deb` は自動更新の対象外で、再導入で更新する（利用者ガイドに明記する）。
 - 配布するアーキテクチャは、テスト計画書 3章の対象環境と1対1で対応させる。リリース前に検証できなかった組み合わせは、ダウンロード案内とリリースノートで「試験提供（動作未保証）」と明記する。
 
@@ -62,15 +69,22 @@ curl -fsSL https://<公式サイト>/install.sh | sh
 スクリプトの動作：
 
 1. OS とアーキテクチャを判定する。未対応の組み合わせは明確なメッセージで終了する。
-2. 最新版（または `YUNAGI_VERSION` で指定した版）の配布物と `.sha256` を取得する。
-3. ハッシュを照合し、一致しなければ中止する。
+2. 最新版（または `YUNAGI_VERSION` で指定した版）の配布物と `.sha256` を取得する。最新版は、GitHub の「latest」ではなく `https://<公式サイト>/latest.json` の `version` で決める（スクリプトは、ファイルの中で最初に現れる `"version"` の値を読む。そのため `latest.json` は、トップレベルの `version` を、入れ子の項目（`platforms` など）より前に置く。Tauri Updater の形式でも守れる。配布用 CI（YUN-97）の条件。取り下げ時に `latest.json` を前の版に戻すと、新しく入れる利用者も前の版になるため。2章）。スクリプトが使う基本の道具（`curl`・`tar`・`awk`・`grep`・`sed`・`head`・`mktemp`・`cp`・`mv`・`ln` など）が無ければ、最初に名前を挙げて止まる。取得元は環境変数で変えられる：`YUNAGI_VERSION`（`v` が付いていても付いていなくてもよい）、`YUNAGI_BASE_URL`（配布物の取得元。既定は 2章の `<配布元>`。末尾の `/` は取り除く）、`YUNAGI_LATEST_URL`（`latest.json` の場所）。`YUNAGI_BASE_URL`・`YUNAGI_LATEST_URL` は、試験で偽の配布元に向けるためにも使う（4.5）。公開リポジトリと公式サイトが決まるまで、スクリプトの既定値は仮の表記（`<` を含む）のままで、そのまま実行すると変数を設定するよう案内して終わる。決まったら、既定値を `install/install.sh`・`install/install.ps1` の先頭の 2 か所で書き換える。
+3. ハッシュを照合し、一致しなければ中止する（何も置かない。配布物ごとに、取得した直後に照合する）。
 4. macOS：`~/Applications/Yunagi.app` に展開する（`/Applications` は権限が必要なため既定にしない）。Linux：`~/.local/opt/yunagi/Yunagi.AppImage` に AppImage を、`~/.local/opt/yunagi/bin/yunagi` に CLI を置き、デスクトップエントリを `~/.local/share/applications/io.github.misty-swan.yunagi.desktop` に作成する（ファイル名はアプリの識別子にそろえる。アーキテクチャ設計書 6.1）。アプリ本体の配置先は、データディレクトリ（アーキテクチャ設計書 6章。Linux は `~/.local/share/yunagi/`）とは別にする。
-5. CLI を `~/.local/bin/yunagi` にリンクし、PATH に含まれていなければ追記方法を案内する。
+   - Linux は AppImage と、CLI だけの配布物 `yunagi-cli_<ver>_<arch>.tar.gz`（2章）の 2 つを取って照合する。CLI の配布物は、中身を確かめてから置く（`yunagi` が無ければ何も置かずに止まる）。置くときは、AppImage と CLI の両方を置き場所の隣の一時ファイルにコピーし終えてから、両方の名前を付け替える（動いているアプリを途中の状態で上書きしない。コピーの途中の失敗（容量不足など）で、新旧が混ざった状態にならない。失敗したときの一時ファイルは終了時に消す）。AppImage の起動には FUSE（`fusermount`）が要るので、見つからなければ、置き終えた後に、FUSE 2 のパッケージを入れるか `--appimage-extract-and-run` で起動するよう知らせる（導入は止めない）。
+   - デスクトップエントリは、`$XDG_DATA_HOME/applications/`（`XDG_DATA_HOME` が無い・絶対パスでないときは `~/.local/share/applications/`。データディレクトリと同じ決め方）に作る。`Exec` は AppImage の絶対パスを `"` で囲んで書く。アイコンは付けない（AppImage の中のアイコンは取り出さない。見た目は実機で見る。08 4.9）。置き場所（`$HOME`）に `"`・`\`・`$`・`` ` ``・`%` のどれかが含まれるときは、`Exec` の書き方が起動側ごとに違うので、デスクトップエントリを作らず、そう知らせる（ほかは置く）。
+   - macOS は、`~/Applications/Yunagi.app` が既にあれば `Yunagi.app.old` に退けてから新しいものを置き、置けなければ元に戻して止まる（動いているアプリや容量不足で置換に失敗しても、動いていたものを失わない）。展開した中に `Contents/MacOS/yunagi` が無ければ、何も置かずに止まる。
+   - macOS で `uname -m` が `x86_64` でも、`sysctl -n hw.optional.arm64` が `1` なら arm64 の Mac（Rosetta の下のシェル）なので、arm64 の配布物を取る。
+   - CLI の配布物は全体を一時フォルダに展開し、`yunagi` を探す（メンバー名が `yunagi` でも `./yunagi` でもよい）。
+5. CLI を `~/.local/bin/yunagi` にリンクし（macOS は `~/Applications/Yunagi.app/Contents/MacOS/yunagi` へ、Linux は `~/.local/opt/yunagi/bin/yunagi` へ）、PATH に含まれていなければ追記方法を案内する。`~/.local/bin/yunagi` が、リンクでない普通のファイルとして既にあるときは、利用者のものかもしれないので上書きせず、そう伝えて止まる（リンクなら付け替える）。
 6. 何をどこに置いたかを最後に一覧表示する。
-7. Linux で Wayland のセッション（環境変数 `XDG_SESSION_TYPE` が `wayland` のとき、または `x11` 以外で `WAYLAND_DISPLAY` があるとき。操作仕様書 1章と同じ判定）のときは、最後に次の案内も表示する（Wayland では、OS 全体のショートカット Mod+Shift+D が効かないことがあるため。操作仕様書 1章「OS 全体の操作」、アーキテクチャ設計書 3.5）。デスクトップ環境のキーボード設定で、コマンド `~/.local/bin/yunagi show`（PATH に含まれていれば `yunagi show`）を好きなキーに割り当てる。設定の場所は、GNOME は「設定」→「キーボード」→「キーボードショートカット」→「カスタムショートカット」、KDE Plasma は「システム設定」→「キーボード」→「ショートカット」→「カスタムショートカットを追加」、Hyprland・Sway などのタイル型は設定ファイルのキー割当（`bind`）。同じ手順を利用者ガイド 2章にも載せる。案内には、`--note` の別のキー（ノートモードで開く `yunagi show --note`）と、ふだんのシェルの `PATH` を引き継がないキー設定では、フルパス `~/.local/bin/yunagi show`（展開した `$HOME` の実際のパス）で書く必要があることも添える（2026-11-04 決定。YUN-88）。`yunagi show`（アプリを前面に出す CLI。MCP・CLI 仕様書 3.3）は作ってあり、案内は設定の Wayland の文（操作仕様書 1章「OS 全体の操作」。文言は `src/lib/i18n_settings.ts` の `operation.global.wayland`）と食い違わせない（コマンド名は `yunagi show`）。install.sh 自体はまだ無い（Linear の YUN-95 が install.sh・install.ps1 を作り、この案内を出すことを完了の条件に書いた）。
+7. Linux で Wayland のセッション（環境変数 `XDG_SESSION_TYPE` が `wayland` のとき、または `x11` 以外で `WAYLAND_DISPLAY` があるとき。操作仕様書 1章と同じ判定）のときは、最後に次の案内も表示する（Wayland では、OS 全体のショートカット Mod+Shift+D が効かないことがあるため。操作仕様書 1章「OS 全体の操作」、アーキテクチャ設計書 3.5）。デスクトップ環境のキーボード設定で、コマンド `~/.local/bin/yunagi show`（PATH に含まれていれば `yunagi show`）を好きなキーに割り当てる。設定の場所は、GNOME は「設定」→「キーボード」→「キーボードショートカット」→「カスタムショートカット」、KDE Plasma は「システム設定」→「キーボード」→「ショートカット」→「カスタムショートカットを追加」、Hyprland・Sway などのタイル型は設定ファイルのキー割当（`bind`）。同じ手順を利用者ガイド 2章にも載せる。案内には、`--note` の別のキー（ノートモードで開く `yunagi show --note`）と、ふだんのシェルの `PATH` を引き継がないキー設定では、フルパス `~/.local/bin/yunagi show`（展開した `$HOME` の実際のパス）で書く必要があることも添える（2026-11-04 決定。YUN-88）。`yunagi show`（アプリを前面に出す CLI。MCP・CLI 仕様書 3.3）は作ってあり、案内は設定の Wayland の文（操作仕様書 1章「OS 全体の操作」。文言は `src/lib/i18n_settings.ts` の `operation.global.wayland`）と食い違わせない（コマンド名は `yunagi show`）。案内は `install/install.sh` の `wayland_note` が出す（2026-11-05 決定。YUN-95）。英語で書く（設定の英語の文と同じ「assign the command yunagi show to a key of your choice」を含め、端末の文字コードに左右されないため）。コマンドは、`~/.local/bin` が `PATH` に入っていなければフルパス（展開した `$HOME` の実際のパス）で、入っていれば `yunagi show` と書く。
+   - スクリプトの表示は、すべて英語にする（CLI と同じ。端末の文字コードに左右されない）。
+   - `yunagi show` は、実行ファイルの実体（リンクを解いたもの）からアプリを探す。`~/.local/bin/yunagi` はリンクなので、`crates/cli/src/show.rs` は `current_exe` の結果を `canonicalize` してから `locate` に渡す（macOS の `current_exe` はリンクのままのパスを返すことがある。Linux は `/proc/self/exe` で実体が返る）。
    - `yunagi show` がアプリを探す場所（MCP・CLI 仕様書 3.3）は、この章の配置に合わせている：Linux は `~/.local/opt/yunagi/bin/yunagi` の隣の `../Yunagi.AppImage`、macOS は `yunagi` を含む `Yunagi.app`、Windows は `bin\yunagi.exe` の隣の `..\Yunagi.exe`。配置をこれと変えるときは、探す場所（`crates/cli/src/show.rs` の `locate`）も変える。tar.gz・.deb の置き場所は、まだ決めていない（決めるときに足す）。
 
-スクリプトは `sh` 互換で書き、`set -eu` で途中失敗時に止める。スクリプト自体も公開リポジトリで公開し、内容を確認してから実行する方法（ダウンロードして読む手順）を導入ガイドに載せる。
+スクリプトは `sh` 互換（POSIX sh。`[[ ]]`・`pipefail`・`local` は使わない）で書き、`set -eu` で途中失敗時に止める。スクリプト自体も公開リポジトリで公開し、内容を確認してから実行する方法（ダウンロードして読む手順）を導入ガイドに載せる。置き場所は、リポジトリ直下の `install/install.sh`（2026-11-05 決定。YUN-95）。`curl | sh` はダウンロードが途中で切れても、そこまでを実行してしまう。そのため、本体を関数 `main` に包み、最後の行で呼ぶ（全体が届かないと何も動かない）。一時フォルダは、終了時に必ず消す。
 
 ### 4.2 Windows（install.ps1）
 
@@ -78,7 +92,7 @@ curl -fsSL https://<公式サイト>/install.sh | sh
 irm https://<公式サイト>/install.ps1 | iex
 ```
 
-動作は install.sh に準じる。`Yunagi_<ver>_<arch>-setup.exe` を取得してハッシュを照合し、`/S`（サイレント）で実行する。配置先は `%LOCALAPPDATA%\Programs\Yunagi\`、スタートメニューにショートカットを作成し、ユーザー環境変数の PATH に `bin` を追加する。
+動作は install.sh に準じる（環境変数も同じ。4.1 の 2）。`Yunagi_<ver>_<arch>-setup.exe` を取得してハッシュを照合し、`/S`（サイレント）と `/D=%LOCALAPPDATA%\Programs\Yunagi`（インストール先。NSIS の決まりで最後の引数にし、引用符を付けない）で実行する（2026-11-05 決定。YUN-95。インストーラーの既定の場所に頼らず、スクリプトが指定する）。Yunagi のアプリ（`%LOCALAPPDATA%\Programs\Yunagi\Yunagi.exe`。CLI の `yunagi.exe` は数えない。MCP サーバーなどが動いていても止めないため）が動いているときは、インストーラーを動かす前に、終了してから実行し直すよう知らせて止まる。終了コードが 0 でなければ止まり、`%LOCALAPPDATA%\Programs\Yunagi\bin\yunagi.exe` があることを確かめてから、ユーザー環境変数の PATH に `bin` を追加する（レジストリの `HKCU\Environment\Path` を、`%VAR%` を展開せずに読み、`REG_EXPAND_SZ` のまま書く。`[Environment]::SetEnvironmentVariable` は使わない。展開した文字列で上書きして、利用者の `%JAVA_HOME%\bin` のような項目を固定してしまうため。レジストリを直接書くと実行中のプログラムに変更が伝わらないので、使い捨てのユーザー変数を .NET で設定して消し、環境の変更の通知（`WM_SETTINGCHANGE`）を送る）（すでにあれば足さない。`%VAR%` を展開した形が同じ場所のときも足さない。空の項目は捨てる。大文字小文字と末尾の `\` の違いは同じとみなす）。同じ端末では、現在のセッションの `PATH` にも足し、すぐ `yunagi` を使えるようにする。スタートメニューのショートカットは、インストーラー（NSIS）が作る（スクリプトは作らない）。インストーラーは `bin\yunagi.exe` を含める（2章。配布用 CI の側の条件）。失敗は例外（エラーの表示）で知らせる。`irm | iex` は終了コードを返さないので、自動化で失敗を見分けたいときは、スクリプトを保存して実行する（導入ガイドの「内容を確認してから実行する」手順）。表示は install.sh と同じく英語。スクリプトは ASCII だけで書く（Windows PowerShell 5.1 は、BOM の無いファイルを ANSI で読むため）。
 
 ### 4.3 Homebrew（macOS）
 
@@ -92,7 +106,15 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 
 ### 4.4 アンインストール
 
-`yunagi uninstall` で、アプリ本体と CLI のリンク、Linux ではデスクトップエントリ（4.1）を削除する。データディレクトリは既定では残し、`--purge` 指定時のみ削除する。
+`yunagi uninstall` で、アプリ本体と CLI のリンク、Linux ではデスクトップエントリ（4.1）を削除する。データディレクトリは既定では残し、`--purge` 指定時のみ削除する。消すものは、インストールスクリプトが最後に一覧表示するもの（4.1 の 6、4.2）と一致させる：macOS は `~/Applications/Yunagi.app` と `~/.local/bin/yunagi`、Linux は `~/.local/opt/yunagi/`・`~/.local/bin/yunagi`・デスクトップエントリ、Windows は Yunagi 自身のアンインストーラーと、ユーザーの PATH に足した `bin`（`yunagi uninstall` の実装はまだ無い。作るときに、この一覧を消す対象にする。置く物を変えたら、ここと 4.1・4.2 を同時に直す。Linear の YUN-44 の完了の条件に、この一覧を参照する 1 行を足した）。
+
+### 4.5 インストールスクリプトの試験
+
+2026-11-05 決定（YUN-95）。試験は `install/install.test.ts`（vitest。`pnpm check` の `check:web` に含まれ、開発用 CI でも走る）。利用者の環境には触れない：`HOME`・`XDG_*` は一時フォルダにし、`uname` は偽物に差し替え、配布物は一時フォルダに作った偽の配布元から `file://` で取る。
+
+- `install.sh`：OS・アーキテクチャの組み合わせ（Linux x86_64・arm64、macOS arm64・x86_64、未対応の OS・アーキテクチャ）、配置先とリンク、デスクトップエントリ、置き換え、ハッシュ不一致・`.sha256` の形の誤り・配布物が無い・CLI が入っていないときに何も置かないこと、版の指定（`v` 付き・形の誤り・`latest.json`）、`curl | sh` と同じ標準入力からの実行、PATH の案内、Wayland の案内（判定 3 通りと内容。設定の英語の文との食い違い）。
+- `install.ps1`：PowerShell（`pwsh`）があるときだけ走る（無ければ飛ばす。GitHub の ubuntu-24.04 には入っている）。構文、ASCII だけであること、アーキテクチャの読み替え、版の形、`.sha256` の読み方、ハッシュの照合、PATH への追加の判定。インストーラーを動かす部分は、Windows でしか動かないので、実機で確かめる（テスト計画書 4.9）。
+- 飛ばされた試験は成功とは別なので、`pwsh` のある CI でも走ることを、CI のログで確かめる。
 
 ## 5. 自動更新
 
