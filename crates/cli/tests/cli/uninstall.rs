@@ -107,9 +107,10 @@ impl Sandbox {
     fn xdg(&self) -> PathBuf {
         self.root.join("xdg")
     }
-    /// 既定ディレクトリ（`XDG_DATA_HOME/yunagi`）。
+    /// 既定ディレクトリ。`uninstall` は動いている OS の既定ディレクトリ（環境変数から求める）を見るので、
+    /// Linux は `XDG_DATA_HOME/yunagi`、macOS は `HOME/Library/Application Support/Yunagi`。
     fn default_dir(&self) -> PathBuf {
-        self.xdg().join("yunagi")
+        data_dir::default_dir().unwrap().path().to_path_buf()
     }
     fn webview_dir(&self) -> PathBuf {
         self.xdg().join(APP_IDENTIFIER)

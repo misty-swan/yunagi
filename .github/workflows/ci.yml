@@ -116,7 +116,7 @@ jobs:
       - name: TEMP each CLI test (macOS)
         if: (success() || failure()) && matrix.name == 'macOS'
         run: |
-          names=$(sed -n '/let tests: \[(&str, Test)/,/^    \];/p' crates/cli/tests/cli/unix.rs | grep -oE '"[a-z_]+"' | tr -d '"')
+          names=$(sed -n '/let tests: \[(&str, fn())\]/,/^    \];/p' crates/cli/tests/cli/uninstall.rs | grep -oE '"uninstall_[a-z_]+"' | tr -d '"')
           for n in $names; do
             cargo test -p yunagi-cli --test cli --locked -- "$n" > /tmp/out.txt 2>&1 || { echo "FAIL $n"; grep -E 'panicked|assertion|left:|right:' -A2 /tmp/out.txt | head -8; }
           done
