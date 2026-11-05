@@ -331,8 +331,15 @@ fn start(options: &Options, note: bool, warn: &dyn Fn(&str)) -> Result<Launched,
         Launch::Os => {
             // `current_exe` は、macOS などではリンク（`~/.local/bin/yunagi`）のままのパスを返すことがある。
             // アプリを探す起点は実体（`Yunagi.app` の中の実行ファイル。ビルド・配布手順書 4.1）なので、リンクを解く
+            // Windows にはリンク経由の起動が無く、`canonicalize` は `\\?\` 付きのパスを返すので、解くのは UNIX 系だけ。
             let exe = std::env::current_exe()
-                .and_then(std::fs::canonicalize)
+                .and_then(|p| {
+                    if cfg!(unix) {
+                        std::fs::canonicalize(p)
+                    } else {
+                        Ok(p)
+                    }
+                })
                 .map_err(|e| {
                     warn(&format!(
                         "yunagi: could not find this command's location: {}",

@@ -58,6 +58,10 @@ detect_platform() {
     arm64 | aarch64) ARCH=arm64 ;;
     *) die "unsupported architecture: $uname_m (supported: x86_64, arm64)." ;;
   esac
+  # A shell running under Rosetta on an Apple Silicon Mac says x86_64. Install the native build.
+  if [ "$OS" = macos ] && [ "$ARCH" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
+    ARCH=arm64
+  fi
 }
 
 # Fails when a URL still holds the placeholder text.
@@ -138,8 +142,10 @@ install_linux() {
   download_verified "$cli"
 
   # Check what is inside before anything is placed.
-  tar -xzf "$TMP_DIR/$cli" -C "$TMP_DIR" yunagi || die "$cli does not hold the 'yunagi' command."
-  [ -f "$TMP_DIR/yunagi" ] || die "$cli does not hold the 'yunagi' command."
+  # (Unpack everything so that both "yunagi" and "./yunagi" as the member name work.)
+  mkdir -p "$TMP_DIR/cli"
+  tar -xzf "$TMP_DIR/$cli" -C "$TMP_DIR/cli" || die "could not unpack $cli"
+  [ -f "$TMP_DIR/cli/yunagi" ] || die "$cli does not hold the 'yunagi' command."
 
   mkdir -p "$root/bin"
 
@@ -147,7 +153,7 @@ install_linux() {
   cp "$TMP_DIR/$appimage" "$root/.Yunagi.AppImage.new"
   chmod 755 "$root/.Yunagi.AppImage.new"
   mv -f "$root/.Yunagi.AppImage.new" "$root/Yunagi.AppImage"
-  cp "$TMP_DIR/yunagi" "$root/bin/.yunagi.new"
+  cp "$TMP_DIR/cli/yunagi" "$root/bin/.yunagi.new"
   chmod 755 "$root/bin/.yunagi.new"
   mv -f "$root/bin/.yunagi.new" "$root/bin/yunagi"
 
@@ -157,17 +163,27 @@ install_linux() {
     *) data_home="$HOME/.local/share" ;; # XDG says a relative path must be ignored
   esac
   desktop="$data_home/applications/$APP_ID.desktop"
-  mkdir -p "$data_home/applications"
-  printf '%s\n' \
-    '[Desktop Entry]' \
-    'Type=Application' \
-    'Name=Yunagi' \
-    'Comment=Daily work note for engineers' \
-    "Exec=\"$root/Yunagi.AppImage\"" \
-    'Terminal=false' \
-    'Categories=Office;Utility;' \
-    >"$desktop.new"
-  mv -f "$desktop.new" "$desktop"
+  desktop_note=''
+  case "$root" in
+    *[\"\\\$\`%]*)
+      # These characters need escaping rules in the Exec line that differ between launchers. Skip the entry.
+      desktop=''
+      desktop_note="No desktop entry was made because $root contains a character that the desktop entry format treats specially (one of \" \\ \$ \` %)."
+      ;;
+    *)
+      mkdir -p "$data_home/applications"
+      printf '%s\n' \
+        '[Desktop Entry]' \
+        'Type=Application' \
+        'Name=Yunagi' \
+        'Comment=Daily work note for engineers' \
+        "Exec=\"$root/Yunagi.AppImage\"" \
+        'Terminal=false' \
+        'Categories=Office;Utility;' \
+        >"$desktop.new"
+      mv -f "$desktop.new" "$desktop"
+      ;;
+  esac
 
   make_link "$root/bin/yunagi" "$HOME/.local/bin/yunagi"
 
@@ -176,7 +192,11 @@ install_linux() {
   say "  app            $root/Yunagi.AppImage"
   say "  command        $root/bin/yunagi"
   say "  link           $HOME/.local/bin/yunagi"
-  say "  desktop entry  $desktop"
+  if [ -n "$desktop" ]; then
+    say "  desktop entry  $desktop"
+  else
+    say "$desktop_note"
+  fi
 }
 
 install_macos() {
@@ -188,8 +208,20 @@ install_macos() {
   [ -x "$TMP_DIR/stage/Yunagi.app/Contents/MacOS/yunagi" ] || die "$app does not hold Yunagi.app with the 'yunagi' command."
 
   mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/Yunagi.app"
-  mv "$TMP_DIR/stage/Yunagi.app" "$HOME/Applications/Yunagi.app" || die "could not move Yunagi.app into $HOME/Applications"
+  # Keep the old app aside until the new one is in place, so a failed move does not lose a working install.
+  dest="$HOME/Applications/Yunagi.app"
+  rm -rf "$dest.old"
+  if [ -e "$dest" ]; then
+    mv "$dest" "$dest.old" || die "could not replace $dest (is Yunagi running?). Quit it and run this again."
+  fi
+  if ! mv "$TMP_DIR/stage/Yunagi.app" "$dest"; then
+    rm -rf "$dest"
+    if [ -e "$dest.old" ]; then
+      mv "$dest.old" "$dest"
+    fi
+    die "could not move Yunagi.app into $HOME/Applications. The previous install was kept."
+  fi
+  rm -rf "$dest.old"
 
   make_link "$HOME/Applications/Yunagi.app/Contents/MacOS/yunagi" "$HOME/.local/bin/yunagi"
 
@@ -203,7 +235,7 @@ install_macos() {
 # True when DIR is one of the entries of PATH.
 in_path() {
   case ":${PATH:-}:" in
-    *":$1:"*) return 0 ;;
+    *":$1:"* | *":$1/:"*) return 0 ;;
     *) return 1 ;;
   esac
 }

@@ -110,6 +110,10 @@ function Install-Yunagi {
         Assert-Sha256 $setup (Read-Sha256File (Get-Content -Raw -LiteralPath "$setup.sha256"))
         Write-Host "Verified $name"
 
+        if (Get-Process -Name 'Yunagi' -ErrorAction SilentlyContinue) {
+            Stop-Install 'Yunagi is running. Quit it and run this again.'
+        }
+
         # NSIS: /S is silent, /D sets the install folder (it must be the last argument, without quotes).
         $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Yunagi'
         $process = Start-Process -FilePath $setup -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
@@ -120,10 +124,17 @@ function Install-Yunagi {
             Stop-Install "the installer finished but $binDir\yunagi.exe was not found."
         }
 
-        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-        $newPath = Get-PathWithEntry $userPath $binDir
-        if ($newPath) {
-            [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+        # Read and write the registry value directly: [Environment]::GetEnvironmentVariable expands %VAR%
+        # and SetEnvironmentVariable would store the expanded text as a plain string.
+        $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        try {
+            $userPath = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $newPath = Get-PathWithEntry $userPath $binDir
+            if ($newPath) {
+                $envKey.SetValue('Path', $newPath, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+            }
+        } finally {
+            $envKey.Close()
         }
         if ($null -ne (Get-PathWithEntry $env:Path $binDir)) {
             $env:Path = "$env:Path;$binDir"

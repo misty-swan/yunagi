@@ -202,6 +202,29 @@ describe("install.sh：Linux", () => {
     expect(existsSync(join(home, ".local/opt"))).toBe(false);
   });
 
+  it("CLI の配布物のメンバー名が ./yunagi でも読める", () => {
+    put(`Yunagi_${VERSION}_x86_64.AppImage`, "appimage-bytes");
+    const src = mkdtempSync(join(root, "dot-"));
+    writeFileSync(join(src, "yunagi"), "#!/bin/sh\n", { mode: 0o755 });
+    const out = join(root, "dot.tar.gz");
+    expect(spawnSync("tar", ["-czf", out, "-C", src, "."]).status).toBe(0);
+    put(`yunagi-cli_${VERSION}_x86_64.tar.gz`, readFileSync(out));
+    const r = run();
+    expect(r.err).toBe("");
+    expect(r.status).toBe(0);
+  });
+
+  it("置き場所に Exec で特別に扱われる文字（%）があるときは、デスクトップエントリを作らずに知らせる", () => {
+    stockRelease("x86_64");
+    const odd = join(root, "home%odd");
+    mkdirSync(odd);
+    const r = run({ HOME: odd });
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("No desktop entry was made");
+    expect(existsSync(join(odd, ".local/share/applications"))).toBe(false);
+    expect(existsSync(join(odd, ".local/opt/yunagi/Yunagi.AppImage"))).toBe(true);
+  });
+
   it("curl | sh と同じく、標準入力から読ませても動く", () => {
     stockRelease("x86_64");
     const r = run({}, { s: "Linux", m: "x86_64" }, true);
@@ -287,6 +310,26 @@ describe("install.sh：macOS", () => {
     expect(existsSync(join(home, "Applications/Yunagi.app/old"))).toBe(false);
   });
 
+  it("Rosetta の下のシェル（uname が x86_64）でも、arm64 の Mac なら arm64 の配布物を取る", () => {
+    stockRelease("arm64");
+    writeFileSync(join(bin, "sysctl"), '#!/bin/sh\necho 1\n', { mode: 0o755 });
+    const r = run({}, { s: "Darwin", m: "x86_64" });
+    expect(r.err).toBe("");
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("(macos, arm64)");
+  });
+
+  it("展開に失敗したときは、前の Yunagi.app を残す", () => {
+    stockRelease("arm64");
+    mkdirSync(join(home, "Applications/Yunagi.app"), { recursive: true });
+    writeFileSync(join(home, "Applications/Yunagi.app/old"), "old");
+    // 展開の結果に Contents/MacOS/yunagi が無い配布物
+    put(`Yunagi_${VERSION}_arm64.app.tar.gz`, tarGz({ "Yunagi.app/other": "x" }));
+    const r = run({}, { s: "Darwin", m: "arm64" });
+    expect(r.status).toBe(1);
+    expect(readFileSync(join(home, "Applications/Yunagi.app/old"), "utf8")).toBe("old");
+  });
+
   it("x86_64 の Mac は x86_64 の配布物を取る", () => {
     stockRelease("x86_64");
     const r = run({}, { s: "Darwin", m: "x86_64" });
@@ -301,6 +344,12 @@ describe("install.sh：PATH の案内", () => {
     const r = run();
     expect(r.out).toContain("is not in your PATH");
     expect(r.out).toContain('export PATH="$HOME/.local/bin:$PATH"');
+  });
+
+  it("PATH に末尾が / の形で入っていても、入っているとみなす", () => {
+    stockRelease("x86_64");
+    const r = run({ PATH: `${home}/.local/bin/:${bin}:${process.env.PATH}` });
+    expect(r.out).not.toContain("is not in your PATH");
   });
 
   it("PATH に入っていれば案内しない", () => {
