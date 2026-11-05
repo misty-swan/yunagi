@@ -93,6 +93,20 @@ test("更新して再起動は、入力中の内容を保存し終えてから�
   s.stop();
 });
 
+test("保存し終えられなかった（flush が失敗した）ときも、更新を始めず、断った表示を出す", async () => {
+  current = available;
+  const s = store({
+    flush: async () => {
+      throw new Error("ipc");
+    },
+  });
+  await vi.waitFor(() => expect(s.canInstall).toBe(true));
+  await s.install();
+  expect(s.refused).toBe(true);
+  expect(calls).not.toContain("install_update");
+  s.stop();
+});
+
 test("保存できていないときは、更新を始めない（refused）", async () => {
   current = available;
   const s = store({ saveFailing: () => true });

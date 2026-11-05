@@ -90,7 +90,13 @@ export class UpdateStore {
   async install() {
     if (!this.canInstall) return;
     this.refused = false;
-    await this.#deps.flush();
+    try {
+      await this.#deps.flush();
+    } catch {
+      // 保存し終えられなかった（保存できていないのと同じ扱い）
+      this.refused = true;
+      return;
+    }
     if (this.#deps.saveFailing()) {
       this.refused = true;
       return;

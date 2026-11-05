@@ -184,6 +184,13 @@ impl UpdateService {
             }
             Some(true) => {}
         }
+        // ダウンロード中・再起動中は確認しない（表示も、入れ替える版も動かさない）
+        if matches!(
+            *lock(&self.state),
+            UpdateState::Downloading { .. } | UpdateState::Restarting
+        ) {
+            return self.timing.interval;
+        }
         let result = backend.check();
         // 確認している間に無効にされたら、結果を表示に使わない
         if (self.hooks.update_check)() == Some(true) {
@@ -215,6 +222,11 @@ impl UpdateService {
             *state,
             UpdateState::Downloading { .. } | UpdateState::Restarting
         ) {
+            return;
+        }
+        // ダウンロードに失敗した版が見つかり続けても、失敗の表示を消さない（利用者が選び直すか、
+        // 配布元が取り下げるまで残す）
+        if matches!(&*state, UpdateState::Failed { version } if *version == found.version) {
             return;
         }
         let next = UpdateState::Available {
@@ -339,9 +351,19 @@ fn supported<R: Runtime>(app: &AppHandle<R>) -> bool {
     }
 }
 
+/// 確認の通信の時間切れ。止まった通信で確認のスレッドが長く塞がらないようにする。
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// ダウンロードの通信の時間切れ（大きな配布物でも足りる長さ）。
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 10);
+
 #[derive(Default)]
 struct Pending {
+    /// 最後の確認で見つけた版。確認のたびに入れ替わる。
     update: Option<Update>,
+    /// ダウンロードを始めた版と、そのバイト列。確認が入れ替えても変わらない（ダウンロードや入れ替えの
+    /// 途中に確認が重なっても、ダウンロードした版を入れ替えられるように）。
+    chosen: Option<Update>,
     bytes: Option<Vec<u8>>,
 }
 
@@ -366,11 +388,14 @@ impl<R: Runtime> Backend for PluginBackend<R> {
     }
 
     fn check(&self) -> Result<Option<Found>, String> {
-        let updater = self.app.updater().map_err(|e| e.to_string())?;
+        let updater = self
+            .app
+            .updater_builder()
+            .timeout(CHECK_TIMEOUT)
+            .build()
+            .map_err(|e| e.to_string())?;
         let update = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
-        let mut pending = lock(&self.pending);
-        pending.bytes = None;
-        pending.update = update.clone();
+        lock(&self.pending).update = update.clone();
         Ok(update.map(|u| Found {
             version: u.version,
             notes: clip_notes(u.body),
@@ -378,10 +403,14 @@ impl<R: Runtime> Backend for PluginBackend<R> {
     }
 
     fn download(&self, progress: &mut dyn FnMut(Option<u8>)) -> Result<(), String> {
-        let update = lock(&self.pending)
-            .update
-            .clone()
-            .ok_or("no update has been found")?;
+        let update = {
+            let mut pending = lock(&self.pending);
+            let mut update = pending.update.clone().ok_or("no update has been found")?;
+            update.timeout = Some(DOWNLOAD_TIMEOUT);
+            pending.chosen = Some(update.clone());
+            pending.bytes = None;
+            update
+        };
         let mut downloaded = 0u64;
         let bytes = tauri::async_runtime::block_on(update.download(
             |chunk, total| {
@@ -398,7 +427,7 @@ impl<R: Runtime> Backend for PluginBackend<R> {
     fn install(&self) -> Result<(), String> {
         let (update, bytes) = {
             let mut pending = lock(&self.pending);
-            (pending.update.clone(), pending.bytes.take())
+            (pending.chosen.clone(), pending.bytes.take())
         };
         let (Some(update), Some(bytes)) = (update, bytes) else {
             return Err("the update has not been downloaded".into());
@@ -731,6 +760,27 @@ mod tests {
     }
 
     #[test]
+    fn a_failure_stays_shown_while_the_same_version_is_found_and_goes_when_withdrawn() {
+        let rig = rig(Some(true), Timing::default());
+        rig.service.tick();
+        *rig.fake.download_result.lock().unwrap() = Err("offline".into());
+        rig.service.install();
+        let failed = UpdateState::Failed {
+            version: "1.2.0".into(),
+        };
+        rig.service.tick();
+        assert_eq!(rig.service.state(), failed);
+        // 別の版が見つかったら、その版の通知に替わる
+        *rig.fake.found.lock().unwrap() = Ok(Some(found("1.3.0")));
+        rig.service.tick();
+        assert_eq!(rig.service.state(), available("1.3.0"));
+        // 取り下げられたら消える
+        *rig.fake.found.lock().unwrap() = Ok(None);
+        rig.service.tick();
+        assert_eq!(rig.service.state(), UpdateState::None);
+    }
+
+    #[test]
     fn a_failed_install_restarts_the_old_version() {
         let rig = rig(Some(true), Timing::default());
         rig.service.tick();
@@ -763,7 +813,9 @@ mod tests {
             progress: Some(10),
         };
         rig.service.set(downloading.clone());
+        // ダウンロード中は、確認の通信もしない（入れ替える版を動かさないため）
         rig.service.tick();
+        assert_eq!(rig.fake.checks(), 1);
         assert_eq!(rig.service.state(), downloading);
         *rig.update_check.lock().unwrap() = Some(false);
         rig.service.tick();
