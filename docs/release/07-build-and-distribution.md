@@ -123,7 +123,13 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 
 `yunagi uninstall` で、アプリ本体と CLI のリンク、Linux ではデスクトップエントリ（4.1）を削除する。データディレクトリは既定では残し、`--purge` 指定時のみ、データと WebView のデータ（アーキテクチャ設計書 6.5。置き場所と消す決まり）を削除する。アプリが動いているときは何も消さずに止まる。消すものは、インストールスクリプトが最後に一覧表示するもの（4.1 の 6、4.2）と一致させる：macOS は `~/Applications/Yunagi.app` と `~/.local/bin/yunagi`、Linux は `~/.local/opt/yunagi/`・`~/.local/bin/yunagi`・デスクトップエントリ、Windows は Yunagi 自身のアンインストーラー（インストール先とスタートメニューのショートカットを消す）と、ユーザーの PATH に足した `bin`。Linux のデスクトップエントリは `$XDG_DATA_HOME/applications/io.github.misty-swan.yunagi.desktop`（4.1 の 4 と同じ決め方）。macOS の `Yunagi.app.old`（置換の途中で退けるもの）は、置換が終わると消えるので、消す対象に数えない。
 
-Homebrew の Cask で入れたとき（`yunagi` の実体が `~/Applications/Yunagi.app` や `~/.local/opt/yunagi/` の外にあるとき）は、何も消さずに `brew uninstall --cask --zap yunagi`（`--purge` なら `--zap` 付き、なしなら付けない）を案内して止まる。Cask が置いたものを `yunagi` が消すと、Homebrew の記録と食い違うため（2026-11-05 決定。YUN-44）。
+どの導入かは、実行している `yunagi` の実体（リンクを解いたパス）で見分ける（2026-11-05 決定。YUN-44）。
+
+- 正規の置き場所（4.1・4.2 が置く場所）：macOS は `~/Applications/Yunagi.app/` の中、Linux は `~/.local/opt/yunagi/` の中、Windows は `%LOCALAPPDATA%\Programs\Yunagi\` の中。この中なら、上の一覧を消す。
+- Homebrew の Cask：実体が `/Applications/Yunagi.app/` の中にあるか、パスに `/Caskroom/yunagi/` を含むとき。何も消さずに、`brew uninstall --cask yunagi`（`--purge` のときは `--zap` 付き）を案内して止まる。Cask が置いたものを `yunagi` が消すと、Homebrew の記録と食い違うため。
+- どちらでもないとき（開発用のビルド、置き場所を決めていない tar.gz・.deb など）：見つけたパスを示し、何も消さずに止まる。
+
+`--purge` で Windows が失敗しないための順番（動いている `yunagi.exe` はアンインストーラーが消す `bin\` の中にあり、ロックファイルは消すデータの中にあるため。macOS・Linux も同じ順にそろえる）：①`yunagi.lock`（アーキテクチャ設計書 4.2）を取る（取れなければ、アプリかエージェントの MCP サーバーが動いているので、何も消さずに、それらを終了するよう知らせて止まる）、②WebView のデータと保存先の `yunagi.db` などを消す、③ロックを離して既定ディレクトリを消す、④アプリ本体と CLI のリンク（Windows は NSIS のアンインストーラー）を消す。Windows では、④のアンインストーラーを `yunagi.exe` から切り離して起動し、終わりを待たずに `yunagi.exe` が終了する。
 
 `yunagi uninstall` の実装はまだ無い（Linear の YUN-99 が作る。完了の条件でこの一覧を参照する）。置く物を変えたら、ここと 4.1・4.2・4.3 の `zap` を同時に直す。2026-11-05 に、この一覧が `install/install.sh`・`install/install.ps1` の置くものと一致していることを確かめた。
 
