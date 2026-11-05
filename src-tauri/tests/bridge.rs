@@ -1024,11 +1024,19 @@ fn agent_admin_commands(_: &Path) {
     assert_eq!(list["nextBefore"], Value::Null);
     // 一覧は確認済みにしない
     assert_eq!(unseen_now(), base + 1);
-    // 件数ちょうどで返したときは、続きの目印を返す
+    // ちょうど 1 件で終わるときは、続きの目印を返さない（空の続きを出さない）
     let page = h.ok(
         "list_changes",
         json!({ "client": worker, "unseenOnly": false, "before": null, "limit": 1 }),
     );
+    assert_eq!(page["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(page["nextBefore"], Value::Null);
+    // 続きがあるときは、返した最後の記録を目印にする（共有のデータベースには、ほかの記録もある）
+    let page = h.ok(
+        "list_changes",
+        json!({ "client": null, "unseenOnly": false, "before": null, "limit": 1 }),
+    );
+    assert_eq!(page["changes"][0]["id"], changes[0]["id"]);
     assert_eq!(page["nextBefore"], changes[0]["id"]);
     assert_eq!(
         h.err(

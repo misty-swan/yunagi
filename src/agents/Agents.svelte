@@ -24,15 +24,15 @@
 
   let root = $state<HTMLElement | null>(null);
 
-  // 開いたら権限の一覧を読み、閉じるときは確かめている途中の操作を捨てる
+  // 開いている間は権限の一覧を出す（変更が届くたびに読み直す。出し終えると、確かめている途中の操作を捨てる）
   $effect(() => {
     if (!screen.open) return;
-    const release = admin.retain();
-    void admin.load();
-    return () => {
-      release();
-      admin.reset();
-    };
+    return admin.retain();
+  });
+  // 開いたとき・開き直したときに、権限の一覧を読み直す
+  $effect(() => {
+    screen.focusSeq;
+    if (screen.open) void admin.load();
   });
 
   // 開いたとき・開き直したときに、パネルへフォーカスを置く。閉じたら、開く直前にフォーカスのあった所へ戻す
@@ -321,6 +321,7 @@
                 </li>
               {/each}
             </ul>
+            {#if screen.moreFailed}<p class="warn" role="status">{h.moreFailed}</p>{/if}
             {#if screen.nextBefore !== null}
               <button type="button" class="btn more" disabled={screen.loadingMore} onclick={() => void screen.loadMore()}>
                 {screen.loadingMore ? h.loading : h.loadMore}

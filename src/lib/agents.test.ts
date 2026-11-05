@@ -36,16 +36,21 @@ const ROWS: AgentRow[] = [
 ];
 
 const log: string[] = [];
+let listError: unknown = null;
+let withMore = false;
 
 beforeEach(() => {
   log.length = 0;
+  listError = null;
+  withMore = false;
   mockIPC(
     async (cmd, args) => {
       const a = (args ?? {}) as Record<string, unknown>;
       log.push(cmd === "list_changes" ? `list_changes:${a.limit}` : cmd);
       switch (cmd) {
         case "list_changes":
-          return { changes: [ENTRY], nextBefore: null };
+          if (listError !== null && (a.before !== null || a.client !== null)) throw listError;
+          return { changes: [ENTRY], nextBefore: a.before === null && withMore ? ENTRY.id : null };
         case "preview_revert":
           return PLAN;
         case "list_agents":
@@ -111,6 +116,33 @@ test("開いている間だけ、変更が届くたびに読み込み済みの�
   await emit(EVENTS.changed, { by: "agent" });
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(log).toEqual([]);
+  s.stop();
+});
+
+test("続きの読み込みに失敗しても、一覧の読み込みの失敗にはせず、押し直せる", async () => {
+  withMore = true;
+  const s = new AgentsScreen({ flush: async () => {} });
+  s.show();
+  await vi.waitFor(() => expect(s.loaded).toBe(true));
+  listError = { kind: "storage", detail: "x" };
+  await s.loadMore();
+  expect(s.moreFailed).toBe(true);
+  expect(s.failed).toBe(false);
+  expect(s.nextBefore).toBe(ENTRY.id);
+  listError = null;
+  await s.loadMore();
+  expect(s.moreFailed).toBe(false);
+  s.stop();
+});
+
+test("絞り込んだエージェントの登録がなくなっていたら、絞り込みを外して知らせる", async () => {
+  const s = new AgentsScreen({ flush: async () => {} });
+  s.show();
+  await vi.waitFor(() => expect(s.loaded).toBe(true));
+  listError = { kind: "not_found" };
+  s.setClient("gone");
+  await vi.waitFor(() => expect(s.client).toBeNull());
+  expect(s.result).toBe("client_gone");
   s.stop();
 });
 

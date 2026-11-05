@@ -67,6 +67,9 @@ export class AgentAdmin {
       if (released) return;
       released = true;
       this.#holders--;
+      // 設定とS-06のどちらも出していなければ、確かめている途中の操作と知らせを捨てる（片方が出し終えても、
+      // もう片方の操作は消さない）
+      if (this.#holders === 0) this.reset();
     };
   }
 

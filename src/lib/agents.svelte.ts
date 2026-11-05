@@ -49,7 +49,7 @@ export interface RevertFlow {
 }
 
 /** 取り消しの結果の知らせ。 */
-export type AgentsResult = "reverted" | "marked" | "already_reverted" | "mark_failed";
+export type AgentsResult = "reverted" | "marked" | "already_reverted" | "mark_failed" | "client_gone";
 
 /** コアのエラーを、取り消せない理由にする。 */
 export function problemOf(e: CallError): Problem {
@@ -77,6 +77,8 @@ export class AgentsScreen {
   loadingMore = $state(false);
   /** 読み込みに失敗した（読み直している）。 */
   failed = $state(false);
+  /** 「さらに読み込む」に失敗した（ボタンを残して、押し直せる）。 */
+  moreFailed = $state(false);
   /** 絞り込み：エージェントの識別子（`null` はすべて）。 */
   client = $state<string | null>(null);
   unseenOnly = $state(false);
@@ -190,17 +192,24 @@ export class AgentsScreen {
       this.nextBefore = page.nextBefore;
       this.loaded = true;
       this.failed = false;
+      this.moreFailed = false;
     } catch (e) {
       if (n !== this.#loads || !this.open) return;
       // 絞り込んだエージェントの登録が消えていた：絞り込みを外して読み直す
       if (errorOf(e).kind === "not_found" && this.client !== null) {
-        this.client = null;
-        void this.#load(limit);
+        this.#dropClient(limit);
         return;
       }
       this.failed = true;
       this.#retry = setTimeout(() => void this.#load(limit), AGENTS_RETRY_MS);
     }
+  }
+
+  /** 絞り込んだエージェントの登録が消えていた：絞り込みを外して読み直し、外したことを知らせる。 */
+  #dropClient(limit = PAGE_SIZE) {
+    this.client = null;
+    this.result = "client_gone";
+    void this.#load(limit);
   }
 
   /** 続きを読む。 */
@@ -215,9 +224,13 @@ export class AgentsScreen {
       const known = new Set(this.entries.map((e) => e.id));
       this.entries = [...this.entries, ...page.changes.filter((e) => !known.has(e.id))];
       this.nextBefore = page.nextBefore;
-      this.failed = false;
-    } catch {
-      if (n === this.#loads && this.open) this.failed = true;
+      this.moreFailed = false;
+    } catch (e) {
+      if (n !== this.#loads || !this.open) return;
+      // 絞り込んだ登録が消えていた：絞り込みを外して先頭から読み直す。それ以外は「さらに読み込む」を残して、
+      // 押し直せるようにする（一覧の読み込みの失敗にはしない）
+      if (errorOf(e).kind === "not_found" && this.client !== null) this.#dropClient();
+      else this.moreFailed = true;
     } finally {
       this.loadingMore = false;
     }
@@ -230,12 +243,13 @@ export class AgentsScreen {
     if (ids.length === 0) return;
     this.result = null;
     try {
-      await core.markChangesSeen(ids);
+      const marked = await core.markChangesSeen(ids);
+      // 付けた記録があれば、件数と一覧はコアの changed で読み直す。無いとき（すでに確認済み）は届かないので読み直す
+      if (marked === 0) this.#refresh();
     } catch {
       this.result = "mark_failed";
+      this.#refresh();
     }
-    // 件数と一覧は、コアの changed で読み直す。付けた記録が無いとき（すでに確認済み）は届かないので読み直す
-    this.#refresh();
   }
 
   markAllSeen() {
@@ -286,6 +300,8 @@ export class AgentsScreen {
       if (this.flow?.entry.id !== entry.id) return;
       this.flow = null;
       this.result = r.updated ? "reverted" : r.marked ? "marked" : "already_reverted";
+      // 印を付けたときは、コアの changed で読み直す。何も変えていないときは changed が届かないので読み直す
+      if (!r.marked) this.#refresh();
     } catch (e) {
       if (this.flow?.entry.id !== entry.id) return;
       const err = errorOf(e);
@@ -295,7 +311,7 @@ export class AgentsScreen {
         return;
       }
       this.flow = { entry, plan: null, problem: problemOf(err), changedAfterPreview: false, busy: false };
+      if (this.flow.problem?.kind === "not_found") this.#refresh();
     }
-    this.#refresh();
   }
 }

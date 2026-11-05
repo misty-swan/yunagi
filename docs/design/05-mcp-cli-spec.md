@@ -595,6 +595,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 | `revert_change` | `changeId`、`force`、`expect`（`preview_revert` の `token`。必ず送る） | `{updated, state, marked}` | `history::revert`（画面の状態 `ScreenState` を渡す） |
 | `mark_changes_seen` | `ids`（画面が見せた記録） | 印を付けた件数 | `history::mark_seen`（下記。画面だけの口） |
 
+- `list_changes` の `nextBefore` は、画面のコマンドでは 1 件多く読んで、続きがあるときだけ返す（API の `next_before` は `limit` 件ちょうど返したときに返すので、ちょうど `limit` 件で終わると空の続きを指す。画面は空の「さらに読み込む」を出さない）。200 件の上限に当たったときだけは、API と同じ規則。
 - 権限の変更・登録の削除・取り消し・確認済みは、変えたら `changed`（`by: agent`）を知らせる（CLI の管理の操作と同じ経路。画面はどの `by` でも表示中のデータを読み直す）。画面の保存の失敗中には数えない。取り消しは、画面の入力中・保存の失敗中を 7.3 の判定の順どおりに見る（`ScreenState` を渡す）。
 - コアのエラーは `CommandError` にする：権限の変更の `Changed` は `conflict`（`scopes_changed`）、`unknown` への `read` 以外は `invalid_argument`（`unknown_write`）、取り消しの `Changed` は `conflict`（`changed`、`afterPreview`）、`UserEditing`・`CarriedOver` は既存の `conflict`、画面の保存の失敗中は `conflict`（`save_failing`）、取りやめた TODO は `invalid_argument`（`dropped`）、取り消しの記録・読み取れない記録は `invalid_argument`（`not_agent_change`・`unsupported_record`）。
 - **確認済みの印を付ける口**（`history::mark_seen(conn, ids, now)`）：渡した記録の `seen_at` を、まだ空のものだけ現在時刻にする（最初に確認した時刻を残す）。見せた記録の ID だけを渡す（一覧を読んでから印を付けるまでの間に届いた変更を、見せずに確認済みにしないため）。変更履歴の画面を開いただけでは付けない（上部のバーの件数と、整理モードの行頭の菱形が、見ていない間に消えないように）。画面が付けるのは、行ごとの「確認済みにする」と、表示している未確認すべての「確認済みにする」。取り消し（7.3）は、取り消した記録に自分で付ける。ローカル API・CLI には出さない（`seen_at` は利用者が画面で確認した時刻で、エージェントや端末から付ける理由が無いため）。

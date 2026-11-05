@@ -132,8 +132,9 @@ export interface AgentsMessages {
     forceWarning: (fields: string) => string;
     changedAfterPreview: string;
     problem: (p: RevertProblem, detail?: { date?: string; closeReason?: CloseReason }) => string;
-    result: Record<"reverted" | "marked" | "already_reverted", string>;
+    result: Record<"reverted" | "marked" | "already_reverted" | "client_gone", string>;
     markFailed: string;
+    moreFailed: string;
   };
 }
 
@@ -303,8 +304,10 @@ const ja: AgentsMessages = {
       reverted: "取り消しました。",
       marked: "すでに戻っていたため、取り消し済みの印だけを付けました。",
       already_reverted: "すでに取り消し済みでした。",
+      client_gone: "絞り込んでいたエージェントの登録がなくなったため、絞り込みを外しました。",
     },
     markFailed: "確認済みの印を付けられませんでした。",
+    moreFailed: "続きを読み込めませんでした。もう一度押してください。",
   },
 };
 
@@ -474,8 +477,10 @@ const en: AgentsMessages = {
       reverted: "Reverted.",
       marked: "It was already back, so the record was only marked as reverted.",
       already_reverted: "It was already reverted.",
+      client_gone: "The agent you were filtering by is no longer registered, so the filter was removed.",
     },
     markFailed: "Couldn't mark it as seen.",
+    moreFailed: "Couldn't load more. Press the button again.",
   },
 };
 

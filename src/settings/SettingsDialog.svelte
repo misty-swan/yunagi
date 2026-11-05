@@ -95,10 +95,7 @@
       const release = admin.retain();
       void admin.load();
       void admin.loadApi();
-      return () => {
-        release();
-        admin.reset();
-      };
+      return release;
     }
   });
 

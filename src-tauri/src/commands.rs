@@ -692,7 +692,9 @@ pub fn ime_enter_insert(ime: State<'_, ImeWorker>, restore: bool) -> Result<(), 
 // ---- エージェントの管理（設定のエージェント区分・変更履歴 S-06。MCP・CLI 仕様書 4.4・7章） ----
 //
 // ローカル API の管理の操作と同じコア（`domain::agent_admin`・`domain::history`）を、画面向けの型で
-// 呼ぶ。確認は画面が行い、ここは確認を済ませた後の変更を行う。呼び出し元のスコープは確かめない。
+// 呼ぶ。確認は画面が行い、ここは確認を済ませた後の変更を行う。呼び出し元のスコープは確かめない（画面は
+// アプリ自身の画面だけで、外部の内容は読み込まない。CSP は `tauri.conf.json`。外から呼べるのは、トークンで守る
+// ローカル API の管理の操作で、こちらではない）。
 // 書き込みは `AppCore::admin_write`（画面の入力中・保存の失敗中を取り消しに見せ、変えたら `changed`）。
 
 /// 登録されているエージェント（クライアント）と、許可した権限・最後に接続した時刻・消せるか
@@ -776,18 +778,25 @@ pub async fn list_changes(
     limit: usize,
 ) -> Result<ChangeList, CommandError> {
     blocking(&core, move |core| {
+        // 続きがあるかを決めるため、1 件多く読む（ちょうど `limit` 件で終わるときに、空の続きを出さない）。
+        // コアの上限（200）で打ち切られたときは、読めた件数が `limit` と同じなら続きがあるものとする
         let filter = history::ChangeFilter {
             client,
             unseen_only,
             before: before.map(|i| i.0),
-            limit,
+            limit: if limit == 0 {
+                0
+            } else {
+                limit.saturating_add(1)
+            },
         };
         core.read(|conn| {
-            let entries = history::list_changes(conn, &filter)?;
+            let mut entries = history::list_changes(conn, &filter)?;
             let shown = limit.min(history::MAX_LIMIT);
-            let next_before = (entries.len() == shown)
-                .then(|| entries.last().map(|e| Id(e.log.id)))
-                .flatten();
+            let more =
+                entries.len() > shown || (shown == history::MAX_LIMIT && entries.len() == shown);
+            entries.truncate(shown);
+            let next_before = more.then(|| entries.last().map(|e| Id(e.log.id))).flatten();
             Ok::<_, history::HistoryError>(ChangeList {
                 changes: entries.iter().map(ChangeEntry::from).collect(),
                 next_before,
