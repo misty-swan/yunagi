@@ -14,16 +14,21 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(test)]
 use ts_rs::TS;
 use yunagi_core::domain::agent::ItemField as CoreItemField;
+use yunagi_core::domain::agent_admin;
 use yunagi_core::domain::archive;
 use yunagi_core::domain::board;
 use yunagi_core::domain::carryover;
+use yunagi_core::domain::history;
 use yunagi_core::domain::item::{self as core_item, CloseReason as CoreCloseReason};
 use yunagi_core::domain::logical_date::{DayBoundary, LogicalDate};
 use yunagi_core::domain::note_body;
 use yunagi_core::domain::note_send;
 use yunagi_core::domain::settings;
 use yunagi_core::domain::text_doc::{self, TextDoc as CoreTextDoc};
+use yunagi_core::storage::table::{agent_client, change_log};
 use yunagi_core::storage::{Ulid, cloud_sync, search};
+
+use crate::app_core::Changes;
 
 // ---- 値 ----
 
@@ -1553,6 +1558,395 @@ pub struct GlobalShortcutStatus {
     pub wayland: bool,
 }
 
+// ---- エージェントの管理（設定のエージェント区分・変更履歴 S-06） ----
+
+mirror_enum! {
+    /// 権限（スコープ。MCP・CLI 仕様書 2章）。
+    AgentScope <=> agent_client::Scope { Read, Todo, Blocker, Append, NoteEdit }
+}
+
+/// 登録されているエージェント（クライアント。`list_agents`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRow {
+    pub id: Id,
+    /// 識別子（`yunagi mcp --client claude-code` の `claude-code`。`cli`・`unknown` は固定）。
+    pub name: String,
+    /// 許可したスコープ（`read`・`todo`・`blocker`・`append`・`note_edit` の順）。
+    pub scopes: Vec<AgentScope>,
+    pub created_at: Millis,
+    /// 最後に接続した時刻。まだ接続していなければ `None`。
+    pub last_seen_at: Option<Millis>,
+    /// 登録を消せるか（固定の `cli`・`unknown` ではなく、変更履歴にも項目にも指されていない）。
+    pub removable: bool,
+}
+
+impl From<agent_admin::ClientEntry> for AgentRow {
+    fn from(e: agent_admin::ClientEntry) -> Self {
+        Self {
+            id: Id(e.client.id),
+            name: e.client.name,
+            scopes: e.client.scopes.into_iter().map(Into::into).collect(),
+            created_at: Millis(e.client.created_at),
+            last_seen_at: e.client.last_seen_at.map(Millis),
+            removable: e.removable,
+        }
+    }
+}
+
+/// 権限の変更の結果（`set_agent_scopes`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ScopesChanged {
+    /// 実際に変えたか（足すものがすでにあり、外すものがすでに無ければ `false`）。
+    pub updated: bool,
+    /// 変えた後のスコープ。
+    pub scopes: Vec<AgentScope>,
+}
+
+impl Changes for ScopesChanged {
+    fn changed(&self) -> bool {
+        self.updated
+    }
+}
+
+/// ローカル API の状態（`api_status`。アーキテクチャ設計書 4.6）。待ち受けられなかったときの原因の文
+/// （ログ用）は渡さず、種類だけを渡す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ApiStatus {
+    /// 待ち受けていない（データベースを開いていない間）。
+    Stopped,
+    /// 待ち受けている。`connections` は処理中の接続の数。
+    Listening { connections: usize },
+    /// 待ち受けようとして、始められなかった。
+    Unavailable { cause: ApiCause },
+}
+
+/// 待ち受けを始められなかった理由の種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "snake_case")]
+pub enum ApiCause {
+    /// ソケットのパスが長すぎる。
+    SocketPathTooLong,
+    /// ソケットの場所に、ソケット以外のものがある。
+    PathOccupied,
+    /// パイプの名前をほかのプロセスが使っている（Windows）。
+    PipeNameTaken,
+    /// ほかの失敗。
+    Other,
+}
+
+impl From<crate::api::ApiState> for ApiStatus {
+    fn from(s: crate::api::ApiState) -> Self {
+        use crate::api::{ApiState, ApiUnavailableReason as R};
+        match s {
+            ApiState::Stopped => Self::Stopped,
+            ApiState::Listening { connections } => Self::Listening { connections },
+            ApiState::Unavailable(u) => Self::Unavailable {
+                cause: match u.reason {
+                    R::SocketPathTooLong => ApiCause::SocketPathTooLong,
+                    R::PathOccupied => ApiCause::PathOccupied,
+                    R::PipeNameTaken => ApiCause::PipeNameTaken,
+                    R::Other => ApiCause::Other,
+                },
+            },
+        }
+    }
+}
+
+mirror_enum! {
+    /// 変更をしたもの。
+    ChangeActor <=> change_log::Actor { Agent, Human }
+}
+
+/// 変更履歴の対象の項目のいまの様子。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedItem {
+    pub date: Date,
+    pub kind: ItemKind,
+    pub text: String,
+    /// 削除されているか。
+    pub deleted: bool,
+}
+
+/// 変更履歴の対象。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChangeTarget {
+    /// 項目。項目が見つからなければ `item` は `None`。
+    Item { id: Id, item: Option<ChangedItem> },
+    /// その日のノート。
+    Note { date: Date },
+    /// その日の振り返り。
+    Reflection { date: Date },
+}
+
+/// 項目の1つの欄の変更。値は文字列か、空（`None`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct FieldChange {
+    /// 欄の名前（`text`・`status`・`close_reason`・`resolution_note`・`completed_at`・`sort_key`）。
+    pub name: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+/// 変更の中身の要約。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChangeSummary {
+    /// 項目を足した。
+    Added { kind: Option<String>, text: String },
+    /// 項目の欄を変えた（変えた欄だけ）。
+    Fields { fields: Vec<FieldChange> },
+    /// ノート・振り返りの本文を変えた（本文は大きいので文字数だけ）。
+    #[serde(rename_all = "camelCase")]
+    Text {
+        before_chars: usize,
+        after_chars: usize,
+    },
+    /// 読み取れない記録。
+    Unknown,
+}
+
+/// 変更履歴の1件（`list_changes`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeEntry {
+    pub id: Id,
+    pub created_at: Millis,
+    pub actor: ChangeActor,
+    /// 操作したエージェントの識別子。人の取り消しの記録は `None`。
+    pub client: Option<String>,
+    /// `<名詞>.<動詞>`（例：`todo.add`）。
+    pub operation: String,
+    pub target: ChangeTarget,
+    pub summary: ChangeSummary,
+    /// 確認した時刻（未確認は `None`）。
+    pub seen_at: Option<Millis>,
+    /// 取り消した時刻。
+    pub reverted_at: Option<Millis>,
+    /// この記録が取り消しの記録なら、取り消した元の記録。
+    pub revert_of: Option<Id>,
+}
+
+/// 変更履歴の一覧の1ページ。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeList {
+    pub changes: Vec<ChangeEntry>,
+    /// 続きがあるとき、`before` に渡す記録の ID（これより古い記録が続く）。無ければ `None`。
+    pub next_before: Option<Id>,
+}
+
+/// JSON の値から、欄の値の表示用の文字列にする（文字列はそのまま、空は `None`）。
+fn field_text(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
+}
+
+impl From<&history::Entry> for ChangeEntry {
+    fn from(e: &history::Entry) -> Self {
+        let log = &e.log;
+        let target = match log.target {
+            change_log::Target::Item(id) => ChangeTarget::Item {
+                id: Id(id),
+                item: e.item.as_ref().map(|i| ChangedItem {
+                    date: Date(i.date),
+                    kind: i.kind.into(),
+                    text: i.text.clone(),
+                    deleted: i.deleted,
+                }),
+            },
+            change_log::Target::Note(date) => ChangeTarget::Note { date: Date(date) },
+            change_log::Target::Reflection(date) => ChangeTarget::Reflection { date: Date(date) },
+        };
+        let summary = match &e.summary {
+            history::Summary::ItemAdded { kind, text } => ChangeSummary::Added {
+                kind: kind.clone(),
+                text: text.clone(),
+            },
+            history::Summary::Fields(fields) => ChangeSummary::Fields {
+                fields: fields
+                    .iter()
+                    .map(|f| FieldChange {
+                        name: f.name.clone(),
+                        before: field_text(&f.before),
+                        after: field_text(&f.after),
+                    })
+                    .collect(),
+            },
+            history::Summary::Text {
+                before_chars,
+                after_chars,
+            } => ChangeSummary::Text {
+                before_chars: *before_chars,
+                after_chars: *after_chars,
+            },
+            history::Summary::Unknown => ChangeSummary::Unknown,
+        };
+        Self {
+            id: Id(log.id),
+            created_at: Millis(log.created_at),
+            actor: log.actor.into(),
+            client: e.client_name.clone(),
+            operation: log.operation.clone(),
+            target,
+            summary,
+            seen_at: log.seen_at.map(Millis),
+            reverted_at: log.reverted_at.map(Millis),
+            revert_of: log.revert_of_id.map(Id),
+        }
+    }
+}
+
+mirror_enum! {
+    /// 取り消しで何が起きるか。
+    RevertState <=> history::PlanState { Apply, AlreadyReverted, AlreadyRestored }
+}
+
+/// 戻す1つの欄。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct RevertField {
+    pub name: String,
+    /// いまの値。
+    pub current: Option<String>,
+    /// 戻す値。
+    pub restore: Option<String>,
+    /// 記録の後に人が変えた欄か。
+    pub changed_since: bool,
+}
+
+/// 取り消しで書き込む内容。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RevertEffect {
+    /// 何も書かない（すでに取り消し済み）。
+    None,
+    /// 追加の取り消し：項目を削除する。持ち越し先があれば、持ち越し先は残る。
+    #[serde(rename_all = "camelCase")]
+    DeleteItem {
+        date: Date,
+        kind: ItemKind,
+        text: String,
+        carried_to_date: Option<Date>,
+    },
+    /// 項目の欄を戻す。
+    Fields {
+        date: Date,
+        kind: ItemKind,
+        text: String,
+        fields: Vec<RevertField>,
+    },
+    /// ノート・振り返りの本文を戻す。`removed` はいまの本文にあって無くなる行、`added` は戻すと入る行
+    /// （共通の先頭と末尾の行は除く）。
+    Text {
+        doc: TextDoc,
+        date: Date,
+        removed: Vec<String>,
+        added: Vec<String>,
+        truncated: bool,
+    },
+}
+
+/// 取り消しの計画（`preview_revert`。何も書かない）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct RevertPlan {
+    pub id: Id,
+    pub operation: String,
+    pub client: Option<String>,
+    pub created_at: Millis,
+    pub state: RevertState,
+    /// 見せたときの状態の目印。`revert_change` の `expect` に返す。
+    pub token: String,
+    /// 記録の後に人が変えた欄の名前（ノートは `body`）。空でなければ、上書きの確認が要る。
+    pub changed_since: Vec<String>,
+    pub effect: RevertEffect,
+}
+
+impl From<&history::Plan> for RevertPlan {
+    fn from(p: &history::Plan) -> Self {
+        let effect = match &p.effect {
+            history::Effect::None => RevertEffect::None,
+            history::Effect::DeleteItem { item, carried_to } => RevertEffect::DeleteItem {
+                date: Date(item.date),
+                kind: item.kind.into(),
+                text: item.text.clone(),
+                carried_to_date: carried_to.map(|c| Date(c.date)),
+            },
+            history::Effect::Fields { item, fields } => RevertEffect::Fields {
+                date: Date(item.date),
+                kind: item.kind.into(),
+                text: item.text.clone(),
+                fields: fields
+                    .iter()
+                    .map(|f| RevertField {
+                        name: f.name.clone(),
+                        current: field_text(&f.current),
+                        restore: field_text(&f.restore),
+                        changed_since: f.changed_since,
+                    })
+                    .collect(),
+            },
+            history::Effect::Text { doc, date, diff } => RevertEffect::Text {
+                doc: (*doc).into(),
+                date: Date(*date),
+                removed: diff.removed.clone(),
+                added: diff.added.clone(),
+                truncated: diff.truncated,
+            },
+        };
+        Self {
+            id: Id(p.log.id),
+            operation: p.log.operation.clone(),
+            client: p.client_name.clone(),
+            created_at: Millis(p.log.created_at),
+            state: p.state.into(),
+            token: p.token.clone(),
+            changed_since: p.drift.clone(),
+            effect,
+        }
+    }
+}
+
+/// 取り消しの結果（`revert_change`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Reverted {
+    /// 値を書いたか（すでに取り消し済み・すでに戻っていたときは `false`）。
+    pub updated: bool,
+    pub state: RevertState,
+    /// 記録を取り消し済みにしたか（値を書いたとき、またはすでに戻っていたとき）。
+    pub marked: bool,
+}
+
+impl Changes for Reverted {
+    fn changed(&self) -> bool {
+        self.marked
+    }
+}
+
 // ---- エラー ----
 
 /// コマンドの失敗。`kind` で見分ける。画面に出す文は画面が `kind` から決める
@@ -1660,6 +2054,14 @@ pub enum InvalidReason {
     Shortcuts,
     /// 設定：`HH:MM` の形でない時刻。
     TimeOfDay,
+    /// 変更履歴：エージェントの変更の記録ではない（取り消しの記録は取り消せない）。
+    NotAgentChange,
+    /// 変更履歴：読み取れない形の記録で、取り消せない。
+    UnsupportedRecord,
+    /// エージェント：識別子のない接続（`unknown`）に、`read` 以外の権限は足せない。
+    UnknownWrite,
+    /// エージェント：固定の `cli`・`unknown` の登録は消せない。
+    FixedClient,
 }
 
 /// 受け付けられない状態の理由。
@@ -1684,6 +2086,19 @@ pub enum Conflict {
     PreviousDayChanged { previous_day: Option<Date> },
     /// 今日の持ち越しはすでに終えている（古い画面からの二度目の確定など）。
     CarryoverDone,
+    /// 取り消し：人があとから変えている（`fields` は食い違う欄。ノートは `body`）。
+    /// `afterPreview` が真なら、確認の画面を見せた後に変わった（上書きでも越えない。確認をやり直す）。
+    #[serde(rename_all = "camelCase")]
+    Changed {
+        fields: Vec<String>,
+        after_preview: bool,
+    },
+    /// 権限の変更：確認の画面を見せた後に、そのエージェントの権限が変わった。
+    ScopesChanged,
+    /// 取り消し：画面の保存に失敗している間（保存できるまで、取り消せない）。
+    SaveFailing,
+    /// 登録の削除：変更履歴か項目がその登録を指している。
+    ClientInUse,
 }
 
 /// 削除を戻せない理由。
@@ -1852,6 +2267,87 @@ impl From<yunagi_core::domain::handoff::HandoffError> for CommandError {
             E::PermissionDenied(_) => Self::Internal {
                 detail: crate::app_core::chain(&e),
             },
+            E::Storage(_) => Self::storage(&e),
+        }
+    }
+}
+
+impl From<agent_admin::ScopeError> for CommandError {
+    fn from(e: agent_admin::ScopeError) -> Self {
+        use agent_admin::{ScopeArgument as A, ScopeError as E};
+        match e {
+            E::NotFound => Self::NotFound,
+            E::Changed => Self::Conflict(Conflict::ScopesChanged),
+            E::InvalidArgument(A::UnknownWrite(_)) => Self::InvalidArgument {
+                reason: InvalidReason::UnknownWrite,
+            },
+            // 画面は足すものか外すものを必ず1つ送り、同じものを両方には送らない
+            E::InvalidArgument(A::Nothing | A::Both(_)) => Self::Internal {
+                detail: crate::app_core::chain(&e),
+            },
+            E::Storage(_) => Self::storage(&e),
+        }
+    }
+}
+
+impl From<agent_admin::RemoveError> for CommandError {
+    fn from(e: agent_admin::RemoveError) -> Self {
+        use agent_admin::RemoveError as E;
+        match e {
+            E::NotFound => Self::NotFound,
+            E::Fixed => Self::InvalidArgument {
+                reason: InvalidReason::FixedClient,
+            },
+            E::InUse => Self::Conflict(Conflict::ClientInUse),
+            E::Storage(_) => Self::storage(&e),
+        }
+    }
+}
+
+impl From<history::HistoryError> for CommandError {
+    fn from(e: history::HistoryError) -> Self {
+        use history::HistoryError as E;
+        match e {
+            E::ClientNotFound => Self::NotFound,
+            // 画面は件数を 1 以上で送る
+            E::ZeroLimit => Self::Internal {
+                detail: crate::app_core::chain(&e),
+            },
+            E::Storage(_) => Self::storage(&e),
+        }
+    }
+}
+
+impl From<history::RevertError> for CommandError {
+    fn from(e: history::RevertError) -> Self {
+        use history::{Missing, RevertArgument as A, RevertConflict as C, RevertError as E};
+        match e {
+            E::NotFound(Missing::Change | Missing::Item) => Self::NotFound,
+            E::InvalidArgument(A::NotAgentChange) => Self::InvalidArgument {
+                reason: InvalidReason::NotAgentChange,
+            },
+            E::InvalidArgument(A::Unsupported) => Self::InvalidArgument {
+                reason: InvalidReason::UnsupportedRecord,
+            },
+            E::InvalidArgument(A::Dropped { .. }) => Self::InvalidArgument {
+                reason: InvalidReason::Dropped,
+            },
+            E::StorageUnavailable(_) => Self::Conflict(Conflict::SaveFailing),
+            E::Conflict(C::Changed {
+                fields,
+                after_preview,
+            }) => Self::Conflict(Conflict::Changed {
+                fields,
+                after_preview,
+            }),
+            E::Conflict(C::CarriedOver {
+                carried_to_id,
+                carried_to_date,
+            }) => Self::Conflict(Conflict::CarriedOver {
+                carried_to_id: Id(carried_to_id),
+                carried_to_date: Date(carried_to_date),
+            }),
+            E::Conflict(C::UserEditing) => Self::Conflict(Conflict::UserEditing),
             E::Storage(_) => Self::storage(&e),
         }
     }

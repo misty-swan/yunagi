@@ -4,7 +4,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "../App.svelte";
-import type { BackupEntry, Settings } from "../lib/bindings";
+import type { AgentRow, AgentScope, ApiStatus, BackupEntry, Settings } from "../lib/bindings";
 import { prefs } from "../lib/prefs.svelte";
 
 // OS のフォルダ選択（Tauri のダイアログ）と、画面の読み込み直しは、テストで差し替える
@@ -59,6 +59,20 @@ const BACKUPS: BackupEntry[] = [
   },
 ];
 
+const AGENT_ROWS: AgentRow[] = [
+  { id: "00000000000000000000000001", name: "cli", scopes: ["read"], createdAt: 1793000000000, lastSeenAt: null, removable: false },
+  { id: "00000000000000000000000002", name: "unknown", scopes: ["read"], createdAt: 1793000000000, lastSeenAt: null, removable: false },
+  {
+    id: "01J00000000000000000000001",
+    name: "claude-code",
+    scopes: ["read"],
+    createdAt: 1793000000000,
+    lastSeenAt: 1793600000000,
+    removable: false,
+  },
+  { id: "01J00000000000000000000002", name: "idle", scopes: ["read"], createdAt: 1793000000000, lastSeenAt: null, removable: true },
+];
+
 beforeEach(() => {
   picked.values = [];
   picked.asked = [];
@@ -86,6 +100,9 @@ interface Mock {
   rejectSave: unknown;
   /** コマンドごとの答えの差し替え（`undefined` なら既定）。 */
   answer: Record<string, unknown>;
+  /** エージェントの一覧（権限の変更・登録の削除で変わる）。 */
+  agents: AgentRow[];
+  api: ApiStatus;
   count: (cmd: string) => number;
   last: (cmd: string) => Record<string, unknown> | undefined;
 }
@@ -97,6 +114,8 @@ function mockCore(settings: Partial<Settings> = {}): Mock {
     gate: null,
     rejectSave: undefined,
     answer: {},
+    agents: AGENT_ROWS.map((r) => ({ ...r })),
+    api: { state: "listening", connections: 0 },
     count: (cmd) => m.calls.filter((c) => c.cmd === cmd).length,
     last: (cmd) => m.calls.filter((c) => c.cmd === cmd).at(-1)?.args,
   };
@@ -154,6 +173,24 @@ function mockCore(settings: Partial<Settings> = {}): Mock {
           return null;
         case "export_markdown":
           return ["/out/2026-11-02.md", "/out/2026-11-03.md"];
+        case "list_agents":
+          return m.agents;
+        case "api_status":
+          return m.api;
+        case "set_agent_scopes": {
+          const row = m.agents.find((r) => r.name === a.client);
+          const allow = a.allow as AgentScope[];
+          const deny = a.deny as AgentScope[];
+          if (row === undefined) throw { kind: "not_found" };
+          const scopes = (["read", "todo", "blocker", "append", "note_edit"] as AgentScope[]).filter(
+            (s) => (row.scopes.includes(s) || allow.includes(s)) && !deny.includes(s),
+          );
+          row.scopes = scopes;
+          return { updated: true, scopes };
+        }
+        case "remove_agent":
+          m.agents = m.agents.filter((r) => r.name !== a.client);
+          return null;
       }
     },
     { shouldMockEvents: true },
@@ -869,14 +906,150 @@ test("データ：書き出しの失敗は、書き出し先の問題とデー�
   await until(() => text(".result") === "データを読めなかったため、書き出せませんでした。");
 });
 
-test("エージェント区分は、変更履歴を開く入口と、まだ変えられない設定の場所を置く", async () => {
-  await start();
+const agentRow = (name: string) => $(`[data-pane="agents"] [data-agent="${name}"]`)!;
+const scopeBox = (name: string, scope: string) =>
+  agentRow(name).querySelector<HTMLInputElement>(`[data-scope="${scope}"]`)!;
+
+async function openAgentsPane() {
+  const core = await start();
   await open("agents");
-  expect($$('[data-pane="agents"] .placeholder')).toHaveLength(3);
-  // 変更履歴（S-06）はまだ無いので、押しても設定は閉じない
-  button("変更履歴を開く").click();
+  await until(() => $$("[data-agent]").length === 4);
+  return core;
+}
+
+test("エージェント区分は、接続したエージェントの権限・最後に接続した時刻・ローカル API の状態を出す", async () => {
+  const core = await openAgentsPane();
+  expect($$("[data-agent]").map((r) => r.dataset.agent)).toEqual(["cli", "unknown", "claude-code", "idle"]);
+  // 識別子と製品の名前が違うときは両方、最後に接続した時刻（まだなら、その旨）
+  expect(text('[data-agent="claude-code"] .aname')).toBe("Claude Code");
+  expect(text('[data-agent="claude-code"] .aid')).toBe("claude-code");
+  expect(text('[data-agent="claude-code"] .seen')).toMatch(/^最後の接続 2026\.\d\d\.\d\d \d\d:\d\d$/);
+  expect(text('[data-agent="idle"] .seen')).toBe("まだ接続していません");
+  expect(scopeBox("claude-code", "read").checked).toBe(true);
+  expect(scopeBox("claude-code", "todo").checked).toBe(false);
+  expect(text('[data-api]')).toBe("動作中");
+  // 「接続中のクライアント」の一覧は出さない
+  expect(core.count("api_status")).toBe(1);
+  expect($('[data-pane="agents"] .placeholder')).toBeNull();
+});
+
+test("ローカル API を始められなかったときは、理由の種類を出す。処理中の接続があれば件数も出す", async () => {
+  const core = await start();
+  core.api = { state: "unavailable", cause: "socket_path_too_long" };
+  await open("agents");
+  await until(() => text("[data-api]").includes("ソケットのパスが長すぎます"));
+  press({ key: "Escape" });
+  core.api = { state: "listening", connections: 2 };
+  await open("agents");
+  await until(() => text("[data-api]") === "動作中 · 処理中の接続 2 件");
+});
+
+test("権限を足すときは確かめる文を出してから送り、外すときはすぐ送る", async () => {
+  const core = await openAgentsPane();
+  scopeBox("claude-code", "todo").click();
   flushSync();
+  // 確かめる文：足す権限で何ができるか。まだ送らない
+  await until(() => $(".confirm") !== null);
+  expect(text(".confirm")).toContain("Claude Code に「TODO 操作」を許可します。");
+  expect(text(".confirm")).toContain("TODO の追加・編集・完了・取り消しができます。");
+  // 初めのフォーカスは「やめる」（Space の二度押しで、権限を許可してしまわない）
+  await until(() => document.activeElement?.textContent?.trim() === "やめる");
+  expect(core.count("set_agent_scopes")).toBe(0);
+  expect(scopeBox("claude-code", "todo").checked).toBe(false);
+  // やめる
+  button("やめる").click();
+  flushSync();
+  expect($(".confirm")).toBeNull();
+  expect(core.count("set_agent_scopes")).toBe(0);
+  // 許可する：見せた権限を expect に付けて送る
+  scopeBox("claude-code", "todo").click();
+  await until(() => $(".confirm") !== null);
+  button("許可する").click();
+  await until(() => scopeBox("claude-code", "todo").checked);
+  expect(core.last("set_agent_scopes")).toEqual({
+    client: "claude-code",
+    allow: ["todo"],
+    deny: [],
+    expect: ["read"],
+  });
+  // 外すときは確かめずに送る
+  scopeBox("claude-code", "todo").click();
+  await until(() => !scopeBox("claude-code", "todo").checked);
+  expect(core.last("set_agent_scopes")).toEqual({
+    client: "claude-code",
+    allow: [],
+    deny: ["todo"],
+    expect: ["read", "todo"],
+  });
+  expect($(".confirm")).toBeNull();
+});
+
+test("Esc は権限の確かめる文を先に閉じ、設定は閉じない", async () => {
+  await openAgentsPane();
+  scopeBox("claude-code", "append").click();
+  await until(() => $(".confirm") !== null);
+  press({ key: "Escape" }, document.activeElement!);
+  flushSync();
+  expect($(".confirm")).toBeNull();
   expect(dialog()).not.toBeNull();
+  press({ key: "Escape" }, document.activeElement!);
+  flushSync();
+  expect(dialog()).toBeNull();
+});
+
+test("別の場所で権限が変わっていたときは、書かずに知らせて一覧を読み直す", async () => {
+  const core = await openAgentsPane();
+  core.answer.set_agent_scopes = { kind: "conflict", reason: "scopes_changed" };
+  scopeBox("claude-code", "blocker").click();
+  await until(() => $(".confirm") !== null);
+  button("許可する").click();
+  await until(() => text(".err").includes("別の場所で権限が変わっていた"));
+  expect(core.count("list_agents")).toBeGreaterThanOrEqual(2);
+});
+
+test("名乗らない接続（unknown）には、読み取りより多くの権限を足せない", async () => {
+  const core = await openAgentsPane();
+  expect(scopeBox("unknown", "todo").disabled).toBe(true);
+  expect(scopeBox("unknown", "read").disabled).toBe(false);
+  expect(core.count("set_agent_scopes")).toBe(0);
+});
+
+test("登録を消せるのは履歴の無い登録だけ。確かめる文を出してから消す", async () => {
+  const core = await openAgentsPane();
+  // 履歴のある登録は消せない（理由を出す）。固定の cli・unknown は消すボタンも出さない
+  expect(agentRow("claude-code").querySelector(".btn")).toBeNull();
+  expect(text('[data-agent="claude-code"] .inuse')).toBe("変更履歴が残っているため消せません。");
+  expect(agentRow("cli").textContent).not.toContain("登録を消す");
+  const remove = agentRow("idle").querySelector<HTMLButtonElement>(".btn")!;
+  expect(remove.getAttribute("aria-label")).toBe("idle の登録を消す");
+  remove.click();
+  await until(() => $(".confirm") !== null);
+  expect(text(".confirm")).toContain("次に同じ識別子で接続すると、読み取りだけを許可した登録が作り直されます。");
+  expect(core.count("remove_agent")).toBe(0);
+  button("消す").click();
+  await until(() => $$("[data-agent]").length === 3);
+  expect(core.last("remove_agent")).toEqual({ client: "idle" });
+});
+
+test("変更履歴を開くと設定を閉じて S-06 を開き、Esc で閉じると設定のエージェント区分へ戻り、設定を閉じると開く前のフォーカスへ戻る", async () => {
+  await start();
+  const before = $(".search") as HTMLElement;
+  before.focus();
+  await open("agents");
+  await until(() => $$("[data-agent]").length === 4);
+  button("変更履歴を開く").click();
+  await until(() => $("[data-agents]") !== null);
+  // 重ねない
+  expect(dialog()).toBeNull();
+  press({ key: "Escape" }, document.activeElement!);
+  flushSync();
+  expect($("[data-agents]")).toBeNull();
+  await until(() => dialog() !== null && $('[data-pane="agents"]') !== null);
+  await until(() => document.activeElement?.getAttribute("data-section") === "agents");
+  press({ key: "Escape" }, document.activeElement!);
+  flushSync();
+  expect(dialog()).toBeNull();
+  expect(document.activeElement).toBe(before);
 });
 
 test("区分の一覧は ↑/↓ で移り、Tab は設定の中だけを回る", async () => {

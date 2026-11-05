@@ -315,7 +315,7 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"…","data":{"error":{"code":"permission_denied","required_scope":"todo","message":"…"}}}}
 ```
 
-- `client` は識別子（`yunagi mcp --client claude-code` の `claude-code`。CLI は `cli`）。省略すると `unknown`（2章）。初めての識別子は `read` だけの権限で登録される（このとき画面に `changed` を出す。設定画面のエージェントの一覧が変わるため）。登録できる識別子は、固定の `cli`・`unknown` を含めて 64 までで、超えると新しい識別子の依頼は `invalid_argument`（登録の整理を利用者に頼む）。使える形は、英小文字か数字で始まり、英小文字・数字・`-`・`_`・`.` だけの 64 文字まで。誤っていれば `-32602`。`params` がオブジェクトでないときも `-32602`。
+- `client` は識別子（`yunagi mcp --client claude-code` の `claude-code`。CLI は `cli`）。省略すると `unknown`（2章）。初めての識別子は `read` だけの権限で登録される（このとき画面に `changed` を出す。設定画面のエージェントの一覧が変わるため）。登録できる識別子は、固定の `cli`・`unknown` を含めて 64 までで、超えると新しい識別子の依頼は `invalid_argument`（登録の整理を利用者に頼む。整理の手段は 7.4）。使える形は、英小文字か数字で始まり、英小文字・数字・`-`・`_`・`.` だけの 64 文字まで。誤っていれば `-32602`。`params` がオブジェクトでないときも `-32602`。
 - エラー：プロトコルの誤りは JSON-RPC の標準のコード（`-32700` JSON でない、`-32600` 依頼の形が誤り・`hello` より先に依頼を送った、`-32601` 知らない操作、`-32602` 引数が誤り・知らない引数名・必須の引数が無い）。4.3 のエラー（`permission_denied`・`not_found`・`invalid_argument`・`conflict`・`storage_unavailable`・`busy`・`api_error`）は、コード `-32000` で、`error.data.error` に 4.3 のオブジェクトをそのまま入れる。`hello` の失敗は `api_error` の `reason: auth_failed`（トークンが合わない）・`version_mismatch`（プロトコルの版が合わない。エラーにアプリの版 `server_protocol`）。
 - 引数の名前は MCP のツールの引数にそろえる。省略できるのは `date`（既定は今日。`today`・`yesterday`・`YYYY-MM-DD`。形の誤りや存在しない日付は `invalid_argument`）。`search` の `from`・`to` も同じ形で、省略すると期間の制限なし。知らない名前の引数は、綴りの誤りを黙って無視しないよう `-32602`。
 
@@ -345,7 +345,7 @@ CLI・MCP サーバーがアプリに依頼する入口。通信路・トーク�
 - 窓を前面に出す部品は、OS 全体のショートカット（操作仕様書 1章）と同じ（`global_shortcut::bring_to_front`）。頼みを受けたアプリは、窓を前面に出して画面にイベント `show-requested`（`{note}`）を知らせる。`note` が真のとき、画面がノートモードにする（決まりは操作仕様書 1章）。窓の操作の失敗（窓が無い、OS が拒む）は、応答に出さずアプリのログに出すだけで、`requested: true` を返す。
 - 引数の名前が知らないもの、`note` が真偽でないものは `-32602`。
 
-**管理の操作**（A-08。2026-11-04 決定。YUN-94）：利用者が行う管理で、MCP には出さない（`tools/list` に無く、ツールとして呼ぶと `-32602`）。CLI の `agent permissions`・`agent history`・`agent revert` と、アプリの設定画面・変更履歴 S-06（YUN-81）が使う。呼び出し元のスコープは確かめない（2章）。確認はこの操作の外（CLI の端末か画面）で行う。画面の入力中・保存の失敗中は、取り消しだけが見る（7.3）。コアは `domain::agent_admin`・`domain::history`。
+**管理の操作**（A-08。2026-11-04 決定。YUN-94）：利用者が行う管理で、MCP には出さない（`tools/list` に無く、ツールとして呼ぶと `-32602`）。CLI の `agent permissions`・`agent history`・`agent revert` が使う。アプリの設定画面・変更履歴 S-06 は、この API を通さず、同じコアを Tauri コマンドで呼ぶ（7.4）。呼び出し元のスコープは確かめない（2章）。確認はこの操作の外（CLI の端末か画面）で行う。画面の入力中・保存の失敗中は、取り消しだけが見る（7.3）。コアは `domain::agent_admin`・`domain::history`。
 
 | 操作 | 引数 | 成功の返り値 |
 | --- | --- | --- |
@@ -538,7 +538,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 
 - 新しい順（記録の ID の降順）に、エージェントの記録と、人の取り消しの記録（`operation` が `agent.revert`）の両方を返す。ID（ULID。データモデル設計書）は同じプロセスの中では作った順に増えるが、別のプロセス（アプリと CLI の直接モード）が同じミリ秒に作った記録の順は決まらない（`list_by_target` と同じ「おおよそ記録した順」。時刻は `created_at`）。`--client NAME` はそのクライアントの記録だけ（人の取り消しの記録はクライアントが無いので入らない。登録のない `NAME` は `not_found`）。`--unseen` は、エージェントによる未確認の変更（`actor = agent` で `seen_at` が空。データモデル設計書 change_log）だけ。`--limit N` は 1 以上（既定 50、200 を超える指定は 200。0 は `invalid_argument`）。`--before ID` はその記録より古いものだけ（続きを読む目印。返り値の `next_before` は、`limit` 件ちょうど返したときの最後の記録の ID で、それ未満なら `null`）。
 - 1 件の形：`{id, created_at, actor, client, operation, target, summary, seen_at, reverted_at, revert_of}`。`target` は、項目なら `{type: "item", id, date, kind, text, deleted}`（`text` はいまの本文。項目が見つからなければ `id` だけ）、ノート・振り返りなら `{type: "note" | "reflection", date}`。`summary` は、項目の追加が `{type: "added", kind, text}`、項目の欄の変更が `{type: "fields", fields: [{name, before, after}]}`（変えた欄だけ）、ノート・振り返りが `{type: "text", before_chars, after_chars}`（本文は大きいので文字数だけ。差分は取り消しの計画で見る）、読めない記録が `{type: "unknown"}`。
-- 一覧は、ノート・振り返りの記録の本文を読まず、文字数だけを SQLite に数えさせる（本文が大きい記録を、一覧のたびに読み込まないため）。一覧は確認済みの印（`seen_at`）を付けない。`seen_at` は変更履歴の画面で確認した時刻（データモデル設計書 change_log）なので、CLI で一覧を出しても未確認のまま残る。印を付ける口は、変更履歴 S-06（YUN-81）がコアに足す（YUN-81 の完了の条件に書いた）。
+- 一覧は、ノート・振り返りの記録の本文を読まず、文字数だけを SQLite に数えさせる（本文が大きい記録を、一覧のたびに読み込まないため）。一覧は確認済みの印（`seen_at`）を付けない。`seen_at` は変更履歴の画面で確認した時刻（データモデル設計書 change_log）なので、CLI で一覧を出しても未確認のまま残る。印を付ける口は、コアの `history::mark_seen`（7.4。2026-11-05 決定。YUN-81）。
 
 ### 7.3 取り消し（`agent revert`。2026-11-04 決定。YUN-94）
 
@@ -557,7 +557,7 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 - 後の記録がある欄：エージェントが同じ欄を続けて変えた場合も、人の変更と区別せず、`changed` になる。新しい記録から順に取り消す。
 - すでに戻っている：いまの値がすでに戻したい値と同じ（人が先に戻した、追加した項目をすでに削除した、本文がすでに前の本文）なら、何も書かずに、元の記録を取り消し済みにして成功を返す（`updated: false`、`state: already_restored`）。取り消しの記録は作らない。
 - すでに取り消し済み（`reverted_at` がある、または取り消しの記録から指されている）：何も書かずに成功を返す（`updated: false`、`state: already_reverted`）。取り消しの応答が届かずに、人がやり直した場合を失敗にしないため。
-- `--force` が越えるのは「人があとから変えた」（`changed`）だけ。確認で見せた値だけを上書きする：CLI は取り消す内容を見せたときの状態を表す `token`（`preview_revert` の返り値）を `expect` に付けて送り、確認の後に変わっていれば、`--force` でも書かずに `conflict`（`changed`）で止める（確認を待つ間に人が変えた内容を、見せずに消さないため）。`token` は、項目では調べる欄のいまの値、ノート・振り返りでは本文の長さと FNV-1a（64 ビット）の値（版の番号ではない。同じ本文の保存で版だけが進んでも止めないため。本文そのものは大きく、依頼の上限（4.4）を超えうるので持ち回らない。確認の後に変わったかを調べる目印で、署名ではない）。取り消したら元の記録を確認済み（`seen_at`）にする（利用者が見て扱い終えた変更を、未確認の数に残さないため。取り消さずに確認済みにするのは変更履歴の画面（YUN-81））。項目の欄がすでに戻したい値になっているときは、`after` と違っていても人が変えた欄に数えない（上書きするものが無い）。`after` が空の記録は取り消せない（`invalid_argument`）。ノートの `--force` は本文全体を `before` に戻すので、表示する差分は「いまの本文 → 戻す本文」で、失う内容が全部見える。
+- `--force` が越えるのは「人があとから変えた」（`changed`）だけ。確認で見せた値だけを上書きする：CLI は取り消す内容を見せたときの状態を表す `token`（`preview_revert` の返り値）を `expect` に付けて送り、確認の後に変わっていれば、`--force` でも書かずに `conflict`（`changed`）で止める（確認を待つ間に人が変えた内容を、見せずに消さないため）。`token` は、項目では調べる欄のいまの値、ノート・振り返りでは本文の長さと FNV-1a（64 ビット）の値（版の番号ではない。同じ本文の保存で版だけが進んでも止めないため。本文そのものは大きく、依頼の上限（4.4）を超えうるので持ち回らない。確認の後に変わったかを調べる目印で、署名ではない）。取り消したら元の記録を確認済み（`seen_at`）にする（利用者が見て扱い終えた変更を、未確認の数に残さないため。取り消さずに確認済みにするのは変更履歴の画面。7.4）。項目の欄がすでに戻したい値になっているときは、`after` と違っていても人が変えた欄に数えない（上書きするものが無い）。`after` が空の記録は取り消せない（`invalid_argument`）。ノートの `--force` は本文全体を `before` に戻すので、表示する差分は「いまの本文 → 戻す本文」で、失う内容が全部見える。
 
 **判定の順**（コア。最初に当たったものを返す。3.2 と同じ形）
 
@@ -580,6 +580,28 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 
 **`origin = human` にする手段（9章の決定）**：設けない。CLI は人とエージェントを確実には区別できない（2章）ので、対話端末で実行したことを理由に `human` にすると、エージェントが擬似端末で通して、自分の変更を履歴・未確認の印・取り消しの対象から外せてしまう。人が項目を足すのはアプリ（画面）の役割で、CLI で足した項目は、誰が実行しても `origin = agent` の `cli` クライアントとして記録する。
 
+### 7.4 画面の管理の操作（設定のエージェント区分・変更履歴 S-06。2026-11-05 決定。YUN-81）
+
+画面は、ローカル API を通さず、同じコア（`domain::agent_admin`・`domain::history`）を Tauri コマンドで呼ぶ（画面はコアと同じプロセスにあり、トークンもソケットも要らないため。アーキテクチャ設計書 4.3）。型は Rust の `src-tauri/src/types.rs` から作る `src/lib/bindings.ts`。コードは `src-tauri/src/commands.rs`（書き込みは `AppCore::admin_write`）。
+
+| コマンド | 引数 | 返り値 | コア |
+| --- | --- | --- | --- |
+| `list_agents` | なし | 登録順の `[{id, name, scopes, createdAt, lastSeenAt, removable}]` | `agent_admin::list_entries` |
+| `set_agent_scopes` | `client`、`allow`、`deny`、`expect`（見せた変更前のスコープ。必ず送る） | `{updated, scopes}` | `agent_admin::change_scopes` |
+| `remove_agent` | `client` | なし | `agent_admin::remove_client`（下記。画面だけの口） |
+| `api_status` | なし | `{state: stopped}`・`{state: listening, connections}`・`{state: unavailable, cause}` | `AppCore::api_state`（原因の文は渡さず、種類 `cause` だけ） |
+| `list_changes` | `client`、`unseenOnly`、`before`、`limit` | `{changes, nextBefore}`（形は 7.2。時刻はミリ秒、項目の欄の値は文字列か空） | `history::list_changes` |
+| `preview_revert` | `changeId` | 7.3 の計画（`state`、`token`、`changedSince`、`effect`） | `history::preview` |
+| `revert_change` | `changeId`、`force`、`expect`（`preview_revert` の `token`。必ず送る） | `{updated, state, marked}` | `history::revert`（画面の状態 `ScreenState` を渡す） |
+| `mark_changes_seen` | `ids`（画面が見せた記録） | 印を付けた件数 | `history::mark_seen`（下記。画面だけの口） |
+
+- `list_changes` の `nextBefore` は、画面のコマンドでは 1 件多く読んで、続きがあるときだけ返す（API の `next_before` は `limit` 件ちょうど返したときに返すので、ちょうど `limit` 件で終わると空の続きを指す。画面は空の「さらに読み込む」を出さない）。200 件の上限に当たったときだけは、API と同じ規則。
+- 権限の変更・登録の削除・取り消し・確認済みは、変えたら `changed`（`by: agent`）を知らせる（CLI の管理の操作と同じ経路。画面はどの `by` でも表示中のデータを読み直す）。画面の保存の失敗中には数えない。取り消しは、画面の入力中・保存の失敗中を 7.3 の判定の順どおりに見る（`ScreenState` を渡す）。
+- コアのエラーは `CommandError` にする：権限の変更の `Changed` は `conflict`（`scopes_changed`）、`unknown` への `read` 以外は `invalid_argument`（`unknown_write`）、取り消しの `Changed` は `conflict`（`changed`、`afterPreview`）、`UserEditing`・`CarriedOver` は既存の `conflict`、画面の保存の失敗中は `conflict`（`save_failing`）、取りやめた TODO は `invalid_argument`（`dropped`）、取り消しの記録・読み取れない記録は `invalid_argument`（`not_agent_change`・`unsupported_record`）。
+- **確認済みの印を付ける口**（`history::mark_seen(conn, ids, now)`）：渡した記録の `seen_at` を、まだ空のものだけ現在時刻にする（最初に確認した時刻を残す）。見せた記録の ID だけを渡す（一覧を読んでから印を付けるまでの間に届いた変更を、見せずに確認済みにしないため）。変更履歴の画面を開いただけでは付けない（上部のバーの件数と、整理モードの行頭の菱形が、見ていない間に消えないように）。画面が付けるのは、行ごとの「確認済みにする」と、表示している未確認すべての「確認済みにする」。取り消し（7.3）は、取り消した記録に自分で付ける。ローカル API・CLI には出さない（`seen_at` は利用者が画面で確認した時刻で、エージェントや端末から付ける理由が無いため）。
+- **登録の整理**（`agent_admin::remove_client`）：登録の数の上限（4.4。64）に達すると、新しい識別子の依頼は `invalid_argument`（`TooMany`）になり、`message` は設定のエージェント区分で整理するよう案内する。整理の手段は、**変更履歴にも項目にも指されていない登録を消す**ことに決めた（行を消すのは、指す記録が無いときだけ。確かめと削除は同じトランザクション）。消せないのは、固定の `cli`・`unknown`（`invalid_argument`、`fixed_client`）と、change_log か item の `agent_client_id` に指されている登録（`conflict`、`client_in_use`。履歴の表示に名前が要る）。消した識別子が次に接続したときは、初めての識別子と同じく `read` だけで登録し直される（確かめる文に書く）。「使わない」印を付ける案は、表の版を上げることになり、印の付いた登録を 64 に数えるかという別の決まりも増えるので採らない。履歴ごと消す案も、履歴の表示と取り消しの対象を失うので採らない。理由：名乗りの乱発で上限を埋めるのは、書き込みのスコープを与えていない登録（`read` だけでは change_log も item も作れない）で、指す記録が無いため。書き込みの権限を与えて使った登録だけで 64 に達する場合の手段は設けない（そうなったら、利用者の判断が要る事項として、新しい課題にする）。登録の整理は、利用者が画面で確かめて行う操作で、エージェントや端末から呼ぶ理由が無い（管理の口を増やさない）ので、ローカル API・CLI には出さず、画面だけの口にする。
+- **権限を足す確認**：画面は、権限を足すときだけ、足す権限で何ができるか（2章の表）を書いた確かめる文を、その行の下に出してから送る（CLI の `now:`・`after:` の確認に当たる。2章「確認は、CLI（対話端末）かアプリの設定画面が行い」）。外すときは、権限を狭めるだけなので確かめない。見せた権限を `expect` に付けて送り、確かめている間に別の所で変わっていたら、書かずに伝えて一覧を読み直す。
+
 ## 8. 第2フェーズで追加する操作（案。段階はロードマップ参照）
 
 - エージェントの直接起動：`yunagi run ID --agent claude-code`
@@ -589,4 +611,4 @@ Claude Code にも設定の `env` で `${XDG_DATA_HOME}` のように環境変�
 ## 9. 未決事項
 
 - エラーの `message` を利用者の言語設定（`locale`）に合わせて日英で出すか、英語固定にするか
-- 登録できるクライアントの数の上限（4.4。64）に達したとき、利用者が使っていない登録を整理する手段（`TooMany` の `message` は「設定 > エージェントで整理して」と案内するが、消す口がまだ無い。change_log と item が `agent_client_id` で指しているため、行を消すと履歴の表示に困る。消さずに「使わない」印を付けるか、履歴ごと扱いを決める）。変更履歴 S-06 と設定のエージェント区分（YUN-81）で決める（YUN-81 の完了の条件に書いた）
+- 書き込みの権限を与えて使った登録だけで、登録できる数の上限（4.4。64）に達したときの手段（履歴の無い登録は、設定のエージェント区分で消せる。7.4）。起きたら、利用者の判断が要る事項として扱う

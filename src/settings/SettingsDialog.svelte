@@ -2,8 +2,8 @@
   // 設定（S-05。画面設計書 7章）。外枠の上に重ねるパネル（形は検索パレット S-04・持ち越し S-03 と同じ）。
   // 左に区分（General / Display / Operation / Data / Agents）、右にその区分の設定を並べる。
   // 変えた値はすぐ画面に当て、コアの setting に保存する（`SettingsStore.save`）。保存先・バックアップ・
-  // 書き出しは DataSection、ショートカット割当は ShortcutsSection。エージェントの権限など、まだ無い機能の
-  // 設定は場所だけを置く（その機能のプロジェクトで足す）。
+  // 書き出しは DataSection、ショートカット割当は ShortcutsSection、エージェントと権限・ローカル API は
+  // AgentsSection。
   //
   // キー：Esc で閉じる（保存先などの確かめる画面を出していれば、先にそれを閉じる）、Mod+, でも閉じる、
   // Tab はこの画面の中だけを回る。開いている間は、ほかの画面のキー（Mod+J・ノートの Mod+Shift+H など）を
@@ -25,6 +25,8 @@
   import { SETTINGS_SECTIONS, type SettingsPanel, type SettingsSection } from "../lib/settings_panel.svelte";
   import type { SettingsStore } from "../lib/settings.svelte";
   import { ShortcutEditor } from "../lib/shortcuts_edit.svelte";
+  import type { AgentAdmin } from "../lib/agent_admin.svelte";
+  import AgentsSection from "./AgentsSection.svelte";
   import DataSection from "./DataSection.svelte";
   import ShortcutsSection from "./ShortcutsSection.svelte";
 
@@ -32,12 +34,14 @@
     panel,
     store,
     data,
+    admin,
     mac,
     onOpenAgents,
   }: {
     panel: SettingsPanel;
     store: SettingsStore;
     data: DataSettings;
+    admin: AgentAdmin;
     mac: boolean;
     /** エージェント変更履歴（S-06）を開く。 */
     onOpenAgents: () => void;
@@ -84,6 +88,17 @@
     if (panel.open && panel.section === "data") void data.load();
   });
 
+  // エージェント区分を開くたびに、エージェントの一覧とローカル API の状態を読む。区分を離れる・閉じるときは、
+  // 確かめている途中の操作と知らせを捨てる
+  $effect(() => {
+    if (panel.open && panel.section === "agents") {
+      const release = admin.retain();
+      void admin.load();
+      void admin.loadApi();
+      return release;
+    }
+  });
+
   const error = $derived.by(() => {
     const e = store.error;
     if (e === null) return null;
@@ -114,7 +129,10 @@
     }
     if (e.key === "Escape") {
       e.preventDefault();
+      // 確かめる文を出していれば、先にそれを閉じる
       if (data.flow !== null) data.cancel();
+      else if (admin.ask !== null) admin.cancelAsk();
+      else if (admin.removing !== null) admin.cancelRemove();
       else panel.close();
       return;
     }
@@ -331,26 +349,8 @@
           <h3 class="label">{labels.data}</h3>
           <DataSection {data} />
         {:else}
-          {@const a = s.agents}
           <h3 class="label">{labels.agents}</h3>
-          <div class="row placeholder">
-            <span class="name">{a.connected}</span>
-            <p class="note">{a.notYet}</p>
-          </div>
-          <div class="row placeholder">
-            <span class="name">{a.permissions}</span>
-            <p class="note">{a.notYet}</p>
-          </div>
-          <div class="row placeholder">
-            <span class="name">{a.localApi}</span>
-            <p class="note">{a.notYet}</p>
-          </div>
-          <div class="row">
-            <span class="name">{a.history}</span>
-            <div class="control">
-              <button type="button" class="btn" onclick={onOpenAgents}>{a.openHistory}</button>
-            </div>
-          </div>
+          <AgentsSection {admin} {onOpenAgents} />
         {/if}
       </div>
     </div>

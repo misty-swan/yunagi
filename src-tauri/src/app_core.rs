@@ -708,6 +708,22 @@ impl AppCore {
         result
     }
 
+    /// 利用者が画面で行う、エージェントの管理の書き込み（権限の変更・登録の削除・変更の取り消し・確認済みの
+    /// 印。画面設計書 7・8章）。`f` には、画面の状態（入力中・保存の失敗中。取り消しが確かめる）が渡る。
+    /// 変えたら [`Notice::Changed`] を `by: agent` で知らせる（CLI の管理の操作と同じ経路。MCP・CLI 仕様書
+    /// 7.1・7.3。ノートの取り込みもエージェントの変更と同じ扱い）。画面の保存の失敗中には数えない
+    /// （画面の保存ではない）。
+    pub fn admin_write<T: Changes, E: Into<CommandError>>(
+        &self,
+        f: impl FnOnce(&Connection, &ScreenState) -> Result<T, E>,
+    ) -> Result<T, CommandError> {
+        let result = self.with_db(|db| f(db.connection(), &self.screen).map_err(Into::into));
+        if result.as_ref().is_ok_and(Changes::changed) {
+            self.notify_changed(ChangeSource::Agent);
+        }
+        result
+    }
+
     /// エージェント・CLI からの書き込み（ローカル API が使う。アーキテクチャ設計書 4章 1）。
     /// `f` には、画面の状態（入力中・保存の失敗中）を持つ呼び出し元 `agent` が渡る。
     /// 変えたら [`Notice::Changed`]（`by: agent`）を知らせる（画面からの書き込みと同じ経路。4章 6）。
