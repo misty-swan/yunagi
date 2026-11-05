@@ -12,8 +12,12 @@ updates:
     # 脆弱性の修正の PR は、この待ち時間に関係なく出る。
     cooldown:
       default-days: 14
-    # 同じ週の更新は 1 つの PR にまとめる（action ごとに PR が増えて、確認とマージの手間が増えるのを防ぐ）
+    # minor と patch の更新は 1 つの PR にまとめる（action ごとに PR が増えて、確認とマージの手間が増えるのを防ぐ）。
+    # major の更新は、壊れる変更を含みうるので、まとめずに action ごとの別の PR にする。
     groups:
-      actions:
+      actions-minor-patch:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
