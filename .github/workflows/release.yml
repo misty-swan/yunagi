@@ -135,7 +135,7 @@ jobs:
       # 許可外ライセンスの検出。許可外のライセンスがあれば、タグの push でも試運転（PR）でも落ちる
       # （許可するか決まっていないもの = scripts/release/license-policy.json の pending があるときも同じ）
       - name: Licenses (disallowed)
-        run:node scripts/release/licenses.ts check
+        run: node scripts/release/licenses.ts check
 
       - name: Generate THIRD_PARTY_LICENSES.md
         run: node scripts/release/licenses.ts generate THIRD_PARTY_LICENSES.md
