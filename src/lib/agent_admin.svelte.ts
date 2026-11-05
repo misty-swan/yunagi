@@ -17,6 +17,9 @@ import { core, coreEvents, errorOf, keepListening } from "./core";
 /** 権限を並べる順（MCP・CLI 仕様書 2章の表の順）。 */
 export const AGENT_SCOPES: readonly AgentScope[] = ["read", "todo", "blocker", "append", "note_edit"];
 
+/** 固定の `cli` クライアントの名前。 */
+export const CLI_AGENT = "cli";
+
 /** 識別子のない接続の登録の名前（`read` より多くの権限は足せない）。 */
 export const UNKNOWN_AGENT = "unknown";
 

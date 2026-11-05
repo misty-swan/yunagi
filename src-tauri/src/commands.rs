@@ -793,9 +793,17 @@ pub async fn list_changes(
         core.read(|conn| {
             let mut entries = history::list_changes(conn, &filter)?;
             let shown = limit.min(history::MAX_LIMIT);
-            let more =
-                entries.len() > shown || (shown == history::MAX_LIMIT && entries.len() == shown);
+            let mut more = entries.len() > shown;
             entries.truncate(shown);
+            // コアの上限（200）では 1 件多く読めない：最後の記録より古いものがあるかを、もう 1 回調べる
+            if shown == history::MAX_LIMIT && entries.len() == shown {
+                let probe = history::ChangeFilter {
+                    before: entries.last().map(|e| e.log.id),
+                    limit: 1,
+                    ..filter.clone()
+                };
+                more = !history::list_changes(conn, &probe)?.is_empty();
+            }
             let next_before = more.then(|| entries.last().map(|e| Id(e.log.id))).flatten();
             Ok::<_, history::HistoryError>(ChangeList {
                 changes: entries.iter().map(ChangeEntry::from).collect(),

@@ -265,13 +265,13 @@ pub fn is_reverted_by_any(conn: &Connection, id: Ulid) -> Result<bool, StorageEr
     )?)
 }
 
-/// 利用者が確認した時刻を記録する。行が無いか、すでに確認済みなら何もせず `false`
-/// （最初に確認した時刻を残す）。
+/// 利用者が確認した時刻を記録する。確認の対象はエージェントの変更（`actor = agent`）だけ。行が無い・
+/// 人の記録・すでに確認済みなら何もせず `false`（最初に確認した時刻を残す）。
 pub fn set_seen_at(conn: &Connection, id: Ulid, at: Timestamp) -> Result<bool, StorageError> {
     let n = execute(
         conn,
-        "UPDATE change_log SET seen_at = ?2 WHERE id = ?1 AND seen_at IS NULL",
-        params![id, Time(at)],
+        "UPDATE change_log SET seen_at = ?2 WHERE id = ?1 AND seen_at IS NULL AND actor = ?3",
+        params![id, Time(at), Actor::Agent],
     )?;
     Ok(n == 1)
 }

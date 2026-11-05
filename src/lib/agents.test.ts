@@ -135,6 +135,22 @@ test("続きの読み込みに失敗しても、一覧の読み込みの失敗�
   s.stop();
 });
 
+test("読み直した一覧に無くなった記録の、取り消しの確かめる文は閉じる", async () => {
+  const s = new AgentsScreen({ flush: async () => {} });
+  s.start();
+  s.show();
+  await vi.waitFor(() => expect(s.loaded).toBe(true));
+  await s.startRevert({ ...ENTRY, id: "01J000000000000000000000E2" });
+  expect(s.flow).not.toBeNull();
+  // 一覧（ENTRY だけ）に無い記録なので、読み直すと閉じる
+  await vi.waitFor(async () => {
+    await emit(EVENTS.changed, { by: "agent" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(s.flow).toBeNull();
+  });
+  s.stop();
+});
+
 test("絞り込んだエージェントの登録がなくなっていたら、絞り込みを外して知らせる", async () => {
   const s = new AgentsScreen({ flush: async () => {} });
   s.show();

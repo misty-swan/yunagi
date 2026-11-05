@@ -4,7 +4,7 @@
   // 権限を入れるときは、足す権限で何ができるかを書いた確かめる文をその行の下に出す。外すときはすぐ行う。
   // 登録を消す（`showRemove`。設定だけ）のも、確かめる文を出してから行う。
   import { tick } from "svelte";
-  import { AGENT_SCOPES, UNKNOWN_AGENT, type AgentAdmin } from "../lib/agent_admin.svelte";
+  import { AGENT_SCOPES, CLI_AGENT, UNKNOWN_AGENT, type AgentAdmin } from "../lib/agent_admin.svelte";
   import type { AgentRow, AgentScope } from "../lib/bindings";
   import { backupTime } from "../lib/backups";
   import { agentLabel, t } from "../lib/i18n";
@@ -77,12 +77,12 @@
                 >
                   {a.remove}
                 </button>
-              {:else if row.name !== "cli" && row.name !== UNKNOWN_AGENT}
+              {:else if row.name !== CLI_AGENT && row.name !== UNKNOWN_AGENT}
                 <span class="inuse">{a.inUse}</span>
               {/if}
             {/if}
           </div>
-          {#if row.name === "cli" || row.name === UNKNOWN_AGENT}
+          {#if row.name === CLI_AGENT || row.name === UNKNOWN_AGENT}
             <p class="fixed">{a.fixed[row.name]}</p>
           {/if}
           <div class="scopes" role="group" aria-label={a.scopesOf(row.name)}>

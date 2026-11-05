@@ -1295,6 +1295,10 @@ mod tests {
         assert_eq!(seen[0].seen_at, Some(at(T1)));
         assert_eq!(last_log(conn, b.id).seen_at, None);
         assert_eq!(mark_seen(conn, &[lb.id], at(T2)).unwrap(), 1);
+        // 人の記録（取り消し）には付けない
+        let r = do_revert(conn, la.id, false, T3).unwrap();
+        let human = r.revert_id.unwrap();
+        assert_eq!(mark_seen(conn, &[human], at(T3)).unwrap(), 0);
         assert_eq!(change_log::count_unseen_by_agents(conn).unwrap(), 0);
     }
 

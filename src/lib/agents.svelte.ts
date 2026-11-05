@@ -10,7 +10,7 @@
 //   （差分と確認の目印が、送る前の古い本文から作られないように）。人が記録のあとに変えた欄があれば、
 //   通常の「取り消す」は出さず、見せた値を上書きする「上書きして取り消す」だけを出す。確かめた後に内容が
 //   変わっていれば、書かずに確かめ直す。
-// - データが変わったとき（changed）は、開いている間だけ、読み込み済みの件数（50〜200）を読み直す。
+// - データが変わったとき（changed）は、開いている間だけ、読み込み済みの件数（最大 1000 件）を読み直す。読み直した一覧に無くなった記録の取り消しの確かめる文は閉じる。
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ChangeEntry, Id, RevertPlan } from "./bindings";
@@ -19,8 +19,10 @@ import type { RevertProblem } from "./i18n_agents";
 
 /** 一覧を 1 回に読む件数。 */
 export const PAGE_SIZE = 50;
-/** 読み直すときの件数の上限（コアの上限）。 */
-export const REFRESH_MAX = 200;
+/** 読み直すときの件数の上限。 */
+export const REFRESH_MAX = 1000;
+/** コアが 1 回に返せる件数の上限。 */
+const PAGE_MAX = 200;
 /** 読み込みに失敗したとき、読み直すまでの時間。 */
 export const AGENTS_RETRY_MS = LISTEN_RETRY_MS;
 
@@ -136,6 +138,8 @@ export class AgentsScreen {
     this.nextBefore = null;
     this.loaded = false;
     this.failed = false;
+    this.moreFailed = false;
+    this.loadingMore = false;
     this.client = null;
     this.unseenOnly = false;
     this.flow = null;
@@ -165,6 +169,7 @@ export class AgentsScreen {
     this.flow = null;
     this.result = null;
     this.loaded = false;
+    this.moreFailed = false;
     void this.#load(PAGE_SIZE);
   }
 
@@ -173,6 +178,7 @@ export class AgentsScreen {
     this.flow = null;
     this.result = null;
     this.loaded = false;
+    this.moreFailed = false;
     void this.#load(PAGE_SIZE);
   }
 
@@ -186,10 +192,21 @@ export class AgentsScreen {
     const n = ++this.#loads;
     clearTimeout(this.#retry);
     try {
-      const page = await core.listChanges(this.client, this.unseenOnly, null, limit);
+      // コアは 1 回に 200 件まで。読み込んでいた件数まで、続けて読む（読み直しで一覧が短くならないように）
+      let want = Math.min(limit, PAGE_MAX);
+      let page = await core.listChanges(this.client, this.unseenOnly, null, want);
+      const all = [...page.changes];
+      // 200 件を超えて読み込んでいたときだけ、続けて読む
+      while (page.nextBefore !== null && page.changes.length === want && all.length < limit) {
+        want = Math.min(limit - all.length, PAGE_MAX);
+        page = await core.listChanges(this.client, this.unseenOnly, page.nextBefore, want);
+        all.push(...page.changes);
+      }
       if (n !== this.#loads || !this.open) return;
-      this.entries = page.changes;
+      this.entries = all;
       this.nextBefore = page.nextBefore;
+      // 読み直した一覧に無くなった記録の確かめる文は閉じる（見えない確かめる文が残らないように）
+      if (this.flow !== null && !this.flow.busy && !all.some((e) => e.id === this.flow!.entry.id)) this.flow = null;
       this.loaded = true;
       this.failed = false;
       this.moreFailed = false;
