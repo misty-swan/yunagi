@@ -23,15 +23,16 @@ use crate::output;
 use crate::{Env, Io};
 
 /// 確認の質問の答え。
-enum Answer {
+pub(crate) enum Answer {
     Yes,
     No,
     /// 答えを得られなかった（入力が閉じている・読めない）。何も書かずに失敗にする。
     Unavailable,
 }
 
-/// `[y/N]` の質問をして、答えを読む。`y`・`yes`（大文字小文字は問わない）だけを承諾とする。
-fn confirm(io: &mut Io<'_>, question: &str) -> Answer {
+/// `[y/N]` の質問をして、答えを読む。`y`・`yes`（大文字小文字は問わない）だけを承諾とする
+/// （`uninstall` も使う）。
+pub(crate) fn confirm(io: &mut Io<'_>, question: &str) -> Answer {
     let _ = write!(io.stdout, "\n{question} [y/N] ");
     let _ = io.stdout.flush();
     let mut answer = String::new();

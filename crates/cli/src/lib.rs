@@ -12,6 +12,8 @@
 //!   `agent history` は読み取りなので、ふつうの操作として [`output`] が整える。
 //! - [`show`]：`yunagi show`（アプリの窓を前面に出す。動いていなければ起動する）。ローカル API だけを使い、
 //!   直接モードは無い。
+//! - [`uninstall`]：`yunagi uninstall [--purge]`（アプリと CLI の削除。`--purge` でデータも消す。
+//!   端末で確認する）。
 //! - [`error`]：エラー（05 4.3）と終了コード（05 4.1）。
 //!
 //! 実行ファイルの `main` は [`run`] を呼ぶだけにして、試験が同じプロセスの中で、入出力と環境を差し替えて
@@ -27,6 +29,7 @@ pub mod mcp;
 mod mcp_tools;
 pub mod output;
 pub mod show;
+pub mod uninstall;
 
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -55,6 +58,8 @@ pub struct Env {
     pub setup: agent_setup::SetupEnv,
     /// `show` の、アプリの起動のしかたと、起動してから待つ上限。
     pub show: show::Options,
+    /// `uninstall` が見る環境（場所・消してよいパスの決まり・OS を呼ぶ部分）。
+    pub uninstall: uninstall::Setup,
 }
 
 impl Default for Env {
@@ -64,6 +69,7 @@ impl Default for Env {
             timing: Timing::default(),
             setup: agent_setup::SetupEnv::from_process(),
             show: show::Options::default(),
+            uninstall: uninstall::Setup::from_process(),
         }
     }
 }
@@ -98,6 +104,7 @@ pub fn run(args: &[String], env: &Env, io: &mut Io<'_>) -> i32 {
         Command::AgentRevert { change_id, force } => {
             agent_admin::revert(&change_id, force, env, io)
         }
+        Command::Uninstall { purge } => uninstall::run(purge, env, io),
     }
 }
 

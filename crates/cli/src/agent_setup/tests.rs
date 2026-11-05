@@ -96,6 +96,7 @@ fn go(setup: SetupEnv, claude: bool, codex: bool, input: &str) -> Ran {
         timing: Timing::default(),
         setup,
         show: crate::show::Options::default(),
+        uninstall: crate::uninstall::tests_support::setup_for(Platform::current(), &[]),
     };
     let (mut stdin, mut stdout, mut stderr) = (input.as_bytes(), Vec::new(), Vec::new());
     let code = run(

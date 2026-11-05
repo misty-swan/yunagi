@@ -534,7 +534,7 @@ macOS で想定する場所（サンドボックスに入れない通常のア�
 - 消せなかったものがあっても、ほかは消し続け、最後に消したものと消せなかったものを一覧にして、終了コードを 0 以外にする。
 - 保存先を変えたまま Homebrew の Cask の `zap` で消すときは、Cask が `config.json` を読めないので、変えた先は消えない（ビルド・配布手順書 4.3）。利用者ガイドの「アンインストール」に書く。
 
-`yunagi uninstall` の実装はまだ無い（Linear の YUN-99 が作る。完了の条件でこの章とビルド・配布手順書 4.4 を参照する）。
+実装は `crates/cli/src/uninstall/`（YUN-99。コマンドの決まりは CLI・MCP 仕様書 3.1）。識別子はコアの定数 `APP_IDENTIFIER`（`tauri.conf.json` の `identifier` と同じことを試験で固定する）、既定ディレクトリと Linux・Windows の WebView の場所の親は、コアの `local_data_root_for` 1 つから導く（4 通りの試験はコアの `data_dir.rs`）。
 
 ## 7. OS 連携
 

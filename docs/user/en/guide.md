@@ -155,6 +155,8 @@ yunagi uninstall --purge  # also removes your data
 
 The data location folder itself is not removed, because it may hold other files. If Yunagi is running, nothing is removed and the command stops. Quit Yunagi first.
 
+The command lists what it will remove and asks `[y/N]` before it removes anything, so run it in a terminal yourself (it does not run from a script or an AI agent's shell). When it ends, it lists what it removed and anything it could not remove, with the reason (delete those by hand), and exits with a non-zero code in that case. On Windows, the last part of the cleanup (the installed folder and, with `--purge`, the data folder) runs in the background right after the command ends. If something is still there a little later, delete it by hand.
+
 If Yunagi was not installed by the install script (for example, placed by hand, a development build, or a tar.gz), the command shows the location it found and stops without removing anything. It also stops without removing anything if the settings file (`config.json`) is damaged, because the data location is then unknown.
 
 If you installed with Homebrew, `yunagi uninstall` removes nothing and shows the Homebrew command instead: `brew uninstall --cask yunagi` removes the app only, and `brew uninstall --cask --zap yunagi` also removes your data. If you changed the data location in Settings, `--zap` does not remove the data there, so delete it by hand.
