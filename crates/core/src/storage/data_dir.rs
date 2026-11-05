@@ -1207,8 +1207,9 @@ mod tests {
             expected.sort();
             leftovers.sort();
             assert_eq!(leftovers, expected);
+            // 接続を閉じると、SQLite が WAL と共有メモリを自分で消すことがある（もう無くてよい）
             for path in &report.leftovers {
-                fs::remove_file(path).unwrap();
+                let _ = fs::remove_file(path);
             }
         } else {
             assert_eq!(report, ChangeReport::default());
