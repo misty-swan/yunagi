@@ -40,6 +40,17 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。
 6. SHA-256 を計算し、`.sha256` と `SHA256SUMS` を Release に添付する。`SHA256SUMS` に配布用鍵で署名し、`SHA256SUMS.sig` を添付する。
 7. Homebrew tap のリポジトリに、新しいバージョンとハッシュを自動でプルリクエストする。
 
+### action の固定
+
+開発用 CI（`.github/workflows/ci.yml`）と配布用 CI のどちらも、ワークフローが使う action を次のとおり固定する（2026-11-05 決定。YUN-43）。タグは後から別のコミットに付け替えられ、乗っ取られた action が CI で動くおそれがある（配布用 CI ではビルドの署名鍵の近くで動く）ため、中身が変わらないコミットで指定する。
+
+- `uses:` に書く action は、すべて 40 桁のコミットの SHA で指定し、同じ行の末尾に版のタグをコメントで併記する（例：`uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1`）。`actions/*` の公式の action も例外にしない。ブランチ名（`main`）、移動するタグ（`v7` のようなメジャー版だけのタグ）では指定しない。コメントの版は、`v7.0.1` のように完全な版で書く。
+- 同じリポジトリの中の再利用ワークフロー・composite action（`./.github/...`）は、同じコミットのものを使うので、固定の対象外にする。Docker の image を使う `docker://` は、使うなら `sha256:` のダイジェストで指定する（今は使っていない）。
+- SHA は、action のリポジトリに実在するタグから解決する（`gh api repos/<owner>/<repo>/git/ref/tags/<タグ>` で得た `object.sha` が、注釈付きタグ（`type` が `tag`）なら `gh api repos/<owner>/<repo>/git/tags/<その sha>` で、指す先のコミットの SHA を得る）。コメントの版と SHA が食い違わないよう、記憶や別の場所からの写しで書かない。
+- 更新は Dependabot（`.github/dependabot.yml` の `github-actions`）に任せる。週に 1 回、新しい版があれば PR を出し、SHA とコメントの版を一緒に書き換える。公開から 14 日たった版だけを PR にする（`cooldown`。SECURITY.md 4.4 の依存の更新と同じ目安）。脆弱性の修正の PR は、この待ち時間に関係なく出る。人が手で足す・上げるときも、公開から 14 日を経た版を採る。Dependabot の PR は、リリースの変更点（release notes）と差分を見てマージする。Dependabot の PR には Linear の課題を作らない（PR のタイトルは既定のままにする。作業管理の決まりの「PR のタイトルに課題番号」の例外）。
+- 固定していない action が入るのを防ぐため、リポジトリの設定（Settings → Actions → General）で「Require actions to be pinned to a full-length commit SHA」を有効にする（オーナーの設定の作業。有効にすると、タグ指定のワークフローは実行されずに失敗する）。
+- Dependabot の対象は action だけで、Rust・JavaScript の依存の更新は含めない（SECURITY.md 4.4 のとおり、14 日の目安で別に更新する）。
+
 ## 4. インストールスクリプト
 
 ### 4.1 macOS・Linux（install.sh）
