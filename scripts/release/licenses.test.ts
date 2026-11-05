@@ -46,7 +46,7 @@ test("許可外の検出用の設定は、pending を accepted から除くだ�
   const strict = strictAboutToml(toml, policy.allowed);
   expect(readAccepted(strict)).toEqual(policy.allowed);
   // pending が入っている場合（ふだんは空なので、作って確かめる）：pending だけが accepted から除かれ、ほかは変わらない
-  const withPending = toml.replace(/"Unicode-3\.0",\n/, '"Unicode-3.0",\n    "X-Pending-1.0",\n');
+  const withPending = `accepted = [${[...policy.allowed, "X-Pending-1.0"].map((id) => `"${id}"`).join(", ")}]\n${toml.replace(/^accepted = \[[^\]]*\]/m, "")}`;
   expect(readAccepted(withPending)).toContain("X-Pending-1.0");
   const strictWithPending = strictAboutToml(withPending, policy.allowed);
   expect(readAccepted(strictWithPending)).toEqual(policy.allowed);
