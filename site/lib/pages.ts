@@ -88,7 +88,7 @@ function verifyKey(lang: Lang, key: string | null): string {
     }</p></div>`;
   }
   const text = ja
-    ? `公開鍵のファイルは <a href="/yunagi-release.pub">yunagi-release.pub</a> です。同じ内容を、リポジトリの <a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a> でも見られます。2 か所が同じであることも確かめてください。`
+    ? `公開鍵のファイルは <a href="/yunagi-release.pub">yunagi-release.pub</a> です。同じ内容を、リポジトリの <a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a> でも見られます。2か所が同じであることも確かめてください。`
     : `The public key file is <a href="/yunagi-release.pub">yunagi-release.pub</a>. The same content is in the repository at <a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a>. Check that the two copies match.`;
   return `<p>${text}</p>\n<pre tabindex="0"><code>${esc(key.trimEnd())}</code></pre>`;
 }

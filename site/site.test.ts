@@ -549,11 +549,28 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
   });
 
   it("押す場所は高さ 44px 以上（ナビ・言語の切り替え・ボタン・文字だけのリンク・リンクの並び・フッター）", () => {
+    // 規則は『行頭から始まる選び方 { … }』を、画面の幅で変わらない最上位のものから探す。
+    // min-height は、行の中に並ぶ（inline）要素には効かないので、display も確かめる
+    const topLevel = css.replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+    const rule = (sel: string): string => {
+      const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\n/g, "\\n");
+      const m = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`).exec(topLevel);
+      expect(m, `${sel} の規則が無い`).not.toBeNull();
+      return (m as RegExpExecArray)[1];
+    };
     for (const sel of [".logo", ".site-nav a", ".lang a,\n.lang span", ".button", ".actions a:not(.button)", ".links a", ".site-footer a"]) {
-      const start = css.indexOf(`${sel} {`);
-      expect(start, `${sel} の規則が無い`).toBeGreaterThanOrEqual(0);
-      const block = css.slice(start, css.indexOf("}", start));
-      expect(block, `${sel}: min-height: 44px が無い`).toMatch(/min-height: 44px/);
+      expect(rule(sel), `${sel}: min-height: 44px が無い`).toMatch(/min-height: 44px/);
+      expect(rule(sel), `${sel}: display: inline-flex が無い`).toMatch(/display: inline-flex/);
+    }
+  });
+
+  it("日本語の本文の数字と助数詞の間に空白が無い（サイトの本文・文言とガイド）", () => {
+    const files = [...walk(join(ROOT, "site", "content", "ja")), join(ROOT, "site", "lib", "text.ts"), join(ROOT, "site", "lib", "pages.ts"), join(ROOT, "docs", "user", "ja", "guide.md")];
+    for (const f of files) {
+      for (const [i, line] of readFileSync(f, "utf8").split("\n").entries()) {
+        // 「FUSE 2 が要ります」のような製品の版の数字は、助数詞が続かないので当たらない
+        expect(line, `${relative(ROOT, f)}:${i + 1}`).not.toMatch(/[0-9] (行|件|つ|か所|営業日|章|世代|時間|桁|字|枚|日)(?![a-zA-Z])/);
+      }
     }
   });
 
@@ -567,7 +584,14 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
   });
 
   it("印刷用の規則がある（景色とナビを出さない）", () => {
-    expect(css).toMatch(/@media print \{[\s\S]*\.hero-scene[\s\S]*display: none/);
+    const start = css.indexOf("@media print {");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // 印刷の規則は、入れ子の波括弧が 1 段の @media なので、行頭の『}』で終わる
+    const block = css.slice(start, css.indexOf("\n}\n", start));
+    expect(block).toMatch(/\.skip,\s*\.site-nav,\s*\.hero-scene \{\s*display: none;/);
+    expect(block).toMatch(/\.button \{[^}]*background: none/);
+    expect(block).toMatch(/pre \{[^}]*white-space: pre-wrap/);
+    expect(block).toMatch(/a\[href\^="http"\]::after \{[^}]*content: " \(" attr\(href\) "\)"/);
   });
 
   it("ロゴの色は、アプリのロゴ（src/shell/Logo.svelte）と同じ", () => {

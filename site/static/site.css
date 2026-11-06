@@ -646,23 +646,25 @@ pre code {
 .doc ul,
 .doc ol {
   margin: 12px 0;
-  /* 1 行の長さ：日本語は約 42 字、英語は約 70 字まで（表とコードの囲みは、囲みの幅いっぱい） */
+}
+
+/* 1 行の長さ：日本語は約 42 字、英語は約 68 字まで。直下の段落とリストだけ
+   （目次・注記・入れ子のリスト、表とコードの囲みは、囲みの幅いっぱい） */
+.doc > p,
+.doc > ul,
+.doc > ol {
   max-width: 42em;
 }
 
-.doc:lang(en) p,
-.doc:lang(en) ul,
-.doc:lang(en) ol {
+.doc:lang(en) > p,
+.doc:lang(en) > ul,
+.doc:lang(en) > ol {
   max-width: 68ch;
 }
 
-/* 行内のコードやパスは、狭い画面では途中で折り返す */
-.doc code {
+/* 文の中のコードやパスは、狭い画面では途中で折り返す（表の中は、表を横に動かす） */
+.doc :is(p, li) code {
   overflow-wrap: anywhere;
-}
-
-.doc pre code {
-  overflow-wrap: normal;
 }
 
 .doc li {
@@ -789,12 +791,19 @@ kbd {
     background: none;
   }
 
+  /* 背景を印刷しない設定でも読めるよう、ボタンは枠だけにする */
+  .button {
+    background: none;
+    color: var(--text);
+    border: 1px solid var(--ring);
+  }
+
   pre {
     white-space: pre-wrap;
     overflow: visible;
   }
 
-  .doc a[href^="http"]::after {
+  a[href^="http"]::after {
     content: " (" attr(href) ")";
     overflow-wrap: anywhere;
   }
