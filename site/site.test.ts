@@ -1,0 +1,541 @@
+// @vitest-environment node
+// 公式サイトの検査（docs/release/07-build-and-distribution.md 2章「公式サイトの作り方」）。
+// 実際にビルドして、出力（HTML・CSS・_headers など）を確かめる：リンク切れ、日英のページがそろうこと、
+// 見出しの階層、外部の読み込みが無いこと、色のトークンがデザインガイドと同じで読めること、latest.json の扱い。
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { JSDOM } from "jsdom";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { build, headersFile, ROOT } from "./lib/build.ts";
+import { ISSUES_URL, LANGS, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
+import { fetchPublishedLatest, parseLatest } from "./lib/latest.ts";
+import { renderMarkdown, slugify } from "./lib/markdown.ts";
+import { PAGE_KEYS } from "./lib/text.ts";
+
+const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
+
+const LATEST = `{
+  "version": "1.2.3",
+  "notes": "test",
+  "pub_date": "2026-12-01T00:00:00Z",
+  "platforms": {
+    "darwin-aarch64": { "url": "https://github.com/misty-swan/yunagi/releases/download/v1.2.3/Yunagi_1.2.3_arm64.app.tar.gz", "signature": "c2ln" },
+    "linux-x86_64": { "url": "https://github.com/misty-swan/yunagi/releases/download/v1.2.3/Yunagi_1.2.3_x86_64.AppImage", "signature": "c2ln" }
+  }
+}
+`;
+
+const tmp = mkdtempSync(join(tmpdir(), "yunagi-site-test-"));
+const plainDir = join(tmp, "plain");
+const withDir = join(tmp, "with-latest");
+const latestPath = join(tmp, "latest.json");
+
+beforeAll(() => {
+  writeFileSync(latestPath, LATEST);
+  build({ outDir: plainDir });
+  build({ outDir: withDir, latestJson: latestPath });
+});
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+function walk(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+  );
+}
+
+const htmlFiles = (dir: string) => walk(dir).filter((f) => f.endsWith(".html"));
+const dom = (file: string) => new JSDOM(readFileSync(file, "utf8")).window.document;
+
+describe("出力の構成", () => {
+  it("日本語と英語のページが同じ組でそろう（トップ・各ページ）", () => {
+    const list = (lang: string) =>
+      walk(join(plainDir, lang)).map((f) => relative(join(plainDir, lang), f)).sort();
+    expect(list("ja")).toEqual(list("en"));
+    expect(list("ja").length).toBe(PAGE_KEYS.length);
+    for (const lang of LANGS) {
+      for (const f of list(lang)) expect(f.endsWith("index.html"), f).toBe(true);
+    }
+  });
+
+  it("必要な公開物がある（導入スクリプトはリポジトリの install/ と同じ。latest.json は渡さなければ無い）", () => {
+    for (const f of ["index.html", "404.html", "_headers", "_redirects", "assets/site.css", "assets/favicon.svg"]) {
+      expect(existsSync(join(plainDir, f)), f).toBe(true);
+    }
+    expect(readFileSync(join(plainDir, "install.sh"), "utf8")).toBe(read("install/install.sh"));
+    expect(readFileSync(join(plainDir, "install.ps1"), "utf8")).toBe(read("install/install.ps1"));
+    expect(existsSync(join(plainDir, "latest.json"))).toBe(false);
+    expect(readFileSync(join(withDir, "latest.json"), "utf8")).toBe(LATEST);
+  });
+
+  it("フォントは配布元のファイルのまま（加工しない）で、許諾の文書が一緒にある", () => {
+    for (const f of ["InterVariable.woff2", "LICENSE.txt"]) {
+      expect(readFileSync(join(plainDir, "assets/fonts/inter", f))).toEqual(
+        readFileSync(join(ROOT, "src/assets/fonts/inter", f)),
+      );
+    }
+  });
+
+  it("ルートは言語で振り分けず日本語へ移す", () => {
+    expect(readFileSync(join(plainDir, "_redirects"), "utf8")).toContain("/ /ja/ 302");
+    const root = readFileSync(join(plainDir, "index.html"), "utf8");
+    expect(root).toContain('http-equiv="refresh" content="0; url=/ja/"');
+    expect(root).toContain('href="/en/"');
+  });
+
+  it("_headers：/latest.json は no-cache、導入スクリプトはブラウザで読める、CSP は同じサイトだけ", () => {
+    const h = headersFile();
+    expect(h).toMatch(/^\/latest\.json\n(?: {2}.+\n)*? {2}Cache-Control: no-cache$/m);
+    expect(h).toMatch(/^\/install\.sh\n(?: {2}.+\n)*? {2}Content-Type: text\/plain; charset=utf-8$/m);
+    expect(h).toMatch(/^\/install\.ps1\n(?: {2}.+\n)*? {2}Content-Type: text\/plain; charset=utf-8$/m);
+    expect(h).toContain("default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'");
+    expect(readFileSync(join(plainDir, "_headers"), "utf8")).toBe(h);
+  });
+});
+
+describe("各ページの HTML", () => {
+  const dirs = [plainDir, withDir];
+  const allFiles = () => dirs.flatMap(htmlFiles);
+
+  it("lang・h1・見出しの階層・id の重複", () => {
+    for (const file of allFiles()) {
+      const rel = relative(tmp, file);
+      const doc = dom(file);
+      const lang = doc.documentElement.getAttribute("lang");
+      const m = /\/(ja|en)\//.exec(`/${relative(tmp, file).split("/").slice(1).join("/")}`);
+      if (m) expect(lang, rel).toBe(m[1]);
+      else expect(lang, rel).toBe("ja");
+      expect(doc.title.length, rel).toBeGreaterThan(0);
+      expect(doc.querySelectorAll("h1").length, rel).toBe(1);
+      let prev = 0;
+      for (const h of doc.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
+        const level = Number(h.tagName[1]);
+        expect(level - prev, `${rel}: ${h.textContent} の見出しが飛んでいる`).toBeLessThanOrEqual(1);
+        prev = level;
+      }
+      const ids = [...doc.querySelectorAll("[id]")].map((e) => e.id);
+      expect(new Set(ids).size, `${rel}: id の重複`).toBe(ids.length);
+      expect(doc.querySelector("main"), rel).not.toBeNull();
+      // ルートの移動ページと 404 は、ヘッダーの無い簡単なページ
+      if (m) {
+        expect(doc.querySelector("main#main"), rel).not.toBeNull();
+        expect(doc.querySelector('a.skip[href="#main"]'), rel).not.toBeNull();
+      }
+    }
+  });
+
+  it("外部の読み込み・スクリプト・インラインの style・イベント属性が無い", () => {
+    for (const file of allFiles()) {
+      const rel = relative(tmp, file);
+      const doc = dom(file);
+      expect(doc.querySelectorAll("script,iframe,img,object,embed,form,video,audio,source,style,input,button"), rel).toHaveLength(0);
+      for (const el of doc.querySelectorAll("*")) {
+        expect(el.hasAttribute("style"), `${rel}: <${el.tagName}> に style 属性`).toBe(false);
+        for (const a of el.getAttributeNames()) expect(a.startsWith("on"), `${rel}: ${a}`).toBe(false);
+      }
+      for (const l of doc.querySelectorAll("link[href]")) {
+        const rel2 = l.getAttribute("rel");
+        const href = l.getAttribute("href") ?? "";
+        if (rel2 === "stylesheet" || rel2 === "icon") expect(href.startsWith("/assets/"), `${rel}: ${href}`).toBe(true);
+        else expect(href.startsWith(SITE), `${rel}: ${href}`).toBe(true);
+      }
+    }
+  });
+
+  it("リンク切れが無い（内部のリンクは出力の中のファイルと見出しの id に着く）", () => {
+    for (const dir of dirs) {
+      for (const file of htmlFiles(dir)) {
+        const rel = relative(tmp, file);
+        const doc = dom(file);
+        for (const a of doc.querySelectorAll("a[href]")) {
+          const href = a.getAttribute("href") ?? "";
+          if (/^(https:\/\/|mailto:)/.test(href)) continue;
+          expect(href, `${rel}: 相対リンク`).toMatch(/^(\/|#)/);
+          const [pathPart, frag] = href.split("#");
+          let target = file;
+          if (pathPart !== "") {
+            const p = join(dir, decodeURIComponent(pathPart));
+            target = pathPart.endsWith("/") ? join(p, "index.html") : p;
+            expect(existsSync(target) && statSync(target).isFile(), `${rel}: ${href} の行き先が無い`).toBe(true);
+          }
+          if (frag) {
+            expect(target.endsWith(".html"), `${rel}: ${href}`).toBe(true);
+            const ids = new Set([...dom(target).querySelectorAll("[id]")].map((e) => e.id));
+            expect(ids.has(decodeURIComponent(frag)), `${rel}: ${href} の見出しが無い`).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  it("日英で同じ構成（見出しの並び・コードの囲み・表・リンクの数）", () => {
+    for (const dir of dirs) {
+      for (const page of PAGE_KEYS) {
+        const slug = page === "home" ? "" : `${page}/`;
+        const shape = (lang: string) => {
+          const doc = dom(join(dir, lang, slug, "index.html"));
+          return {
+            headings: [...doc.querySelectorAll("main h1,main h2,main h3,main h4")].map((h) => h.tagName),
+            pre: doc.querySelectorAll("main pre").length,
+            tables: doc.querySelectorAll("main table").length,
+            links: doc.querySelectorAll("main a").length,
+          };
+        };
+        expect(shape("en"), page).toEqual(shape("ja"));
+      }
+    }
+  });
+
+  it("言語の切り替えは同じページの別の言語に着き、hreflang の対がある", () => {
+    for (const page of PAGE_KEYS) {
+      const slug = page === "home" ? "" : `${page}/`;
+      const ja = dom(join(plainDir, "ja", slug, "index.html"));
+      const en = dom(join(plainDir, "en", slug, "index.html"));
+      expect(ja.querySelector('.lang a[hreflang="en"]')?.getAttribute("href")).toBe(`/en/${slug}`);
+      expect(en.querySelector('.lang a[hreflang="ja"]')?.getAttribute("href")).toBe(`/ja/${slug}`);
+      expect(ja.querySelector('link[rel="canonical"]')?.getAttribute("href")).toBe(`${SITE}/ja/${slug}`);
+      expect(en.querySelector('link[hreflang="ja"]')?.getAttribute("href")).toBe(`${SITE}/ja/${slug}`);
+    }
+  });
+
+  it("表と等幅の囲みはキーボードで横に動かせる", () => {
+    const doc = dom(join(plainDir, "ja", "guide", "index.html"));
+    expect(doc.querySelectorAll("main table").length).toBeGreaterThan(0);
+    for (const t of doc.querySelectorAll("main table")) {
+      const wrap = t.parentElement as HTMLElement;
+      expect(wrap.getAttribute("tabindex")).toBe("0");
+      expect(wrap.getAttribute("role")).toBe("region");
+      expect(wrap.getAttribute("aria-label")).toBeTruthy();
+    }
+    for (const pre of doc.querySelectorAll("main pre")) expect(pre.getAttribute("tabindex")).toBe("0");
+  });
+});
+
+describe("取り込む文書", () => {
+  it("利用者ガイドは docs/user/ の見出しを全部取り込み、目次が付く（コピーを置かない）", () => {
+    for (const lang of LANGS) {
+      const src = read(`docs/user/${lang}/guide.md`);
+      const doc = dom(join(plainDir, lang, "guide", "index.html"));
+      const h2src = [...src.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+      const h2out = [...doc.querySelectorAll("article h2")].map((h) => h.textContent);
+      expect(h2out).toEqual(h2src);
+      expect(doc.querySelectorAll("nav.toc li").length).toBe(h2src.length);
+      expect(existsSync(join(ROOT, "site", "content", lang, "guide.md"))).toBe(false);
+    }
+  });
+
+  it("変更履歴は docs/operations/ の CHANGELOG（日本語）と CHANGELOG.en.md（英語）から取り込み、記載ルールのコメントは出さない", () => {
+    for (const [lang, file] of [["ja", "CHANGELOG.md"], ["en", "CHANGELOG.en.md"]] as const) {
+      const src = read(`docs/operations/${file}`);
+      const html = readFileSync(join(plainDir, lang, "news", "index.html"), "utf8");
+      const items = [...src.matchAll(/^- (.+)$/gm)].map((m) => m[1]).filter((t) => !t.startsWith("区分") && !t.includes("Sections"));
+      expect(html).toContain("Unreleased");
+      expect(html).not.toContain("記載ルール");
+      expect(html).not.toContain("&lt;!--");
+      expect(html).not.toContain("vX.Y.Z");
+      expect(items.length).toBeGreaterThan(5);
+    }
+    // 日英の変更履歴は、区分と項目の数がそろう
+    const count = (f: string) => ({
+      h3: (read(f).match(/^### /gm) ?? []).length,
+      items: (read(f).split("<!--")[0].match(/^- /gm) ?? []).length,
+    });
+    expect(count("docs/operations/CHANGELOG.en.md")).toEqual(count("docs/operations/CHANGELOG.md"));
+  });
+
+  it("Markdown の変換：生の HTML・画像・サイト外へ出ない相対リンクは止める。スロットは置き換える", () => {
+    const opts = { tableLabel: "t" };
+    expect(renderMarkdown("<b>x</b>", opts).html).toContain("&lt;b&gt;");
+    expect(() => renderMarkdown("![a](/x.png)", opts)).toThrow(/画像/);
+    expect(() => renderMarkdown("[a](../x.md)", opts)).toThrow(/リンク/);
+    expect(() => renderMarkdown("[a](http://example.com)", opts)).toThrow(/リンク/);
+    expect(renderMarkdown("a\n<!-- slot:k -->\nb", { ...opts, slots: { k: "<i>K</i>" } }).html).toContain("<i>K</i>");
+    expect(() => renderMarkdown("<!-- slot:k -->", opts)).toThrow(/スロット/);
+    const r = renderMarkdown("# A\n\n## 8. アンインストール\n\n## B\n\n## B\n", opts);
+    expect(r.headings.map((h) => h.id)).toEqual(["a", "8-アンインストール", "b", "b-2"]);
+    expect(slugify("macOS・Linux")).toBe("macoslinux");
+  });
+});
+
+describe("latest.json", () => {
+  it("形の検査：版の形・version の位置・platforms・https", () => {
+    expect(parseLatest(LATEST)).toEqual({ version: "1.2.3", pubDate: "2026-12-01T00:00:00Z" });
+    expect(() => parseLatest("{")).toThrow(/JSON/);
+    expect(() => parseLatest('{"version":"v1.2.3","platforms":{}}')).toThrow(/version/);
+    expect(() => parseLatest('{"platforms":{"linux-x86_64":{"url":"https://x","signature":"s"}},"version":"1.2.3"}')).toThrow(/より後ろ/);
+    expect(() => parseLatest('{"version":"1.2.3","platforms":{}}')).toThrow(/空/);
+    expect(() => parseLatest('{"version":"1.2.3","platforms":{"freebsd":{"url":"https://x","signature":"s"}}}')).toThrow(/未知/);
+    expect(() => parseLatest('{"version":"1.2.3","platforms":{"linux-x86_64":{"url":"http://x","signature":"s"}}}')).toThrow(/https/);
+    expect(() => parseLatest('{"version":"1.2.3","platforms":{"linux-x86_64":{"url":"https://x"}}}')).toThrow(/signature/);
+  });
+
+  it("公開中の取得：200 は取り込む、404 は『まだ公開していない』、それ以外の失敗は『取れなかった』", async () => {
+    const res = (status: number, body = "") => (async () => new Response(body, { status })) as typeof fetch;
+    expect(await fetchPublishedLatest("https://x/latest.json", res(200, LATEST))).toMatchObject({ kind: "ok" });
+    expect(await fetchPublishedLatest("https://x/latest.json", res(404))).toMatchObject({ kind: "missing" });
+    expect(await fetchPublishedLatest("https://x/latest.json", res(503))).toMatchObject({ kind: "error" });
+    expect(await fetchPublishedLatest("https://x/latest.json", res(200, "{}"))).toMatchObject({ kind: "error" });
+    const boom = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as typeof fetch;
+    expect(await fetchPublishedLatest("https://x/latest.json", boom)).toMatchObject({ kind: "error" });
+  });
+
+  it("含めたときは最新版を出し、含めないときは『最初のリリースの前』を出す", () => {
+    for (const lang of LANGS) {
+      const withHome = readFileSync(join(withDir, lang, "index.html"), "utf8");
+      const plainHome = readFileSync(join(plainDir, lang, "index.html"), "utf8");
+      expect(withHome).toContain("1.2.3");
+      expect(plainHome).not.toContain("1.2.3");
+      const withDl = readFileSync(join(withDir, lang, "download", "index.html"), "utf8");
+      expect(withDl).toContain("https://github.com/misty-swan/yunagi/releases/download/v1.2.3/Yunagi_1.2.3_arm64.app.tar.gz");
+      expect(withDl).toContain("Yunagi_1.2.3_x86_64-setup.exe.sha256");
+      expect(readFileSync(join(plainDir, lang, "download", "index.html"), "utf8")).toContain("github.com/misty-swan/yunagi/releases");
+    }
+  });
+
+  it("壊れた latest.json ではビルドを止める", () => {
+    const bad = join(tmp, "bad.json");
+    writeFileSync(bad, '{"version":"x"}');
+    expect(() => build({ outDir: join(tmp, "bad-out"), latestJson: bad })).toThrow(/version/);
+  });
+});
+
+describe("配布用の公開鍵", () => {
+  /** 試験用に、ビルドに要るものだけを写した作業用のルート */
+  function fakeRoot(): string {
+    const root = join(tmp, `root-${Math.random().toString(36).slice(2)}`);
+    for (const p of ["site/content", "site/static", "docs/user", "docs/operations", "install", "src/assets/fonts/inter", "src-tauri/icons/source"]) {
+      mkdirSync(join(root, p), { recursive: true });
+      cpSync(join(ROOT, p), join(root, p), { recursive: true });
+    }
+    return root;
+  }
+  const KEY = `untrusted comment: minisign public key: 0123456789ABCDEF\nRWQ${"A".repeat(53)}\n`;
+
+  it("鍵が無い間は『最初のリリースの前に掲載』の案内を出し、鍵のファイルは出さない", () => {
+    expect(existsSync(join(plainDir, "yunagi-release.pub"))).toBe(false);
+    expect(existsSync(join(ROOT, "site", "keys", "release.pub"))).toBe(false);
+    expect(readFileSync(join(plainDir, "ja", "verify", "index.html"), "utf8")).toContain("最初のリリースの前に、ここに掲載します");
+  });
+
+  it("site/keys/release.pub を置くと、鍵のファイルと本文に出る。形が違えばビルドを止める", () => {
+    const root = fakeRoot();
+    mkdirSync(join(root, "site", "keys"));
+    writeFileSync(join(root, "site", "keys", "release.pub"), KEY);
+    const out = join(tmp, "key-out");
+    build({ root, outDir: out });
+    expect(readFileSync(join(out, "yunagi-release.pub"), "utf8")).toBe(KEY);
+    expect(readFileSync(join(out, "en", "verify", "index.html"), "utf8")).toContain(`RWQ${"A".repeat(53)}`);
+    writeFileSync(join(root, "site", "keys", "release.pub"), "bogus\n");
+    expect(() => build({ root, outDir: join(tmp, "key-bad") })).toThrow(/公開鍵の形/);
+  });
+});
+
+describe("色と文字（デザインガイド 3章・4章）", () => {
+  const css = read("site/static/site.css");
+  const guide = read("docs/design/06-design-guide.md");
+
+  /** `--名前: 値;` を取り出す（空白を除き、小文字にし、`0.5` を `.5` にそろえる） */
+  const tokens = (block: string): Map<string, string> => {
+    const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase().replace(/(^|[(,])0\./g, "$1.");
+    return new Map([...block.matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1], norm(m[2])]));
+  };
+  const lightBlock = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+  const darkStart = css.indexOf("@media (prefers-color-scheme: dark)");
+  const darkBlock = css.slice(css.indexOf(":root {", darkStart), css.indexOf("}", css.indexOf(":root {", darkStart)));
+  const light = tokens(lightBlock);
+  const dark = tokens(darkBlock);
+
+  const table = guide.slice(guide.indexOf("## 3. 色"), guide.indexOf("## 4. 文字"));
+  const expected = { light: new Map<string, string>(), dark: new Map<string, string>() };
+  for (const r of table.matchAll(/^\| `--([a-z0-9-]+)`(?: \/ `--([a-z0-9-]+)`)? \| ([^|]+) \| ([^|]+) \|/gm)) {
+    if (!r[3].includes("#") && !r[3].includes("rgba")) continue;
+    const split = (v: string) => v.split(" / ").map((x) => tokens(`--x: ${x};`).get("x"));
+    const [l, d] = [split(r[3]), split(r[4])];
+    [r[1], r[2]].filter(Boolean).forEach((n, i) => {
+      expected.light.set(n, l[i] ?? "");
+      expected.dark.set(n, d[i] ?? "");
+    });
+  }
+
+  it("ライト・ダークの値が、デザインガイド 3章の表と同じ（独自の色を足していない）", () => {
+    expect(expected.light.size).toBe(26);
+    const own = (m: Map<string, string>) => new Map([...m].filter(([k]) => k !== "on-accent"));
+    expect(own(light)).toEqual(expected.light);
+    expect(own(dark)).toEqual(expected.dark);
+    expect(light.get("on-accent")).toBe("var(--surface)");
+    expect(dark.get("on-accent")).toBe("var(--bg)");
+  });
+
+  it("色の値は、トークンの定義の外に書かない。文字の色は決まったトークンだけ", () => {
+    const outside = css
+      .split("\n")
+      .filter((l) => !/^\s*--[a-z0-9-]+:/.test(l))
+      .join("\n");
+    expect(outside).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+    const defined = new Set([...light.keys()]);
+    for (const m of css.matchAll(/var\(--([a-z0-9-]+)\)/g)) expect(defined.has(m[1]), `--${m[1]}`).toBe(true);
+    for (const m of css.matchAll(/(?<![-\w])color:\s*([^;]+);/g)) {
+      expect(m[1].trim(), "color").toMatch(/^(var\(--(text|text-muted|accent-strong|on-accent)\)|inherit)$/);
+    }
+  });
+
+  /** sRGB の相対輝度から求めるコントラスト比（WCAG） */
+  const lum = (hex: string): number => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const f = (v: number) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+  };
+  const ratio = (a: string, b: string): number => {
+    const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+    return (x + 0.05) / (y + 0.05);
+  };
+
+  it("文字のコントラスト：本文 7:1、補助・強調 4.5:1 以上（背景・サイド・面と、ヒーローの空に対して）", () => {
+    for (const [name, t] of [["ライト", light], ["ダーク", dark]] as const) {
+      const bgs = ["bg", "side", "surface", "sky-1", "sky-2"].map((k) => t.get(k) as string);
+      for (const bg of bgs) {
+        expect(ratio(t.get("text") as string, bg), `${name} text/${bg}`).toBeGreaterThanOrEqual(7);
+        expect(ratio(t.get("text-muted") as string, bg), `${name} muted/${bg}`).toBeGreaterThanOrEqual(4.5);
+        expect(ratio(t.get("accent-strong") as string, bg), `${name} accent-strong/${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    // 主なボタン：--accent-strong の面に --on-accent の文字（ライトは --surface、ダークは --bg）
+    expect(ratio(light.get("surface") as string, light.get("accent-strong") as string)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(dark.get("bg") as string, dark.get("accent-strong") as string)).toBeGreaterThanOrEqual(4.5);
+    // 枠のある操作部品（ghost ボタンの枠 --ring）は 3:1
+    for (const t of [light, dark]) {
+      for (const k of ["bg", "surface"]) {
+        expect(ratio(t.get("ring") as string, t.get(k) as string), `ring/${k}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("動き（アニメーション・トランジション）が無く、外部の読み込みが無い", () => {
+    expect(css).not.toMatch(/\banimation\b|\btransition\b|@keyframes/);
+    for (const m of css.matchAll(/url\(\s*["']?([^)"']+)["']?\s*\)/g)) {
+      expect(m[1].startsWith("/assets/") || m[1].startsWith("#"), m[1]).toBe(true);
+    }
+    expect(css).not.toMatch(/@import|https?:\/\//);
+  });
+
+  it("ロゴの色は、アプリのロゴ（src/shell/Logo.svelte）と同じ", () => {
+    const colors = (s: string) => new Set((s.match(/#[0-9A-Fa-f]{6}|rgba\([^)]+\)/g) ?? []).map((c) => c.toLowerCase()));
+    const html = readFileSync(join(plainDir, "ja", "index.html"), "utf8");
+    const logo = html.slice(html.indexOf('<svg viewBox="0 0 24 24"'), html.indexOf("</svg>"));
+    expect(colors(logo)).toEqual(colors(read("src/shell/Logo.svelte")));
+  });
+
+  it("書体は同梱の Inter（可変フォント）で、外部の書体を指さない", () => {
+    expect(css).toContain('src: url("/assets/fonts/inter/InterVariable.woff2") format("woff2")');
+    expect(css).toMatch(/font-family: Inter, "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans CJK JP", sans-serif;/);
+  });
+});
+
+describe("公開のワークフロー（.github/workflows/site.yml）", () => {
+  const wf = read(".github/workflows/site.yml");
+  /** `  <名前>:` で始まる jobs の中の 1 つのジョブの本文 */
+  const job = (name: string): string => {
+    const from = wf.indexOf(`\n  ${name}:\n`);
+    expect(from, name).toBeGreaterThan(-1);
+    const rest = wf.slice(from + 1);
+    const next = rest.slice(1).search(/^ {2}[a-z-]+:\n/m);
+    return next < 0 ? rest : rest.slice(0, next + 1);
+  };
+  const code = wf
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+
+  it("フォークの PR では動かさない（pull_request 系の契機が無い）。権限は読み取りだけ", () => {
+    expect(code).not.toMatch(/pull_request/);
+    expect(code).toMatch(/^on:\n {2}push:\n {4}branches: \[main\]/m);
+    expect(code).toMatch(/^ {2}workflow_dispatch:/m);
+    expect(code).toMatch(/^permissions:\n {2}contents: read\n/m);
+    expect(code).not.toMatch(/contents: write|id-token|pull-requests: write/);
+  });
+
+  it("uses はすべてコミットの SHA で固定し、版を併記する", () => {
+    const uses = [...code.matchAll(/^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/gm)];
+    expect(uses.length).toBeGreaterThan(4);
+    for (const m of uses) {
+      expect(m[1], m[0]).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+      expect(m[2], m[0]).toMatch(/# v\d+\.\d+\.\d+/);
+    }
+  });
+
+  it("secrets を使うのは deploy ジョブだけで、そこは Environment と main の条件を持つ。build は secrets を使わない", () => {
+    const build = job("build");
+    const deploy = job("deploy");
+    expect(build).not.toMatch(/secrets\./);
+    expect(build).not.toMatch(/environment:/);
+    expect(deploy).toMatch(/environment: cloudflare-pages/);
+    expect(deploy).toMatch(/if: github\.ref == 'refs\/heads\/main'/);
+    expect(deploy).toMatch(/needs: build/);
+    // deploy はリポジトリのコードを取り出さず、動かさない（成果物を上げるだけ）
+    expect(deploy).not.toMatch(/actions\/checkout|pnpm |node /);
+    expect([...code.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]).sort()).toEqual([
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_API_TOKEN",
+    ]);
+  });
+
+  it("自動の公開は変数 SITE_DEPLOY が true のときだけ。wrangler の版を固定し、本番ブランチとプロジェクト名を指す", () => {
+    expect(job("build")).toContain("vars.SITE_DEPLOY == 'true'");
+    expect(code).toMatch(/wranglerVersion: "\d+\.\d+\.\d+"/);
+    expect(code).toContain("pages deploy site/dist --project-name=yunagi --branch=main");
+  });
+
+  it("latest.json を取り込む段があり、取れなければ中止する（--allow-missing は手動の実行の入力だけ）", () => {
+    expect(code).toContain("node site/fetch-latest.ts --out");
+    expect(code).toMatch(/github\.event_name == 'workflow_dispatch' && inputs\.allow_missing_latest/);
+    expect(code).toMatch(/--latest-json "\$RUNNER_TEMP\/latest\.json"/);
+  });
+
+  it("トリガーのパスに、サイトの元になるファイルが入っている", () => {
+    for (const p of ["site/**", "install/install.sh", "install/install.ps1", "docs/user/**", "docs/operations/CHANGELOG.md", "docs/operations/CHANGELOG.en.md"]) {
+      expect(code, p).toContain(`- "${p}"`);
+    }
+  });
+});
+
+describe("アプリとそろえる値", () => {
+  it("公式サイト・問い合わせ先・Issues の URL は src/lib/support.ts と同じ", () => {
+    const support = read("src/lib/support.ts");
+    expect(support).toContain(`export const SITE = "${SITE}";`);
+    expect(support).toContain(`export const ISSUES_URL = "${ISSUES_URL}";`);
+    expect(support).toContain(`export const SUPPORT_MAIL = "${SUPPORT_MAIL}";`);
+  });
+
+  it("セキュリティの報告先は SECURITY.md（全文・直下）と同じ", () => {
+    const mail = "security@getyunagi.com";
+    expect(read("docs/release/SECURITY.md")).toContain(mail);
+    expect(read("SECURITY.md")).toContain(mail);
+    for (const lang of LANGS) {
+      expect(readFileSync(join(plainDir, lang, "security", "index.html"), "utf8")).toContain(`mailto:${mail}`);
+    }
+  });
+
+  it("導入コマンドは、スクリプトの先頭に書いたものと同じ", () => {
+    expect(read("install/install.sh")).toContain(`curl -fsSL ${SITE}/install.sh | sh`);
+    expect(read("install/install.ps1")).toContain(`irm ${SITE}/install.ps1 | iex`);
+    for (const lang of LANGS) {
+      const html = readFileSync(join(plainDir, lang, "index.html"), "utf8");
+      expect(html).toContain(`curl -fsSL ${SITE}/install.sh | sh`);
+      expect(html).toContain(`irm ${SITE}/install.ps1 | iex`);
+    }
+  });
+
+  it("法務文書（草案）は、確定版ができるまでサイトに載せない", () => {
+    for (const lang of LANGS) {
+      for (const f of walk(join(plainDir, lang))) {
+        expect(readFileSync(f, "utf8"), f).not.toMatch(/草案|DRAFT — not reviewed/);
+      }
+    }
+    expect(walk(plainDir).some((f) => /terms|privacy|tokushoho/.test(relative(plainDir, f)))).toBe(false);
+  });
+});

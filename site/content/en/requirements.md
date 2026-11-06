@@ -1,0 +1,19 @@
+# System requirements
+
+## Supported operating systems
+
+| OS | Versions | Architectures |
+| --- | --- | --- |
+| macOS | The latest 3 releases (Apple Silicon). Intel Macs, up to the last macOS that supports them | arm64, x86_64 |
+| Windows | 10, 11 | x86_64, arm64 |
+| Linux | Major distributions. The ones we test on are Ubuntu LTS (GNOME; Wayland and X11) and Fedora (KDE; Wayland) | x86_64, arm64 |
+
+A combination we could not test before a release is marked "trial support (not guaranteed to work)" in the download page and the release notes.
+
+## Other notes
+
+- You do not need administrator rights. The install script installs for the signed-in user only.
+- Every feature works without a network. Yunagi connects only for the update check (on by default; you can turn it off in Settings) and for features you turn on yourself. The update check sends only the version, the OS and the architecture.
+- The Linux AppImage needs FUSE 2 to start. On Wayland, the system-wide shortcut may not work. The setup for that is in [chapter 2 of the guide](/en/guide/#2-first-launch).
+- The interface is available in Japanese and English. Light and dark follow your OS appearance setting.
+- Your notes are saved as files on your PC. You can change where in Settings.

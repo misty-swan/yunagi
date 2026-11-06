@@ -34,13 +34,14 @@
 
 ### 公式サイトの置き場所（2026-11-06 決定。YUN-103）
 
-導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。公式サイトの URL は `https://getyunagi.com`。商標（J-PlatPat で「YUNAGI」を第9類・第42類で検索して該当なし。2026-11-06）の確認と、設計書・コード・導入スクリプトにあった、公式サイト・公式ドメイン・公開リポジトリの仮の表記（`<公式サイト>`・`<公式ドメイン>`・`<公開リポジトリ>`）の置き換えは、YUN-11 で済んだ（運営者名・施行日などの `〔 〕` や、tap の名前の `<tap名>` は別の課題で決めるので残っている。本書の `<配布元>` は、上の `https://github.com/misty-swan/yunagi/releases/download` を指す本書の書き方で、仮の表記ではない）。問い合わせ先は `support@getyunagi.com`、脆弱性の報告先は `security@getyunagi.com`。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は YUN-107 で決める。
+導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。公式サイトの URL は `https://getyunagi.com`。商標（J-PlatPat で「YUNAGI」を第9類・第42類で検索して該当なし。2026-11-06）の確認と、設計書・コード・導入スクリプトにあった、公式サイト・公式ドメイン・公開リポジトリの仮の表記（`<公式サイト>`・`<公式ドメイン>`・`<公開リポジトリ>`）の置き換えは、YUN-11 で済んだ（運営者名・施行日などの `〔 〕` や、tap の名前の `<tap名>` は別の課題で決めるので残っている。本書の `<配布元>` は、上の `https://github.com/misty-swan/yunagi/releases/download` を指す本書の書き方で、仮の表記ではない）。問い合わせ先は `support@getyunagi.com`、脆弱性の報告先は `security@getyunagi.com`。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は、次の「公式サイトの作り方」（YUN-107）に書いた。
 
 **サイトを実際に公開するまでの依存**（この間、`getyunagi.com` は何も表示せず、導入コマンドは動かない）：
 
 | 仕事 | 課題・担当 |
 | --- | --- |
-| Cloudflare Pages のプロジェクトの作成、リポジトリとの結び付け、`getyunagi.com` の割り当て、サイトの作成と公開、`install.sh`・`install.ps1` の掲載 | YUN-107 |
+| サイトの作成（`site/`）、公開のワークフロー（`.github/workflows/site.yml`）、`install.sh`・`install.ps1` の掲載、オーナーの手順書（下の「公式サイトを初めて公開する手順」） | YUN-107（このリポジトリの作業） |
+| Cloudflare Pages のプロジェクトの作成（Direct Upload）、`getyunagi.com` の割り当て、API トークン、GitHub の Environment と許可する action の設定、最初のデプロイ | オーナーの作業（YUN-107 の手順書） |
 | `latest.json` と配布物を作って公開する配布用 CI（導入コマンドが動くのは、これで最初のリリースを出したあと） | YUN-101 |
 | `support@getyunagi.com`・`security@getyunagi.com` の受け口（Cloudflare の Email Routing で、オーナーの受信箱へ転送する設定） | オーナーの作業（YUN-11 で依頼） |
 
@@ -49,18 +50,95 @@
 - **独自ドメインの結び付け**（オーナーの作業。YUN-107 でサイトを公開するときに行う）：
   - Pages のプロジェクトの「Custom domains」に `getyunagi.com` を追加する。apex ドメイン（`www` の付かないもの）を結び付けるには、そのドメインが、Pages のプロジェクトと同じ Cloudflare アカウントの zone（DNS の管理単位）であること。`getyunagi.com` は Cloudflare Registrar で取得し DNS も Cloudflare なので満たす。CNAME などの DNS の記録は Cloudflare が自動で作る。
   - **証明書の発行を妨げる CAA 記録が無いことを確かめる**：`dig CAA getyunagi.com`（または Cloudflare の DNS の画面）で見る。CAA 記録が 1 つも無ければ、何もしなくてよい（記録を足さない）。1 つでもある場合は、Pages が使う認証局（`letsencrypt.org`・`pki.goog; cansignhttpexchanges=yes`・`ssl.com`）の発行を許す記録（`issue` と `issuewild`）が含まれていないと、ドメインの追加が検証で止まる。そのときだけ、足りない認証局の記録を足す（ほかの用途で別の認証局の記録を置いているなら、それは消さない）。ここに書いた認証局の名前は 2026-11-06 時点の Cloudflare の案内（https://developers.cloudflare.com/pages/configuration/custom-domains/ の「Known issues」）の写しで、変わりうるので、足すときはそのページの最新の一覧を見る。確かめるのは、Cloudflare の DNS の画面に出る記録（ダッシュボードで足した分も含む）と `dig` の結果の両方（Cloudflare Pages の custom domains の「Known issues」）。
-  - `www.getyunagi.com` の扱い（apex へ転送するか）は YUN-107 で決める。
+  - `www.getyunagi.com` は使わない（2026-11-06 決定。YUN-107）。案内する URL はすべて apex（`https://getyunagi.com`）で、`www` を足すと証明書と転送の管理が増えるため。Pages の Custom domains にも DNS にも `www` は作らない（`www` で開くと開けない）。必要になったら、Custom domains に `www.getyunagi.com` を足し、Cloudflare の Redirect Rules で apex へ転送する。
 - **サイトの自動公開は、Direct Upload を GitHub Actions から行う方針**（推奨案。Cloudflare の Git 連携は使わない）：
-  - 流れ：GitHub Actions のワークフローが、サイトの元（`site/` など。置き場は YUN-107）をビルドして `wrangler pages deploy <出力先> --project-name=<プロジェクト名> --branch=<本番ブランチ>` で上げる。Cloudflare の公式の手順（`cloudflare/wrangler-action`）に沿う。`--branch` には Pages のプロジェクトの本番ブランチ名を指定する（それ以外の名前で上げたものはプレビューになり、本番にならず、戻し先にもならないため）。
+  - 流れ：GitHub Actions のワークフロー（`.github/workflows/site.yml`。下の「公式サイトの公開の仕組み」）が、サイトの元（`site/` など）をビルドして `wrangler pages deploy <出力先> --project-name=<プロジェクト名> --branch=<本番ブランチ>` で上げる。Cloudflare の公式の手順（`cloudflare/wrangler-action`）に沿う。`--branch` には Pages のプロジェクトの本番ブランチ名を指定する（それ以外の名前で上げたものはプレビューになり、本番にならず、戻し先にもならないため）。
   - 理由：①ビルドを自分たちの CI（lock ファイル厳守・action の SHA 固定。3章「action の固定」）で行える。Git 連携だと Cloudflare 側のビルド環境に任せ、固定の決まりが及ばない。②いつ公開するかを自分たちで決められる（`latest.json` は Release の配布物がそろってから公開する。7章）。Git 連携では、サイトのファイルを main に入れると自動で公開されてしまう。③`latest.json` を、リポジトリに書き戻さず、配布用 CI（YUN-101）が作ったものとしてそのまま上げられる。
   - 注意：Pages のプロジェクトは、Git 連携と Direct Upload を後から切り替えられない（Cloudflare の公式の案内）。ここで Direct Upload に決めるので、プロジェクトは **Direct Upload のプロジェクトとして作る**。
-  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする。リポジトリは公開されるので、**フォークからの PR（`pull_request`・`pull_request_target`）の実行にはこの secrets（と署名鍵の secrets）を渡さない**：サイトの公開と署名は、タグの push・main への push・手動の実行（`workflow_dispatch`）でだけ動かし、GitHub の Environment にブランチ・タグの制限をかけて secrets をそこに置く。試運転（`pull_request`）は secrets を使わない（今の `release.yml` もそうしている）。今の `release.yml` には `environment:` も、手動の実行を main やタグに限る条件も無い。そのため、YUN-101・YUN-107 がこの制限を作るまで、リポジトリ全体の secrets として Cloudflare のトークンや署名鍵を**置かない**（リポジトリの公開は YUN-109 で、それより前でも後でも同じ）。細部は YUN-107・YUN-101 で決める（YUN-101 の Linear のコメントに残した）。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
+  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする。リポジトリは公開されるので、**フォークからの PR（`pull_request`・`pull_request_target`）の実行にはこの secrets（と署名鍵の secrets）を渡さない**：サイトの公開と署名は、タグの push・main への push・手動の実行（`workflow_dispatch`）でだけ動かし、GitHub の Environment にブランチ・タグの制限をかけて secrets をそこに置く。試運転（`pull_request`）は secrets を使わない（今の `release.yml` もそうしている）。今の `release.yml` には `environment:` も、手動の実行を main やタグに限る条件も無い。そのため、YUN-101・YUN-107 がこの制限を作るまで、リポジトリ全体の secrets として Cloudflare のトークンや署名鍵を**置かない**（リポジトリの公開は YUN-109 で、それより前でも後でも同じ）。細部は YUN-107・YUN-101 で決める（YUN-101 の Linear のコメントに残した）。YUN-107 の分（サイトの公開）は、下の「公式サイトの公開の仕組み」で決めた。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
 - **`latest.json` の送り方**：`/latest.json` は、古い内容が使われ続けないよう、サイトの `_headers` ファイルで `Cache-Control: no-cache` を明示する（Pages の `_headers` で付ける。YUN-107 が作り、公開後に `curl -I` で確かめる）。
 - **取り下げ時の戻し方**（サポート・障害対応手順 5章が参照する）：次の 2 つのどちらかで、`latest.json` を前の版に戻す。急ぐときは (1)。
-  1. **前の公開済みのデプロイに戻す**（Pages の「Rollback」。Cloudflare の公式の案内 Rollbacks）：Cloudflare のダッシュボードで対象の Pages のプロジェクトを開き、「Deployments」の「All deployments」から、戻したい本番のデプロイの「⋯」メニュー →「Rollback to this deployment」を選んで確認する。**戻し先は「直前のデプロイ」ではなく、`latest.json` が良い版（取り下げる版の 1 つ前）を指している最後の本番のデプロイ**を選ぶ（取り下げる版の後に、サイトだけを直したデプロイがあると、直前のものにも取り下げる版の `latest.json` が入っている）。各デプロイの `latest.json` は、リリースごとに版を控えておく（7章）か、そのデプロイの URL で見て確かめる。**戻したあとは、公開用のワークフローを止める**（Actions の画面で無効にするか、実行を保留する）：main から新しく上げる実行が、戻した状態を取り下げる版で上書きしてしまうため。原因を直して、良い版の `latest.json` を作れるようになってから再開する。本番のサイトが**すぐに**その時点の内容に変わる。戻せるのは、ビルドに成功した**本番**のデプロイだけ（プレビューは戻し先にならない）。戻るのは `latest.json` だけでなくサイト全体（導入スクリプトなども、そのデプロイの時点の内容）。新しいデプロイに進み直すこともできる。
+  1. **前の公開済みのデプロイに戻す**（Pages の「Rollback」。Cloudflare の公式の案内 Rollbacks）：Cloudflare のダッシュボードで対象の Pages のプロジェクトを開き、「Deployments」の「All deployments」から、戻したい本番のデプロイの「⋯」メニュー →「Rollback to this deployment」を選んで確認する。**戻し先は「直前のデプロイ」ではなく、`latest.json` が良い版（取り下げる版の 1 つ前）を指している最後の本番のデプロイ**を選ぶ（取り下げる版の後に、サイトだけを直したデプロイがあると、直前のものにも取り下げる版の `latest.json` が入っている）。各デプロイの `latest.json` は、リリースごとに版を控えておく（7章）か、そのデプロイの URL で見て確かめる。**戻したあとは、公開用のワークフロー（`site.yml`）を止める**（リポジトリの変数 `SITE_DEPLOY` を `true` から外すか消す。さらに、手動の実行も避けるため Actions の画面で Site を Disable workflow にする。`SITE_DEPLOY` は main への push による自動の公開だけを止める）：main から新しく上げる実行が、戻した状態を取り下げる版で上書きしてしまうため。原因を直して、良い版の `latest.json` を作れるようになってから再開する。本番のサイトが**すぐに**その時点の内容に変わる。戻せるのは、ビルドに成功した**本番**のデプロイだけ（プレビューは戻し先にならない）。戻るのは `latest.json` だけでなくサイト全体（導入スクリプトなども、そのデプロイの時点の内容）。新しいデプロイに進み直すこともできる。
   2. **ファイルを差し替えて再デプロイする**：前の版の `latest.json` を元の内容で作り直し（Release の配布物と `.sig` から、配布用 CI の手順で再生成する）、公開用のワークフローを手動で実行して上げる。数分かかるが、サイトのほかの部分は今のままにできる。
   - どちらの後も、`curl -fsS https://getyunagi.com/latest.json` の `version` が前の版に戻ったことを確かめる。すでに新しい版へ更新した利用者の手元は戻らない（アプリは古い版へ自動では戻さない）。広がりを止めるための手段である。GitHub の Release の取り下げ（ドラフトへ戻す・削除）は別に行う。手順は、サポート・障害対応手順 5章。
   - 直前の本番のデプロイが残っていること（戻し先があること）を、リリースのたびに確かめる（7章）。
+
+### 公式サイトの作り方（2026-11-06 決定。YUN-107）
+
+**作り方**：フレームワークを使わない自作の静的サイトのビルド。`site/build.ts`（Node.js が TypeScript をそのまま動かす。`pnpm site:build`）が、Markdown を HTML にして `site/dist/`（コミットしない）に書く。依存は Markdown の変換器 `marked` 18.1.1 の 1 つだけ（`devDependencies`。MIT。依存なし。公開から 14 日以上たった版で固定。ビルドにだけ使い、サイトにも配布物にも入らない）。
+
+**Astro を選ばなかった理由**：推奨案だった Astro 7.4.5 を作業用のフォルダに入れて測った（2026-11-06）。依存は約 262 パッケージで、許可するライセンスの一覧（3.1）に無い LGPL-3.0-or-later（1 件）・BlueOak-1.0.0（3 件）・CC0-1.0（1 件）を含む。`pnpm audit` は指摘なしだったが、脆弱性・ライセンス・14 日の目安（SECURITY.md 4.4）の確認が、桁違いに増える。ページは 8 つ × 2 言語で、画面を動かすスクリプトも無い。必要なのは「Markdown を HTML にする」「同じ外枠に入れる」だけなので、過剰と判断した。
+
+**ファイル**：
+
+| 場所 | 中身 |
+| --- | --- |
+| `site/build.ts` | ビルドの入口。`--out <出力先>`（既定は `site/dist/`）、`--latest-json <パス>`（その latest.json を含める） |
+| `site/lib/` | 部品。外枠とロゴと景色（`layout.ts`）、ページ（`pages.ts`）、文言（`text.ts`）、Markdown の変換（`markdown.ts`）、latest.json の読み取りと取得（`latest.ts`）、出力と `_headers`（`build.ts`） |
+| `site/content/<ja\|en>/` | サイト専用の本文（`download`・`verify`・`requirements`・`support`・`security`・`news`） |
+| `site/static/site.css` | CSS（色のトークンを含む） |
+| `site/keys/release.pub` | 配布用の公開鍵（下の「配布用の公開鍵」。まだ無い） |
+| `site/fetch-latest.ts` | 公開中の latest.json を取る（公開のワークフローが使う） |
+| `site/site.test.ts` | 検査（`pnpm check` の `check:web` に含まれる） |
+
+**ページ**（URL は `/<言語>/<ページ>/`。言語は `ja`・`en`）：
+
+| ページ | URL の末尾 | 元 | 中身 |
+| --- | --- | --- | --- |
+| トップ | （空） | `site/lib/text.ts` | ヒーロー（凪メーターと同じ空と海）、特長 3 つ、導入コマンド、セキュリティ、ガイドへの案内 |
+| ダウンロードと導入 | `download/` | `site/content/` | 1 行の導入、スクリプトを読んでから実行する手順、版の指定、手動のダウンロード（`latest.json` の版が分かれば、ファイルの一覧を出す）、Homebrew（準備中）、アンインストール |
+| 配布物の確かめ方 | `verify/` | `site/content/` | `SHA256SUMS`・`SHA256SUMS.sig` の minisign での検証、配布用の公開鍵 |
+| 利用者ガイド | `guide/` | `docs/user/<言語>/guide.md` | ビルドで取り込む（コピーを置かない）。目次を付ける |
+| 動作環境 | `requirements/` | `site/content/` | 対応する OS とアーキテクチャ（要件定義書 8章・テスト計画書 3章） |
+| 変更履歴・お知らせ | `news/` | `site/content/`、`docs/operations/CHANGELOG.md`（日本語）・`CHANGELOG.en.md`（英語） | お知らせ（手で書く）と、変更履歴（ビルドで取り込む） |
+| 問い合わせ | `support/` | `site/content/` | GitHub Issues と `support@getyunagi.com`（サポート・障害対応手順 1章） |
+| セキュリティ | `security/` | `site/content/` | 報告先（`security@getyunagi.com`）、対象の版、配布物の保護（SECURITY.md の 2・3・4.3・6章。全文へのリンク） |
+
+- **ルート `/`**：ブラウザの言語で振り分けず、日本語（`/ja/`）へ移す（2026-11-06 決定）。`_redirects` の `/ /ja/ 302` と、同じ内容の `index.html`（`<meta http-equiv="refresh">`）。一時的な移動（302）にしておき、決まりを変えられるようにする。振り分けをしないのは、同じ URL がいつも同じページを返すようにするため（共有・検索で言語が食い違わない）。各ページの右上の切り替えで、同じページの別の言語へ移る。`hreflang` と `canonical` を付ける。
+- **導入スクリプトと `latest.json`**：`/install.sh`・`/install.ps1` は、リポジトリの `install/` が正本で、ビルドでコピーする（二重に持たない。試験が同じ中身であることを確かめる）。`/latest.json` は配布用 CI（YUN-101）が作ったものを、ビルドが `--latest-json` で取り込む。サイトが無い間に latest.json が無いことは、下の「公式サイトの公開の仕組み」。
+- **ヘッダー**（`_headers`。ビルドが書く）：`/latest.json` は `Cache-Control: no-cache`（2章）。`/install.sh`・`/install.ps1`・`/yunagi-release.pub` は `Content-Type: text/plain; charset=utf-8`（ブラウザで読めるようにする。読んでから実行する手順のため）と `Cache-Control: no-cache`。全体に、同じサイトのファイルだけを許す `Content-Security-Policy`（`default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'`。スクリプトを許さないので、Cloudflare の管理画面でスクリプトを差し込む機能（Web Analytics など）を有効にしても動かない）、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy`、`Permissions-Policy`。`Content-Type` を `_headers` で変えられるかは、公開後に `curl -I` で確かめる（下の手順 ⑥）。
+- **デザイン**：アプリと同じ色（デザインガイド 3章のトークン。ライト・ダークは OS の外観設定に追従。`site/static/site.css`）と書体（4章の Inter。`src/assets/fonts/inter/` のファイルを、加工せずに `/assets/fonts/inter/` へコピーし、許諾の文書 `LICENSE.txt` もフッターからリンクする）。独自の色は足さない：`--on-accent`（主なボタンの文字。ライトは `--surface`、ダークは `--bg` の値）だけが、トークンの別名として加わる。試験が、値がデザインガイドの表と同じこと、文字の色が決まったトークンだけであること、コントラスト（本文 7:1、補助・強調 4.5:1。背景・サイド・面とヒーローの空に対して）を確かめる。動き（アニメーション）は付けない。トップの景色（ヒーロー）は凪メーターと同じ空・太陽・光の道・海・波で、色は CSS のトークン。ロゴの絵の色は、アプリのロゴ（`src/shell/Logo.svelte`）と同じ（試験が照合する）。ファビコンは `src-tauri/icons/source/app-icon.svg` をコピーする。
+  - **UDEV Gothic HS はサイトに載せない**：見本の等幅（コマンドの囲み）は OS 標準の等幅（`ui-monospace` など）を使う。UDEV Gothic HS は 3.87 MB で、導入の案内のたびに読ませる大きさではなく、サイトの内容に必要でもないため。和文の書体は OS 標準で、同梱の代わり（デザインガイド 4章の UDEV Gothic HS による代用）はサイトでは行わない。
+  - **外部に接続しない**：Google Fonts などの外部のフォント・スクリプト・画像・計測を読み込まない。Cookie も使わない。アクセス解析を入れない（プライバシーポリシーの草案と矛盾しないため）。Cloudflare Pages の Web Analytics は有効にしない（手順 ①）。
+- **アクセシビリティ**：`lang` 属性を言語ごとに付ける。見出しは `h1` を 1 つにして階層を飛ばさない。ラベルのない操作アイコンを置かない（ロゴはテキストを持つ）。リンクは本物の `<a>`。本文へ移動するリンクを先頭に置く。キーボードで動かせるよう、横にはみ出す表とコードの囲みにフォーカスを当てられる。フォーカスの枠は `--accent-strong`。スクリプトは使わない（言語の切り替えもリンク）。
+- **文言**：デザインガイド 7章（短く、淡々と、感嘆符・絵文字・励ましなし。日英は同じ情報量）。トップの機能の説明は、設計書・利用者ガイドと食い違わない範囲に絞った（見本の説明は、エージェントの書き込みの権限と取り消しの書き方を SECURITY.md 4.2 に合わせて直した）。ページの説明（`<meta name="description">`）は `site/lib/text.ts`。
+- **配布用の公開鍵**（`SHA256SUMS.sig` の検証用。2章・6.2）：置き場所は `site/keys/release.pub`（minisign の公開鍵ファイル。1 行目が `untrusted comment: ...`、2 行目が `RW` で始まる 56 文字）。ファイルを置くと、ビルドが `/yunagi-release.pub` として公開し、配布物の確かめ方のページに値を出す。形が違えばビルドが止まる。同じファイルがリポジトリにもあるので、サイトとリポジトリの 2 か所で見比べられる（2章）。更新（鍵の差し替え）は、このファイルを PR で直してサイトを公開し直す。差し替えはお知らせ（`site/content/<言語>/news.md`）でも告知する（6.2）。**公開鍵の値はまだ無い**：配布用鍵の作成（6.2）は YUN-100 の後で、鍵を作ったら、このファイルを置く。置くまで、ページには「最初のリリースの前に、ここに掲載します」と出す。
+- **法務文書は載せない**（確定版ができるまで。2026-11-06 決定）：`docs/legal/` の 3 文書は草案の表示つきで、有効なものではない（8.3）。サイトに載せると、草案が正式な文書に見えるため、確定版（YUN-106）ができるまでサイトには載せない。フッターにも利用規約・プライバシーのリンクを置かない（試験が、草案の語がサイトに出ないことを確かめる）。確定版を載せるときは、`site/content/` にページを足し、`site/lib/text.ts` の `PageKey` とナビに加える（YUN-106 の完了の条件に書いた）。
+- **お知らせ・変更履歴の更新**：お知らせは `site/content/<言語>/news.md` の「お知らせ」の節に、新しい順で書く（日英同時）。変更履歴は `docs/operations/CHANGELOG.md`（日本語）と `CHANGELOG.en.md`（英語）を同時に直す（ビルドで取り込む。構成が日英でそろうことは試験が確かめる）。
+- **ページの足し方**：`site/lib/text.ts` の `PageKey`・`SLUGS`・`DESCRIPTIONS` に足し、`site/lib/pages.ts` で本文の元を決める。日英のページがそろうこと・リンク切れ・見出し・外部の読み込みは、試験が全ページに対して確かめる（販売ページ YUN-108 もこの形で足す）。
+- **検査**（`site/site.test.ts`。`pnpm check` の `check:web` に含まれ、開発用 CI でも走る）：日英のページが同じ組でそろうこと／`lang`・`h1` が 1 つ・見出しの階層・`id` の重複／スクリプト・画像・フォームなど・インラインの `style`・イベント属性が無いこと／内部のリンクが出力の中のファイルと見出しの `id` に着くこと（リンク切れ）／日英で見出し・コードの囲み・表・リンクの数がそろうこと／`_headers` の中身／色のトークンとコントラスト、動きと外部の URL が CSS に無いこと／latest.json の形と取得の分け方／公開鍵の形／アプリの値（`src/lib/support.ts` の URL・メール、`SECURITY.md` の報告先、導入コマンド）との一致。型は `tsc -p tsconfig.node.json`（`site/` を含む）。
+- **ブラウザでの見た目**は、ここでは自動の検査をしない（画面の写真を撮る検査は、リポジトリが持つ道具に無い）。レイアウト（狭い画面での折り返し、ライト・ダークの見え方）は、08 の 4.13 の手動の確認に書いた。
+
+### 公式サイトの公開の仕組み（2026-11-06 決定。YUN-107）
+
+公開のワークフローは `.github/workflows/site.yml`（Direct Upload。2章の方針どおり）。
+
+- **動くとき**：①`main` への push で、サイトに関わるファイル（`site/`、`install/install.sh`・`install.ps1`、`docs/user/`、変更履歴、フォント、アイコンの元、`package.json`・`pnpm-lock.yaml`、ワークフロー自身）が変わったとき。**ただし、リポジトリの変数 `SITE_DEPLOY` が `true` のときだけ**（自動の公開は、オーナーが最初の公開を確かめてから入れる。手順 ⑥）。②手動の実行（`workflow_dispatch`）。`pull_request`・`pull_request_target` では動かさない（フォークの PR に secrets を渡さない）。
+- **2 つのジョブ**：`build`（secrets を使わない。検査 → いま公開中の `latest.json` を取得 → サイトをビルド → 成果物にする）と `deploy`（`build` の後。Environment `cloudflare-pages` の secrets を使い、成果物を `wrangler pages deploy` で上げる。リポジトリのコードは動かさない）。`permissions` は `contents: read` だけ。`deploy` は `main` のブランチのときだけ動く（別のブランチからの手動の実行は、`build` までで終わる）。公開は 1 つずつ（`concurrency`。途中で止めない）。
+- **`latest.json` の取り込み**（3.4）：`build` が `https://getyunagi.com/latest.json` を取り（`site/fetch-latest.ts`。キャッシュを避けるため問い合わせ文字列を付ける）、形を検査して（`site/lib/latest.ts`。版の形、`version` が `platforms` より前、`platforms` のキー・`https`・`signature`）サイトに含める。**取れなかった（404・通信できない・5xx・形の誤り）ときは中止する**（含め忘れて 404 にしない、古い写しで上書きしない）。取り下げて前の版に戻したあとも、この取得のおかげで戻した状態が引き継がれる。
+  - **最初の公開（まだ `latest.json` が無い）**：自動の実行は中止する（`SITE_DEPLOY` を `true` にするのは、最初の公開のあと）。最初の 1 回だけ、手動の実行で `allow_missing_latest` を `true` にすると、`latest.json` を含めずに公開する（取得に失敗しても進む。この入力は手動の実行にしか無い）。そのあいだ `getyunagi.com/latest.json` は 404 で、導入コマンドは動かない（2章の表）。トップとダウンロードのページは、`latest.json` が無いあいだ「最初のリリースの前です」と出す。最初のリリースの前に、サイトを先に公開してよい（アプリの `endpoints` はサイトの公開後の最初のリリースまで空のままにする。5.2）。
+  - **リリースの公開（YUN-101）**：配布用 CI が作った `latest.json` を、`pnpm site:build --latest-json <パス>` で取り込み、この `deploy` と同じ段（`wrangler-action`）で上げる。配布物が `<配布元>` から取得できることを確かめたあとだけ上げる（3.4）。YUN-101 が `site.yml` を使い回すか、同じ手順を `release.yml` に書くかは、YUN-101 で決める。`SHA256SUMS` は `sha256sum` の出力と同じ形（`<64 桁の 16 進のハッシュ>  <ファイル名>` の行を並べたもの）にする（配布物の確かめ方のページの手順がこの形を前提にしている）。
+- **secrets**：`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID` は、リポジトリ全体の secrets に置かず、Environment `cloudflare-pages`（デプロイできるブランチを `main` に制限する）にだけ置く。`deploy` が最初にこの 2 つの有無を見て、無ければ何も上げずに失敗する（トークンが設定される前は、`SITE_DEPLOY` が空なので自動では動かず、手動で動かすと、ここで止まる）。トークンの作成と設定はオーナーが行い、作業者は値を見ない。
+- **wrangler**：`cloudflare/wrangler-action`（4.1.3。公開 2026-09-24。コミットの SHA で固定）の `wranglerVersion` で wrangler を 4.152.0（公開 2026-10-22。14 日たった版）に固定する。リポジトリのロックファイルと `pnpm audit` に wrangler の大きな依存を入れないため（2026-11-06。親の判断）。GitHub 製ではない action なので、許可する action の一覧に `cloudflare/wrangler-action@*` を足す必要がある（手順 ⑤。8.6 の 5 の一覧にも書いた。`scripts/docs/public.test.ts` が確かめる）。上げ先は `--project-name=yunagi --branch=main`（`--branch` は Pages のプロジェクトの本番ブランチ名。ダッシュボードで Direct Upload のプロジェクトを作ったときの既定は `main` のはずだが、確認できていない：手順 ⑥で、最初のデプロイが Production と表示されることを確かめる。Preview なら、本番ブランチの名前が違うので、`site.yml` の `--branch` を合わせる）。
+- **試し運転**：`wrangler pages deploy` に、実際には上げない試し運転の指定は無い（確認できた範囲）ので、上げる前の確認は `build` ジョブ（検査・取得・ビルド・成果物の存在）までとする。トークンが無い間は、`deploy` が上の確認で止まり、実際のデプロイは動かない。
+- **Cloudflare 側の設定（Web Analytics）**：プロジェクトで Web Analytics を有効にしない（有効にすると、サイトにスクリプトが差し込まれる。CSP が止めるが、計測を入れない決まりのため）。
+
+### 公式サイトを初めて公開する手順（オーナーの作業。YUN-107）
+
+画面の項目名は、公式の案内（英語。2026-11-06 に確かめた）にある英語表示で書く。**Cloudflare の日本語表示の項目名は、公式の案内に日本語版が無く、確かめられなかった**ので、ダッシュボードの言語を English にして操作する（言語の設定はプロフィールのメニューにある）。GitHub の画面は英語表示（8章と同じ）。日本語の説明は、その項目で何をするかを書いている。
+
+1. **① Cloudflare Pages のプロジェクトを作る**（Direct Upload）：Cloudflare のダッシュボードで **Workers & Pages** → **Create application** → **Get started**（Pages の欄）→ **Drag and drop your files**。プロジェクト名に **`yunagi`** と入れる。最初のファイルは、手元で `pnpm site:build`（リポジトリ直下。`site/dist/` ができる）して作ったフォルダをドラッグする → **Deploy site**。**Git 連携のプロジェクトにしない**（後から切り替えられない。2章）。作ったあと、プロジェクトの Settings で Web Analytics が有効なら無効にする。
+2. **② 独自ドメインを結び付ける**：プロジェクトの **Custom domains** タブ → **Set up a domain** → `getyunagi.com` を入れて **Continue**（apex のドメイン。`www` は作らない）。DNS の記録は Cloudflare が作る。その前に、CAA 記録を確かめる（`dig CAA getyunagi.com`。2章「証明書の発行を妨げる CAA 記録が無いこと」）。DNS の CNAME を手で足さない（先に足すと 522 になる）。証明書が有効になるまで数分かかる。
+3. **③ API トークンを作る**：**Manage Account** → **Account API Tokens**（または **My Profile** → **API Tokens**。画面に応じて）→ **Create Token** → カスタムのトークン（**Create Custom Token** / **Get started**）。名前は `yunagi-site-deploy` など。**Permissions** は 1 つだけ：**Account** → **Cloudflare Pages** → **Edit**。**Account Resources** は **Include** → 使っているアカウントだけ。（Pages の権限はアカウント単位で、プロジェクトでは絞れない見込み。画面にプロジェクトの選択が出れば `yunagi` に絞る。）**TTL** を決める（期限を付けると、置きっぱなしを防げる。切れる前に作り直す）。**Continue to summary** → **Create Token**。表示された値は 1 度しか出ないので、そのまま ④ の secret に貼る（手元に残さない）。**Account ID** は、Workers & Pages の画面の右側（またはアカウントのホーム）に出る。
+4. **④ GitHub の Environment と secrets を作る**：リポジトリの **Settings** → **Environments** → **New environment** → 名前は **`cloudflare-pages`**（`site.yml` が指す名前。ワークフローを先に走らせていると、自動で同名の Environment ができている。その場合は、それを開く）。**Deployment branches and tags** → **Selected branches and tags** → **Add deployment branch or tag rule** → `main`。**Environment secrets** → **Add environment secret**：`CLOUDFLARE_API_TOKEN`（③の値）と `CLOUDFLARE_ACCOUNT_ID`。**Required reviewers** は付けなくてよい（一人運営。付けると、公開のたびに承認が要る）。リポジトリ全体の secrets（**Settings** → **Secrets and variables** → **Actions** → **Repository secrets**）には置かない。
+5. **⑤ 許可する action の一覧に足す**：**Settings** → **Actions** → **General** → **Allow specified actions and reusable workflows** の欄に `cloudflare/wrangler-action@*` を足す（`Swatinem/rust-cache@*, pnpm/action-setup@*, cloudflare/wrangler-action@*`）。足さないと、`deploy` が「この action は許可されていない」で失敗する。コマンドでは、親（コーディネーター）が `gh api` で足せる。
+6. **⑥ 最初のデプロイを動かし、確かめる**：①で手で上げたものを、ワークフローで置き換える。**Actions** → **Site** → **Run workflow**（ブランチは `main`、`allow_missing_latest` を **true**）。`build` と `deploy` が成功することを見る。そのうえで、次を確かめる：
+   - `https://getyunagi.com/` が開き、`/ja/` へ移ること。`https://getyunagi.com/ja/`・`/en/` が開き、日英の切り替えが効くこと。
+   - Cloudflare の **Deployments** で、最初のデプロイが **Production** と表示されること（Preview なら、本番ブランチの名前が `main` でない。上の「wrangler」を見る）。
+   - `curl -fsSI https://getyunagi.com/install.sh` が 200 で、`content-type: text/plain` が付くこと（ダウンロードにならず、ブラウザに文字で出ること。付かなければ、`_headers` の `Content-Type` が効いていないので知らせる）。`/install.ps1` も同じ。
+   - `latest.json` はまだ無いので 404（最初のリリースのあとに、`curl -fsSI https://getyunagi.com/latest.json` が 200 で `cache-control: no-cache` を持つことを確かめる）。
+   - すべてよければ、**Settings** → **Secrets and variables** → **Actions** → **Variables** → **New repository variable** で `SITE_DEPLOY` を `true` にする（以後、サイトに関わる変更が main に入ると自動で公開される。ただし、最初のリリースまでは `latest.json` が無く、取得で中止するので、**最初のリリースを出すまでは `SITE_DEPLOY` を入れない**ほうがよい）。
+   - 公開を止めるとき（取り下げの戻し方のあと）は、`SITE_DEPLOY` を外し、Site のワークフローを Disable する（2章）。
 
 ### アプリアイコン
 
@@ -173,7 +251,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 - macOS のアドホック署名（3 の 4）。
 - Updater 用の署名 `.sig`（`bundle.createUpdaterArtifacts`。5.1 の「署名に版を入れる」）と、`latest.json`（5.1。トップレベルの `version` を入れ子の項目（`platforms` など）より前に置く：4.1 の 2）。
 - 全配布物の `SHA256SUMS` と、配布用鍵での `SHA256SUMS.sig`（2章・6.2）。
-- **公式サイトの公開（Pages へのデプロイ）の段**（2026-11-06 決定。YUN-103）：リリースのワークフローの最後の段として、GitHub Release の配布物が `<配布元>` から取得できることを確かめた**あとだけ**、サイトを `latest.json` つきでデプロイする（確認が通らなければデプロイしない。先に `latest.json` だけが公開される順序の入れ替わりを防ぐ）。サイトだけの変更のデプロイ（YUN-107）は、**いま公開中の `latest.json` を取得して含める**（取得できなければ中止する。含め忘れて 404 にしない、古い写しで上書きしない）。取り下げて戻したあとも、この取得のおかげで戻した状態が引き継がれる。どちらの段も 2章の secrets の決まり（フォークの PR に渡さない・Environment で制限する）に従う。
+- **公式サイトの公開（Pages へのデプロイ）の段**（2026-11-06 決定。YUN-103）：リリースのワークフローの最後の段として、GitHub Release の配布物が `<配布元>` から取得できることを確かめた**あとだけ**、サイトを `latest.json` つきでデプロイする（確認が通らなければデプロイしない。先に `latest.json` だけが公開される順序の入れ替わりを防ぐ）。サイトだけの変更のデプロイ（YUN-107。`.github/workflows/site.yml`。2章「公式サイトの公開の仕組み」）は、**いま公開中の `latest.json` を取得して含める**（取得できなければ中止する。含め忘れて 404 にしない、古い写しで上書きしない。最初の公開だけは、手動の実行の入力 `allow_missing_latest` で、含めずに進める）。リリースのデプロイ（この課題）は、`pnpm site:build --latest-json <パス>` で作った latest.json を取り込み、同じ `wrangler-action` の段で上げる（`SHA256SUMS` は `sha256sum` と同じ形にする）。取り下げて戻したあとも、この取得のおかげで戻した状態が引き継がれる。どちらの段も 2章の secrets の決まり（フォークの PR に渡さない・Environment で制限する）に従う。
 - GitHub Release の作成と、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig`・`THIRD_PARTY_LICENSES.md` の添付。
 - Homebrew tap への自動 PR（3 の 7。4.3）。
 - 「署名鍵を持つジョブの権限」：鍵を使うジョブだけに `contents: write` と鍵のシークレットを渡し、検査・ビルドのジョブには渡さない（このファイルの `permissions` は `contents: read`）。
@@ -352,12 +430,13 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] （2 回目のリリースから）Pages の「Deployments」に、直前の版の `latest.json` を載せた本番のデプロイが残っていて、そのデプロイの URL（またはデプロイ ID）と公開日時を、リリースの記録に控えた（取り下げ時の戻し先。2章。最初のリリースには戻し先が無い）
 - [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
 - [ ] Homebrew tap の更新がマージされ、Cask で導入したアプリが起動することを確認した
-- [ ] 公式サイトのダウンロード案内と変更履歴を更新した
+- [ ] 公式サイトのダウンロード案内と変更履歴を更新した（ダウンロードのページの一覧は `latest.json` の版から出る。変更履歴は CHANGELOG.md・CHANGELOG.en.md から取り込まれる。2章「公式サイトの作り方」）。利用者ガイドの仮の表記（`<tap名>`・`<tap>`・「要確認」）が残っていないことも見た（ガイドはサイトにそのまま載る）
 
 最初のリリースの前に、次も確かめる（初回だけ）：
 
 - [ ] リポジトリを公開した（8章の手順。YUN-109）。公開後に macOS・Windows の CI と配布用のビルドが走ることを確かめた（テスト計画書 2章）
 - [ ] 公式サイト（YUN-107）が `getyunagi.com` で見られ、HTTPS の証明書が有効になっている。`dig CAA getyunagi.com` で、証明書の発行を妨げる CAA 記録が無いことを確かめた（2章）
+- [ ] 公式サイトの「配布用の公開鍵」を `site/keys/release.pub` に置いて公開し、`https://getyunagi.com/yunagi-release.pub` と配布物の確かめ方のページに値が出ている（鍵の作成は YUN-100 の後。2章「配布用の公開鍵」）。リポジトリの公開鍵と同じであることを見比べた
 - [ ] Cloudflare のアカウントに 2 要素認証がかかっている。公開用の API トークンは Pages の編集だけの権限で、GitHub Actions の secrets に置いてある（2章）
 - [ ] 取り下げの戻し方（2章）を、サイトの本番のデプロイを 2 つ以上作ったあと（最初のリリースの前に、試しの `latest.json` で 2 回デプロイしてよい）に 1 度試し、`latest.json` が前のデプロイの内容に戻り、公開用のワークフローを止める手順も確かめた
 
@@ -431,7 +510,7 @@ Settings の画面は、すべてリポジトリ `misty-swan/yunagi` の Setting
    - **Dependency graph**・**Dependabot alerts** をオン（脆弱性のある依存を知らせる）。**Dependabot security updates** は**オフのまま**にする：Rust・JavaScript の依存は 14 日の目安で別に更新する決まり（SECURITY.md 4.4）で、security updates の PR は CLAUDE.md の例外（action の更新だけ）に入らず、課題・レビューの流れが決まっていないため。警告（alerts）が出たら、通常の課題にして直す。**Dependabot version updates** は action だけ：`.github/dependabot.yml` で動く。
    - **Secret Protection** の **Push protection** をオン（秘密を含む push を止める。公開リポジトリは無料）。**Secret scanning** もオン。
 5. **Actions の設定**（Settings → Actions → General）。上から：
-   - **Actions permissions** → **Allow OWNER, and select non-OWNER actions and reusable workflows** を選び、**Allow actions created by GitHub** をオン、**Allow specified actions and reusable workflows** の欄に、使っている GitHub 以外の action だけを書く：`Swatinem/rust-cache@*, pnpm/action-setup@*`（YUN-107 が足す `cloudflare/wrangler-action@*` などは、その課題で足す。ワークフローに GitHub 以外の action を足したら、この一覧も直す。`scripts/docs/public.test.ts` が、使っている action がこの一覧にあることを確かめる）。**Require actions to be pinned to a full-length commit SHA** をオンにする（YUN-98。3章「action の固定」）。オンにしてよいのは、固定の PR（YUN-43）がマージ済みで、開いている PR（Dependabot の PR を含む）が main に追いついているか閉じているとき（タグ指定のワークフローは実行されずに失敗するため）。失敗が出たら、その PR を main に追いつかせる（Dependabot の PR は `@dependabot rebase` とコメント）。
+   - **Actions permissions** → **Allow OWNER, and select non-OWNER actions and reusable workflows** を選び、**Allow actions created by GitHub** をオン、**Allow specified actions and reusable workflows** の欄に、使っている GitHub 以外の action だけを書く：`Swatinem/rust-cache@*, pnpm/action-setup@*, cloudflare/wrangler-action@*`（`cloudflare/wrangler-action@*` は、公式サイトの公開用のワークフロー `site.yml` が使う。YUN-107。公開済みのリポジトリでは「公式サイトを初めて公開する手順」の ⑤ で足す。ワークフローに GitHub 以外の action を足したら、この一覧も直す。`scripts/docs/public.test.ts` が、使っている action がこの一覧にあることを確かめる）。**Require actions to be pinned to a full-length commit SHA** をオンにする（YUN-98。3章「action の固定」）。オンにしてよいのは、固定の PR（YUN-43）がマージ済みで、開いている PR（Dependabot の PR を含む）が main に追いついているか閉じているとき（タグ指定のワークフローは実行されずに失敗するため）。失敗が出たら、その PR を main に追いつかせる（Dependabot の PR は `@dependabot rebase` とコメント）。
    - **Fork pull request workflows from outside collaborators** → **Require approval for all external contributors**（外部の人の PR は、オーナーが中身を見て **Approve and run** を押すまで、ワークフローが動かない。悪意あるワークフローの実行を防ぐ）。
    - **Workflow permissions** → **Read repository contents and packages permissions**（`GITHUB_TOKEN` の既定を読み取りのみにする。書き込みが要るジョブは、ワークフローの `permissions:` で個別に足す）。**Allow GitHub Actions to create and approve pull requests** はオフのまま。
    - 公開リポジトリでは、フォークからの PR に secrets が渡されない（既定）。変更しない。
@@ -442,7 +521,7 @@ Settings の画面は、すべてリポジトリ `misty-swan/yunagi` の Setting
    - 配布用 CI（`Release`）の検査は、変更したファイルによってしか走らないので、必須にしない（走らないと永遠に待つため）。
    - 保存したあと、Rulesets の一覧で `main` が **Active** になっていることを見る。
 7. **タグの保護**（Settings → Rules → Rulesets → **New ruleset → New tag ruleset**）：Ruleset Name：`release tags`。Enforcement：Active。Target tags：**Add target → Include by pattern** に `v*`。Rules：**Restrict updates**・**Restrict deletions**・**Block force pushes**（出した版のタグを動かせないようにする。タグの作成はオーナーだけが行う）。
-8. **環境（Environments）はまだ作らない**：リリースの署名と公式サイトの公開に使う Environment（ブランチ・タグの制限つき）は、YUN-101・YUN-107 がワークフローを作るときに作る（2章）。
+8. **環境（Environments）は、ここでは作らない**：リリースの署名と公式サイトの公開に使う Environment（ブランチ・タグの制限つき）は、ワークフローができたときに作る。公式サイト用の `cloudflare-pages` は、2章の「公式サイトを初めて公開する手順」の ④（YUN-107）。リリースの署名用は YUN-101。
 
 ### 8.7 公開後の CI の確かめ方（オーナー）
 
