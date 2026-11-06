@@ -120,7 +120,8 @@ describe("日英の構成がそろっている", () => {
       expect(t).not.toMatch(/<公式サイト>|<official-site>/);
       expect(t).toContain("curl -fsSL https://getyunagi.com/install.sh | sh");
       expect(t).toContain("irm https://getyunagi.com/install.ps1 | iex");
-    }
+      expect(t).toContain("curl -fsSL https://getyunagi.com/install.sh | YUNAGI_VERSION=1.2.3 sh");
+      expect(t).toContain('$env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex');    }
   });
 });
 

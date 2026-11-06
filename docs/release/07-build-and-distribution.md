@@ -34,7 +34,7 @@
 
 ### 公式サイトの置き場所（2026-11-06 決定。YUN-103）
 
-導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。公式サイトの URL は `https://getyunagi.com`。商標（J-PlatPat で「YUNAGI」を第9類・第42類で検索して該当なし。2026-11-06）の確認と、設計書・コード・導入スクリプトの仮の表記の置き換えは、YUN-11 で済んだ（本書の `<配布元>` は、上の `https://github.com/misty-swan/yunagi/releases/download` を指す本書の書き方で、仮の表記ではない）。問い合わせ先は `support@getyunagi.com`、脆弱性の報告先は `security@getyunagi.com`。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は YUN-107 で決める。
+導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。公式サイトの URL は `https://getyunagi.com`。商標（J-PlatPat で「YUNAGI」を第9類・第42類で検索して該当なし。2026-11-06）の確認と、設計書・コード・導入スクリプトにあった、公式サイト・公式ドメイン・公開リポジトリの仮の表記（`<公式サイト>`・`<公式ドメイン>`・`<公開リポジトリ>`）の置き換えは、YUN-11 で済んだ（運営者名・施行日などの `〔 〕` や、tap の名前の `<tap名>` は別の課題で決めるので残っている。本書の `<配布元>` は、上の `https://github.com/misty-swan/yunagi/releases/download` を指す本書の書き方で、仮の表記ではない）。問い合わせ先は `support@getyunagi.com`、脆弱性の報告先は `security@getyunagi.com`。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は YUN-107 で決める。
 
 **サイトを実際に公開するまでの依存**（この間、`getyunagi.com` は何も表示せず、導入コマンドは動かない）：
 
