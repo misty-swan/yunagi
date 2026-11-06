@@ -4,6 +4,7 @@ PC画面全体を「その日の仕事ノート1枚」として使う、エン�
 
 - 設計書一式：`docs/`（案内は `docs/README.md`）
 - 画面の試作品：`prototype/`（見本。本番にそのまま流用しない）
+- 公式サイト：`site/`（静的サイト。作り方と公開の手順は `docs/release/07-build-and-distribution.md` 2章）
 
 ## 作業管理（Linear）
 

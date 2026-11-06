@@ -32,6 +32,10 @@ Yunagi は、PC画面全体を「その日の仕事ノート1枚」として使�
 | operations | CHANGELOG.md | 変更履歴 | 公開時から |
 | operations | support-runbook.md | サポート・障害対応手順 | 公開時から |
 
+## 公式サイト（site/）
+
+公式サイト（https://getyunagi.com）の元は、リポジトリ直下の `site/`（docs と同じ階層）にあります。利用者ガイド（`user/`）と変更履歴（`operations/CHANGELOG.md`・`CHANGELOG.en.md`）は、ビルドでサイトに取り込むので、サイトにコピーを置きません。作り方と公開の手順（オーナーの作業を含む）は、`release/07-build-and-distribution.md` の 2章です。法務文書（`legal/`）は、確定版ができるまで、サイトに載せません。
+
 ## 試作品（prototype/）
 
 画面の見た目は、Claude Design で作る試作品（リポジトリ直下の `prototype/`、docs と同じ階層）を参考に構築します。現在の試作品はデザイン案D「夕凪」（2026-11-02 採用）で、画面とロゴ・アプリアイコンの見本は claude.ai 上の Design キャンバスにもあります。試作品と設計書の関係は次のとおりです。

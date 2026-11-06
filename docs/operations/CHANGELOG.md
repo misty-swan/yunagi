@@ -23,7 +23,7 @@
 - 利用者が読んで分かる言葉で書く。内部の実装の話は書かない。
 - 英語版を CHANGELOG.en.md として用意し、同時に更新する（UI を日英で同時に提供するため）。
 - 過去日の編集・Markdown 書き出しなど Should の機能は、MVP に含めると確定した時点で Added に加える（要確認）。
-- 末尾に比較リンクを置く。初回リリースまでは省略してよい。
+- 末尾に比較リンクを置く。初回リリースまでは省略する（置き場所の仮の版 `vX.Y.Z` のリンクは、公式サイトの変更履歴に出ると切れたリンクになるため）。初回リリースのときに `[Unreleased]: https://github.com/misty-swan/yunagi/compare/v<版>...HEAD` を足す。
+- 公式サイトの「変更履歴・お知らせ」（`site/`）が、このファイル（日本語）と `CHANGELOG.en.md`（英語）をビルドで取り込む。
 -->
 
-[Unreleased]: https://github.com/misty-swan/yunagi/compare/vX.Y.Z...HEAD

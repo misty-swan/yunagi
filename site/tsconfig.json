@@ -1,0 +1,10 @@
+{
+  // 公式サイトのビルドと試験の型チェック（pnpm check:types）。設定は tsconfig.node.json と同じで、
+  // 試験が jsdom の Window などの型を使うので、DOM の型だけ足す。
+  // DOM は install/・scripts/ の Node のコードに window などが通らないよう、共有の tsconfig.node.json には足さない。
+  "extends": "../tsconfig.node.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["**/*.ts"]
+}
