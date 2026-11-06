@@ -4,7 +4,7 @@ PC画面全体を「その日の仕事ノート1枚」として使う、エン�
 
 ## 使いたい方へ
 
-- 導入のしかたと使い方は、公式サイト（https://getyunagi.com）と利用者ガイド（[日本語](docs/user/ja/guide.md)・[English](docs/user/en/guide.md)）にあります。このリポジトリのソースを自分でビルドする必要はありません。
+- 使い方は利用者ガイド（[日本語](docs/user/ja/guide.md)・[English](docs/user/en/guide.md)）にあります。導入のしかたは、公式サイト（https://getyunagi.com。準備中です）に載せます。このリポジトリのソースを自分でビルドする必要はありません。
 - 最初のリリースを出すまで、配布物とインストールスクリプトはまだありません。
 - 不具合の報告と要望は GitHub の Issues へ（テンプレートがあります）。脆弱性は公開の Issue に書かず、[SECURITY.md](SECURITY.md) の窓口へ。
 - 協力のしかた（外部からの PR は読みますが、取り込みは保証しません）は [CONTRIBUTING.md](CONTRIBUTING.md)、行動規範は [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。

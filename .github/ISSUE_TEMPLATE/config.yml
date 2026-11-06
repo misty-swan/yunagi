@@ -6,5 +6,5 @@ contact_links:
     url: https://github.com/misty-swan/yunagi/security/advisories/new
     about: 脆弱性は公開の Issue に書かず、こちら（非公開）か security@getyunagi.com へ。
   - name: アカウントなしで問い合わせる（Contact by email）
-    url: https://getyunagi.com
+    url: mailto:support@getyunagi.com
     about: GitHub のアカウントが無い場合は support@getyunagi.com へ。

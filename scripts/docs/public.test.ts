@@ -11,6 +11,20 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
 
+/** TOML の `[名前]` の表の中身（次の `[` で始まる行の手前まで）。複数行の配列の中の `[` は行頭に来ない前提。 */
+function tomlSection(toml: string, name: string): string {
+  const start = toml.indexOf(`\n[${name}]\n`);
+  if (start < 0) throw new Error(`[${name}] が無い`);
+  const rest = toml.slice(start + name.length + 4);
+  const next = rest.search(/^\[/m);
+  return next < 0 ? rest : rest.slice(0, next);
+}
+
+/** コードの囲み（```）と行内コード（`…`）を除いた本文。コード中の `a[i](x)` をリンクと読まないため。 */
+function withoutCode(text: string): string {
+  return text.replace(/^```[\s\S]*?^```/gm, "").replace(/`[^`\n]*`/g, "");
+}
+
 const LICENSE = "MIT OR Apache-2.0";
 const CRATES = ["crates/core", "crates/api", "crates/cli", "src-tauri"];
 
@@ -26,8 +40,8 @@ describe("本体のライセンス", () => {
   });
 
   it("ワークスペースの license が SPDX の式で、4 つのクレートがそれを使う", () => {
-    expect(read("Cargo.toml")).toMatch(
-      new RegExp(String.raw`\[workspace\.package\][^[]*\nlicense = "${LICENSE}"`),
+    expect(tomlSection(read("Cargo.toml"), "workspace.package")).toMatch(
+      new RegExp(`^license = "${LICENSE}"$`, "m"),
     );
     for (const dir of CRATES) {
       expect(read(`${dir}/Cargo.toml`), dir).toMatch(/^license\.workspace = true$/m);
@@ -52,6 +66,13 @@ describe("SECURITY.md", () => {
   it("報告先のメールが、ルートの SECURITY.md と全文で一致している", () => {
     expect(read("SECURITY.md")).toContain(MAIL);
     expect(read("docs/release/SECURITY.md")).toContain(MAIL);
+  });
+
+  it("応答の目標と、サポートする版の決まりが、全文と一致している", () => {
+    for (const phrase of ["3 営業日以内", "10 営業日以内", "最新のマイナー版", "例：1.4.x"]) {
+      expect(read("SECURITY.md"), phrase).toContain(phrase);
+      expect(read("docs/release/SECURITY.md"), phrase).toContain(phrase);
+    }
   });
 
   it("Private vulnerability reporting へ案内し、公開の Issue に書かないよう求めている", () => {
@@ -93,7 +114,7 @@ describe("文書の参照", () => {
   it("Markdown のリンクの相対パスが、実在するファイルを指している", () => {
     const broken: string[] = [];
     for (const file of files) {
-      for (const m of read(file).matchAll(/\]\(([^)\s]+)\)/g)) {
+      for (const m of withoutCode(read(file)).matchAll(/\]\(([^)\s]+)\)/g)) {
         const target = m[1].split("#")[0];
         if (target === "" || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
         if (!existsSync(join(ROOT, dirname(file), target))) broken.push(`${file} → ${m[1]}`);
@@ -118,6 +139,23 @@ describe("文書の参照", () => {
       expect(existsSync(join(ROOT, "docs", path)), path).toBe(false);
       expect(table, path).not.toMatch(new RegExp(`^\\| ${path.replace("/", " \\| ")} \\|`, "m"));
     }
+  });
+});
+
+describe("Actions の許可の一覧", () => {
+  it("GitHub 以外の action がすべて、手順書 8.6 の許可の一覧に書いてある", () => {
+    const used = new Set<string>();
+    for (const wf of ["ci.yml", "release.yml"]) {
+      for (const m of read(`.github/workflows/${wf}`).matchAll(/^\s*(?:-\s+)?uses:\s*([^@\s]+)@/gm)) {
+        const repo = m[1];
+        if (repo.startsWith("./") || repo.startsWith("actions/")) continue;
+        used.add(repo);
+      }
+    }
+    expect(used.size).toBeGreaterThan(0);
+    const doc = read("docs/release/07-build-and-distribution.md");
+    const section = doc.slice(doc.indexOf("### 8.6"), doc.indexOf("### 8.7"));
+    for (const repo of used) expect(section, repo).toContain(`${repo}@*`);
   });
 });
 

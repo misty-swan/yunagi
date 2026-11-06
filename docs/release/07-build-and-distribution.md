@@ -419,7 +419,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 1. 8.4 がすべて済んでいることを確かめる。
 2. リポジトリの **Settings → General** を開き、いちばん下の **Danger Zone → Change repository visibility → Change to public** を押す。確認の画面でリポジトリ名を入力して進む。GitHub が、公開による影響（スター・ウォッチの扱いなど）を表示する。
 3. 公開すると取り消しにくい：非公開に戻せるが、一度公開した内容は、フォーク・キャッシュ・アーカイブ（Software Heritage など）に残りうる。戻しても、読まれた内容は消えない。
-4. すぐに 8.6 に進む。切り替えの直後は、設定が未完了のまま公開されている（ブランチ保護も SHA 固定の必須化も、まだ無い）。この間に外部の PR や Issue が来ても、リポジトリの書き込み権限は他人に無いので、main は書き換えられない。
+4. すぐに 8.6 に進む。**最初に 8.6 の 4（Private vulnerability reporting）を有効にする**：有効にするまで、SECURITY.md と Issue テンプレートの「Report a vulnerability」のリンクは 404 になり、報告の窓口はメール（`security@getyunagi.com`）だけになる。切り替えの直後は、設定が未完了のまま公開されている（ブランチ保護も SHA 固定の必須化も、まだ無い）。この間に外部の PR や Issue が来ても、リポジトリの書き込み権限は他人に無いので、main は書き換えられない。
 
 ### 8.6 公開直後にやること（オーナー）
 
@@ -430,10 +430,10 @@ Settings の画面は、すべてリポジトリ `misty-swan/yunagi` の Setting
 3. **マージの設定**（Settings → General → Pull Requests）：**Allow merge commits** をオン（今までのマージの形）、**Allow squash merging**・**Allow rebase merging** はオフ、**Automatically delete head branches** をオンにする。
 4. **コードのセキュリティ**（Settings → Code security）：
    - **Private vulnerability reporting** → **Enable**（SECURITY.md の窓口の 1 つ。報告は Security タブの Advisories に届く）。
-   - **Dependency graph**・**Dependabot alerts**・**Dependabot security updates** をオン（脆弱性のある依存を知らせる。Rust・JavaScript の更新の PR は 14 日の目安で別に更新する決まりなので、**Dependabot version updates** は action だけ：`.github/dependabot.yml` で動く。SECURITY.md 4.4）。
+   - **Dependency graph**・**Dependabot alerts** をオン（脆弱性のある依存を知らせる）。**Dependabot security updates** は**オフのまま**にする：Rust・JavaScript の依存は 14 日の目安で別に更新する決まり（SECURITY.md 4.4）で、security updates の PR は CLAUDE.md の例外（action の更新だけ）に入らず、課題・レビューの流れが決まっていないため。警告（alerts）が出たら、通常の課題にして直す。**Dependabot version updates** は action だけ：`.github/dependabot.yml` で動く。
    - **Secret Protection** の **Push protection** をオン（秘密を含む push を止める。公開リポジトリは無料）。**Secret scanning** もオン。
 5. **Actions の設定**（Settings → Actions → General）。上から：
-   - **Actions permissions** → **Allow OWNER, and select non-OWNER actions and reusable workflows** を選び、**Allow actions created by GitHub** をオン、**Allow specified actions and reusable workflows** の欄に、使っている GitHub 以外の action だけを書く：`Swatinem/rust-cache@*, pnpm/action-setup@*`（YUN-107 が足す `cloudflare/wrangler-action@*` などは、その課題で足す）。**Require actions to be pinned to a full-length commit SHA** をオンにする（YUN-98。3章「action の固定」）。オンにしてよいのは、固定の PR（YUN-43）がマージ済みで、開いている PR（Dependabot の PR を含む）が main に追いついているか閉じているとき（タグ指定のワークフローは実行されずに失敗するため）。失敗が出たら、その PR を main に追いつかせる（Dependabot の PR は `@dependabot rebase` とコメント）。
+   - **Actions permissions** → **Allow OWNER, and select non-OWNER actions and reusable workflows** を選び、**Allow actions created by GitHub** をオン、**Allow specified actions and reusable workflows** の欄に、使っている GitHub 以外の action だけを書く：`Swatinem/rust-cache@*, pnpm/action-setup@*`（YUN-107 が足す `cloudflare/wrangler-action@*` などは、その課題で足す。ワークフローに GitHub 以外の action を足したら、この一覧も直す。`scripts/docs/public.test.ts` が、使っている action がこの一覧にあることを確かめる）。**Require actions to be pinned to a full-length commit SHA** をオンにする（YUN-98。3章「action の固定」）。オンにしてよいのは、固定の PR（YUN-43）がマージ済みで、開いている PR（Dependabot の PR を含む）が main に追いついているか閉じているとき（タグ指定のワークフローは実行されずに失敗するため）。失敗が出たら、その PR を main に追いつかせる（Dependabot の PR は `@dependabot rebase` とコメント）。
    - **Fork pull request workflows from outside collaborators** → **Require approval for all external contributors**（外部の人の PR は、オーナーが中身を見て **Approve and run** を押すまで、ワークフローが動かない。悪意あるワークフローの実行を防ぐ）。
    - **Workflow permissions** → **Read repository contents and packages permissions**（`GITHUB_TOKEN` の既定を読み取りのみにする。書き込みが要るジョブは、ワークフローの `permissions:` で個別に足す）。**Allow GitHub Actions to create and approve pull requests** はオフのまま。
    - 公開リポジトリでは、フォークからの PR に secrets が渡されない（既定）。変更しない。
