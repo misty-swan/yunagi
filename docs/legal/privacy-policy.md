@@ -1,10 +1,10 @@
-# プライバシーポリシー（ひな形）
+# プライバシーポリシー（草案）
 
-> **【草案】弁護士確認前の草案です。有効な規約ではありません。確定版は公式サイトに掲載します。**
+> **【草案】弁護士確認前の草案です。有効なものではありません。確定版は公式サイトに掲載します。**
 >
-> *DRAFT — not reviewed by a lawyer and not a valid policy. The final version will be published on the official website.*
+> *DRAFT — not reviewed by a lawyer and not valid. The final version will be published on the official website.*
 >
-> 本書は検討用のひな形です。GDPR 等、海外の利用者に適用される法令への対応も確認が必要です。
+> 本書は検討用の草案です。確定前に必ず専門家の確認を受けてください。GDPR 等、海外の利用者に適用される法令への対応も確認が必要です。
 
 〔運営者名〕（以下「運営者」）は、Yunagi（以下「本サービス」）における利用者の情報を、以下のとおり取り扱います。
 

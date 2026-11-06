@@ -150,12 +150,19 @@ describe("法務の草案の表示", () => {
   // 弁護士確認前の草案を公開に残すための表示（ビルド・配布手順書 8.3。YUN-110）。確定版（YUN-106）で外すときは、この試験も直す。
   const DRAFT_DOCS = ["terms-of-service.md", "privacy-policy.md", "tokushoho.md"];
 
-  it("3 文書の先頭（題名の直後）に、日本語と英語の草案の表示がある", () => {
+  it("3 文書の題名の直後（3 行目と 5 行目）に、日本語と英語の草案の表示が引用ブロックである", () => {
     for (const name of DRAFT_DOCS) {
-      const head = read(`docs/legal/${name}`).split("\n").slice(0, 8).join("\n");
-      expect(head, name).toContain("弁護士確認前の草案です。有効な規約ではありません。確定版は公式サイトに掲載します。");
-      expect(head, name).toContain("DRAFT — not reviewed by a lawyer");
+      const lines = read(`docs/legal/${name}`).split("\n");
+      expect(lines[0], name).toMatch(/^# /);
+      expect(lines[2], name).toBe("> **【草案】弁護士確認前の草案です。有効なものではありません。確定版は公式サイトに掲載します。**");
+      expect(lines[4], name).toMatch(/^> \*DRAFT — not reviewed by a lawyer /);
     }
+  });
+
+  it("特定商取引法の表記は、所在地と電話番号が仮置きのまま（個人情報を入れない）", () => {
+    const text = read("docs/legal/tokushoho.md");
+    expect(text).toMatch(/^\| 所在地 \| 〔住所〕 \|$/m);
+    expect(text).toMatch(/^\| 電話番号 \| 〔電話番号〕 \|$/m);
   });
 
   it("3 文書は引き続き docs/README.md の案内の表にある", () => {

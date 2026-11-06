@@ -22,9 +22,9 @@ Yunagi は、PC画面全体を「その日の仕事ノート1枚」として使�
 | release | SECURITY.md | セキュリティ方針の全文（GitHub が認識する窓口の短い版は、リポジトリ直下の `SECURITY.md`） | 公開前 |
 | user/ja | guide.md | 利用者ガイド（日本語） | 公開前 |
 | user/en | guide.md | User Guide (English) | 公開前 |
-| legal | terms-of-service.md | 利用規約（ひな形） | 公開前 |
-| legal | privacy-policy.md | プライバシーポリシー（ひな形） | 公開前 |
-| legal | tokushoho.md | 特定商取引法に基づく表記（ひな形） | 公開前 |
+| legal | terms-of-service.md | 利用規約（草案） | 公開前 |
+| legal | privacy-policy.md | プライバシーポリシー（草案） | 公開前 |
+| legal | tokushoho.md | 特定商取引法に基づく表記（草案） | 公開前 |
 | legal | third-party-licenses.md | サードパーティライセンス表記の方針 | 公開前 |
 | future | roadmap.md | ロードマップ | 公開後 |
 | future | cloud-sync-spec.md | クラウド同期仕様書（ドラフト） | 有料機能の実装前 |

@@ -1,8 +1,8 @@
-# 特定商取引法に基づく表記（ひな形）
+# 特定商取引法に基づく表記（草案）
 
-> **【草案】弁護士確認前の草案です。有効な規約ではありません。確定版は公式サイトに掲載します。**
+> **【草案】弁護士確認前の草案です。有効なものではありません。確定版は公式サイトに掲載します。**
 >
-> *DRAFT — not reviewed by a lawyer and not a valid notice. The final version will be published on the official website.*
+> *DRAFT — not reviewed by a lawyer and not valid. The final version will be published on the official website.*
 >
 > 有償のサポーターライセンス・有料オプションを販売する場合に公式サイトへ掲載します。個人で運営する場合の住所・電話番号の扱い（請求があれば遅滞なく開示する旨の記載等）は、専門家または消費者庁の資料で確認してください。外部の販売プラットフォームが販売者となる方式（Merchant of Record）を採る場合は、表記の主体と要否が変わるため確認してください（要確認）。確定版の住所・電話番号は、このリポジトリには書かず、公式サイトの設定だけに持ちます（YUN-106）。
 
