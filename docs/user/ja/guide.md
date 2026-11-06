@@ -14,18 +14,6 @@ Yunagi は、PC の画面を「今日の仕事ノート1枚」として使うア
 curl -fsSL https://getyunagi.com/install.sh | sh
 ```
 
-macOS では Homebrew も使えます。
-
-```sh
-brew install <tap名>/yunagi
-```
-
-Homebrew で入れた場合、初回起動時に macOS の警告で起動が止められることがあります。そのときは次のコマンドで、ダウンロード時に付いた印（隔離属性）を外してから起動してください（要確認：Homebrew 側で自動的に外せる場合は不要になります）。
-
-```sh
-xattr -dr com.apple.quarantine /Applications/Yunagi.app
-```
-
 #### Windows（PowerShell）
 
 ```powershell
@@ -40,7 +28,7 @@ irm https://getyunagi.com/install.ps1 | iex
 
 インストールスクリプトで入れると、ログインしている利用者だけが使う形で入ります（管理者の権限は要りません）。
 
-- macOS：`~/Applications/Yunagi.app`（Homebrew で入れた場合は `/Applications/Yunagi.app`）。コマンドの `yunagi` は `~/.local/bin/yunagi` にリンクされます。
+- macOS：`~/Applications/Yunagi.app`。コマンドの `yunagi` は `~/.local/bin/yunagi` にリンクされます。
 - Linux：`~/.local/opt/yunagi/`（アプリの AppImage とコマンド）。コマンドは `~/.local/bin/yunagi` にリンクされ、アプリ一覧に Yunagi が加わります。
 - Windows：`%LOCALAPPDATA%\Programs\Yunagi`。スタートメニューに Yunagi が加わり、`bin` フォルダがユーザーの `PATH` に加わります。
 
@@ -54,7 +42,6 @@ irm https://getyunagi.com/install.ps1 | iex
 - 更新でデータの形式が変わるときは、新しい版が最初にデータを開く前に、Yunagi がバックアップを作ります。データの変換に失敗したときは、自動でバックアップに戻してデータを変えず、旧版の入れ直し方を案内します。
 - 確認をやめたいときは、設定の「General」区分の「更新の自動確認」を無効にします。無効にすると、Yunagi はこの確認の通信を行いません。
 - Linux で tar.gz または .deb から導入した場合、アプリ内の自動更新は使えません。新しい版は同じ方法で入れ直してください（AppImage はアプリ内で自動更新されます）。
-- Homebrew で入れた場合の更新の手順は、公開までに決めてここに書きます（要確認）。
 
 特定の版を入れたいとき（旧版に戻すときなど）は、環境変数 `YUNAGI_VERSION` に版を指定して、インストールスクリプトを実行します。
 
@@ -208,5 +195,3 @@ yunagi uninstall --purge  # データも削除
 消す前に、消すものを一覧にして `[y/N]` と確認します。自分で端末から実行してください（スクリプトや AI エージェントのシェルからは動きません）。終わると、消したものと、消せなかったものを理由つきで一覧にします（消せなかったものは手で消してください。このときは 0 以外の終了コードで終わります）。Windows では、最後の後片付け（インストールしたフォルダと、`--purge` のときはデータのフォルダ）が、コマンドが終わった直後にバックグラウンドで動きます。しばらくして残っていたら、手で消してください。
 
 この PC への入れ方が分からないとき（手で置いた、開発用のビルド、tar.gz など）は、見つけた場所を示して何も消さずに止まります。設定ファイル（`config.json`）が壊れているときも、保存先が分からないので、何も消さずに止まります。
-
-Homebrew で入れたときは、`yunagi uninstall` は何も消さず、Homebrew のコマンドを案内します。アプリだけ消すときは `brew uninstall --cask yunagi`、データも消すときは `brew uninstall --cask --zap yunagi` です。設定で保存先を変えている場合、`--zap` では変えた先のデータは消えないので、手で消してください。

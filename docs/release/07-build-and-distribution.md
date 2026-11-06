@@ -3,9 +3,9 @@
 ## 1. 方針
 
 - 有料の開発者登録（Apple Developer Program、Windows のコード署名証明書）を使わずに配布する。
-- 主な導入方法は、ターミナルからの1行インストール。macOS は Homebrew tap も提供する。
+- 主な導入方法は、ターミナルからの1行インストールと、手動のダウンロード。**v1.0 では Homebrew（tap・Cask）を出さない**（2026-11-07 決定。YUN-8。理由と再検討の条件は 4.3）。
 - アプリの自動更新は Tauri Updater を使い、Yunagi 独自の鍵で署名する。
-- 配布物の実体は GitHub Releases に置き、利用者への案内は公式サイトに一本化する（Homebrew tap は公式サイトから案内する補助経路）。公式サイトは Cloudflare Pages に置く（2章「公式サイトの置き場所」）。要件定義書 9章の「配布経路は公式サイトのみ」は「ストアでは販売しない」の意味である。
+- 配布物の実体は GitHub Releases に置き、利用者への案内は公式サイトに一本化する。公式サイトは Cloudflare Pages に置く（2章「公式サイトの置き場所」）。要件定義書 9章の「配布経路は公式サイトのみ」は「ストアでは販売しない」の意味である。
 - **本体のソースは、今のリポジトリ `misty-swan/yunagi` をそのまま公開する**（2026-11-06 オーナー決定。YUN-103）。配布・Issue・脆弱性報告も、同じ公開リポジトリで受ける（インストールスクリプト、CHANGELOG、SECURITY.md もここに置く）。本書で「GitHub」と書くときはこの公開リポジトリを指す。
   - 本体ソースのライセンスは **MIT と Apache-2.0 のデュアル**（利用する人がどちらかを選べる）。LICENSE ファイル（直下の `LICENSE-MIT`・`LICENSE-APACHE`）の置き方は third-party-licenses.md 3章（YUN-109）。
   - 公開への切り替えは、公開前の点検（秘密情報・公開してよくないファイル・LICENSE・公開向けの README など）を済ませてから、オーナーが行う（YUN-109。手順は 8章）。切り替えまでは、リポジトリは非公開のままで、この書の「公開した時点で〜」と書いた動きは、まだ確かめられていない。
@@ -15,7 +15,7 @@
 
 | OS | アーキテクチャ | 配布物 | CLI の配置 |
 | --- | --- | --- | --- |
-| macOS | arm64、x86_64 | `Yunagi_<ver>_<arch>.app.tar.gz` | アプリに同梱した `yunagi` を `~/.local/bin` にリンク（Homebrew の場合は Cask の `binary` で Homebrew の bin にリンク） |
+| macOS | arm64、x86_64 | `Yunagi_<ver>_<arch>.app.tar.gz` | アプリに同梱した `yunagi` を `~/.local/bin` にリンク |
 | Linux | x86_64、arm64 | `Yunagi_<ver>_<arch>.AppImage`、`yunagi-cli_<ver>_<arch>.tar.gz`、`.tar.gz`、`.deb`（任意） | `~/.local/opt/yunagi/bin/yunagi` を `~/.local/bin/yunagi` からリンク |
 | Windows | x86_64、arm64 | `Yunagi_<ver>_<arch>-setup.exe`（NSIS、ユーザー単位インストール） | `%LOCALAPPDATA%\Programs\Yunagi\bin` を PATH に追加 |
 
@@ -34,7 +34,7 @@
 
 ### 公式サイトの置き場所（2026-11-06 決定。YUN-103）
 
-導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。公式サイトの URL は `https://getyunagi.com`。商標（J-PlatPat で「YUNAGI」を第9類・第42類で検索して該当なし。2026-11-06）の確認と、設計書・コード・導入スクリプトにあった、公式サイト・公式ドメイン・公開リポジトリの仮の表記（`<公式サイト>`・`<公式ドメイン>`・`<公開リポジトリ>`）の置き換えは、YUN-11 で済んだ（運営者名・施行日などの `〔 〕` や、tap の名前の `<tap名>` は別の課題で決めるので残っている。本書の `<配布元>` は、上の `https://github.com/misty-swan/yunagi/releases/download` を指す本書の書き方で、仮の表記ではない）。問い合わせ先は `support@getyunagi.com`、脆弱性の報告先は `security@getyunagi.com`。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は、次の「公式サイトの作り方」（YUN-107）に書いた。
+導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。公式サイトの URL は `https://getyunagi.com`。商標（J-PlatPat で「YUNAGI」を第9類・第42類で検索して該当なし。2026-11-06）の確認と、設計書・コード・導入スクリプトにあった、公式サイト・公式ドメイン・公開リポジトリの仮の表記（`<公式サイト>`・`<公式ドメイン>`・`<公開リポジトリ>`）の置き換えは、YUN-11 で済んだ（運営者名・施行日などの `〔 〕` は別の課題で決めるので残っている。本書の `<配布元>` は、上の `https://github.com/misty-swan/yunagi/releases/download` を指す本書の書き方で、仮の表記ではない）。問い合わせ先は `support@getyunagi.com`、脆弱性の報告先は `security@getyunagi.com`。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は、次の「公式サイトの作り方」（YUN-107）に書いた。
 
 **サイトを実際に公開するまでの依存**（この間、`getyunagi.com` は何も表示せず、導入コマンドは動かない）：
 
@@ -87,7 +87,7 @@
 | ページ | URL の末尾 | 元 | 中身 |
 | --- | --- | --- | --- |
 | トップ | （空） | `site/lib/text.ts` | ヒーロー（凪メーターと同じ空と海）、特長 3 つ、導入コマンド、セキュリティ、ガイドへの案内 |
-| ダウンロードと導入 | `download/` | `site/content/` | 1 行の導入、スクリプトを読んでから実行する手順、版の指定、手動のダウンロード（`latest.json` の版が分かれば、ファイルの一覧を出す。一覧は `platforms` にある組だけ）、Homebrew（準備中）、アンインストール |
+| ダウンロードと導入 | `download/` | `site/content/` | 1 行の導入、スクリプトを読んでから実行する手順、版の指定、手動のダウンロード（`latest.json` の版が分かれば、ファイルの一覧を出す。一覧は `platforms` にある組だけ。macOS でブラウザから取ったときの隔離属性の外し方も添える）、アンインストール（Homebrew は v1.0 では出さないので載せない。4.3） |
 | 配布物の確かめ方 | `verify/` | `site/content/` | `SHA256SUMS`・`SHA256SUMS.sig` の minisign での検証、配布用の公開鍵 |
 | 利用者ガイド | `guide/` | `docs/user/<言語>/guide.md` | ビルドで取り込む（コピーを置かない）。目次を付ける |
 | 動作環境 | `requirements/` | `site/content/` | 対応する OS とアーキテクチャ（要件定義書 8章・テスト計画書 3章） |
@@ -104,7 +104,7 @@
 - **アクセシビリティ**：`lang` 属性を言語ごとに付ける。見出しは `h1` を 1 つにして階層を飛ばさない。ラベルのない操作アイコンを置かない（ロゴはテキストを持つ）。リンクは本物の `<a>`。本文へ移動するリンクを先頭に置く。キーボードで動かせるよう、横にはみ出す表とコードの囲みにフォーカスを当てられる。フォーカスの枠は `--accent-strong`。スクリプトは使わない（言語の切り替えもリンク）。
 - **文言**：デザインガイド 7章（短く、淡々と、感嘆符・絵文字・励ましなし。日英は同じ情報量）。トップの機能の説明は、設計書・利用者ガイドと食い違わない範囲に絞った（見本の説明は、エージェントの書き込みの権限と取り消しの書き方を SECURITY.md 4.2 に合わせて直した）。ページの説明（`<meta name="description">`）は `site/lib/text.ts`。
 - **配布用の公開鍵**（`SHA256SUMS.sig` の検証用。2章・6.2）：置き場所は `site/keys/release.pub`（minisign の公開鍵ファイル。1 行目が `untrusted comment: ...`、2 行目が `RW` で始まる 56 文字）。ファイルを置くと、ビルドが `/yunagi-release.pub` として公開し、配布物の確かめ方のページに値を出す。形が違えばビルドが止まる。同じファイルがリポジトリにもあるので、サイトとリポジトリの 2 か所で見比べられる（2章）。更新（鍵の差し替え）は、このファイルを PR で直してサイトを公開し直す。差し替えはお知らせ（`site/content/<言語>/news.md`）でも告知する（6.2）。**公開鍵の値は置いてある**：配布用鍵（6.2）をオーナーが 2026-11-06 に作り、その公開鍵を置いた（YUN-100）。公開してよい理由：公開鍵は秘密ではない。秘密鍵とパスフレーズは、リポジトリにも CI にも置いていない（CI のシークレットは YUN-101 で入れる）。鍵 ID は公開鍵の 1 行目（`untrusted comment: ...`）に入っていて、ページの鍵の表示にそのまま出る。ページの本文にも、この書にも、鍵 ID は別に書かない（差し替えのたびに直す所が増え、食い違う恐れがあるため）。ファイルが無い間は、ページに「最初のリリースの前に、ここに掲載します」と出す（試験は一時フォルダで確かめる）。**更新署名鍵（5.2）の公開鍵はこのファイルとは別で、まだ置いていない**：`tauri.conf.json` の `plugins.updater.pubkey` に、最初のリリースで `endpoints` と同時に入れる（YUN-101）。
-- **利用者ガイドの仮の表記**：ガイドはサイトにそのまま載る。最初のリリースの前に公開すると、`/ja/guide/`・`/en/guide/` に Homebrew の仮の表記（`<tap名>`・`<tap>`）と「要確認」の文が載る（ダウンロードのページは Homebrew を「準備中」としている）。YUN-101 が tap の名前を決めてガイドを直す（その課題の完了の条件。ガイドを直せば、サイトは次の公開で変わる）。最初のリリースの確認表（7章）で、残っていないことを見る。
+- **利用者ガイドの仮の表記**：ガイドはサイトにそのまま載る。以前は Homebrew の仮の表記（`<tap名>`・`<tap>`）と「要確認」の文が残っていたが、v1.0 では Homebrew を出さないので、2026-11-07 に Homebrew の記述ごと消した（YUN-8）。ガイドに「要確認」（英語は「to be confirmed」）・`<tap` 系の仮の表記・Homebrew の案内が無いことは、`scripts/docs/guide.test.ts` が確かめる。最初のリリースの確認表（7章）でも、残っていないことを見る。
 - **法務文書は載せない**（確定版ができるまで。2026-11-06 決定）：`docs/legal/` の 3 文書は草案の表示つきで、有効なものではない（8.3）。サイトに載せると、草案が正式な文書に見えるため、確定版（YUN-106）ができるまでサイトには載せない。フッターにも利用規約・プライバシーのリンクを置かない（試験が、草案の語がサイトに出ないことを確かめる）。確定版を載せるときは、`site/content/` にページを足し、`site/lib/text.ts` の `PageKey` とナビに加える（YUN-106 の完了の条件に書いた）。
 - **お知らせ・変更履歴の更新**：お知らせは `site/content/<言語>/news.md` の「お知らせ」の節に、新しい順で書く（日英同時）。変更履歴は `docs/operations/CHANGELOG.md`（日本語）と `CHANGELOG.en.md`（英語）を同時に直す（ビルドで取り込む。構成が日英でそろうことは試験が確かめる）。
 - **ページの足し方**：`site/lib/text.ts` の `PageKey`・`SLUGS`・`DESCRIPTIONS` に足し、`site/lib/pages.ts` で本文の元を決める。日英のページがそろうこと・リンク切れ・見出し・外部の読み込みは、試験が全ページに対して確かめる（販売ページ YUN-108 もこの形で足す）。
@@ -179,7 +179,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 4. macOS：ビルド後にアドホック署名を行う（`codesign --force --deep -s - Yunagi.app`）。Apple Silicon では署名がないと起動できないため必須。（YUN-101 で作る。3.4）
 5. Updater 用の署名を、CI のシークレットに保管した秘密鍵で付与する。（YUN-101 で作る。3.4）
 6. SHA-256 を計算し、`.sha256` と `SHA256SUMS` を Release に添付する。`SHA256SUMS` に配布用鍵で署名し、`SHA256SUMS.sig` を添付する。（`.sha256` を配布物ごとに作るところまでは YUN-97 で作った。3.3。`SHA256SUMS` とその署名・Release への添付は YUN-101 で作る。3.4）
-7. Homebrew tap のリポジトリに、新しいバージョンとハッシュを自動でプルリクエストする。（YUN-101 で作る。3.4）
+7. （Homebrew tap への自動のプルリクエストは、v1.0 では行わない。4.3。2026-11-07 決定。YUN-8）
 
 ### 3.1 検査（許可リスト・ライセンス・フォント）
 
@@ -250,14 +250,14 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 
 ### 3.4 署名と公開（YUN-101 で作る）
 
-3 の 4・5・6（`SHA256SUMS` 以降）・7 は、鍵（2026-11-06 に作成済み。秘密鍵とパスフレーズを CI のシークレットに入れるのは、この課題）と、リポジトリの公開（YUN-109）・公式サイトの公開（YUN-107）が済んでから動かせる（置き場所は決まっている：1章・2章）ので、子課題 YUN-101 が作る。YUN-97 では作らず、動かしてもいない。作るもの：
+3 の 4・5・6（`SHA256SUMS` 以降）は、鍵（2026-11-06 に作成済み。秘密鍵とパスフレーズを CI のシークレットに入れるのは、この課題）と、リポジトリの公開（YUN-109）・公式サイトの公開（YUN-107）が済んでから動かせる（置き場所は決まっている：1章・2章）ので、子課題 YUN-101 が作る。YUN-97 では作らず、動かしてもいない。作るもの：
 
 - macOS のアドホック署名（3 の 4）。
 - Updater 用の署名 `.sig`（`bundle.createUpdaterArtifacts`。5.1 の「署名に版を入れる」）と、`latest.json`（5.1。トップレベルの `version` を入れ子の項目（`platforms` など）より前に置く：4.1 の 2）。
 - 全配布物の `SHA256SUMS` と、配布用鍵での `SHA256SUMS.sig`（2章・6.2）。
 - **公式サイトの公開（Pages へのデプロイ）の段**（2026-11-06 決定。YUN-103）：リリースのワークフローの最後の段として、GitHub Release の配布物が `<配布元>` から取得できることを確かめた**あとだけ**、サイトを `latest.json` つきでデプロイする（確認が通らなければデプロイしない。先に `latest.json` だけが公開される順序の入れ替わりを防ぐ）。サイトだけの変更のデプロイ（YUN-107。`.github/workflows/site.yml`。2章「公式サイトの公開の仕組み」）は、**いま公開中の `latest.json` を取得して含める**（取得できなければ中止する。含め忘れて 404 にしない、古い写しで上書きしない。最初の公開だけは、手動の実行の入力 `allow_missing_latest` で、含めずに進める）。リリースのデプロイ（この課題）は、`pnpm site:build --latest-json <パス>` で作った latest.json を取り込み、同じ `wrangler-action` の段で上げる（`SHA256SUMS` は `sha256sum` と同じ形にする）。取り下げて戻したあとも、この取得のおかげで戻した状態が引き継がれる。どちらの段も 2章の secrets の決まり（フォークの PR に渡さない・Environment で制限する）に従う。
 - GitHub Release の作成と、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig`・`THIRD_PARTY_LICENSES.md` の添付。
-- Homebrew tap への自動 PR（3 の 7。4.3）。
+- 作らないもの：Homebrew tap への自動 PR（v1.0 では Homebrew を出さない。3 の 7、4.3）。
 - 「署名鍵を持つジョブの権限」：鍵を使うジョブだけに `contents: write` と鍵のシークレットを渡し、検査・ビルドのジョブには渡さない（このファイルの `permissions` は `contents: read`）。
 
 ### action の固定
@@ -307,13 +307,24 @@ irm https://getyunagi.com/install.ps1 | iex
 
 動作は install.sh に準じる（環境変数も同じ。4.1 の 2）。`Yunagi_<ver>_<arch>-setup.exe` を取得してハッシュを照合し、`/S`（サイレント）と `/D=%LOCALAPPDATA%\Programs\Yunagi`（インストール先。NSIS の決まりで最後の引数にし、引用符を付けない）で実行する（2026-11-05 決定。YUN-95。インストーラーの既定の場所に頼らず、スクリプトが指定する）。Yunagi のアプリ（`%LOCALAPPDATA%\Programs\Yunagi\Yunagi.exe`。CLI の `yunagi.exe` は数えない。MCP サーバーなどが動いていても止めないため）が動いているときは、インストーラーを動かす前に、終了してから実行し直すよう知らせて止まる。終了コードが 0 でなければ止まり、`%LOCALAPPDATA%\Programs\Yunagi\bin\yunagi.exe` があることを確かめてから、ユーザー環境変数の PATH に `bin` を追加する（レジストリの `HKCU\Environment\Path` を、`%VAR%` を展開せずに読み、`REG_EXPAND_SZ` のまま書く。`[Environment]::SetEnvironmentVariable` は使わない。展開した文字列で上書きして、利用者の `%JAVA_HOME%\bin` のような項目を固定してしまうため。レジストリを直接書くと実行中のプログラムに変更が伝わらないので、使い捨てのユーザー変数を .NET で設定して消し、環境の変更の通知（`WM_SETTINGCHANGE`）を送る）（すでにあれば足さない。`%VAR%` を展開した形が同じ場所のときも足さない。空の項目は捨てる。大文字小文字と末尾の `\` の違いは同じとみなす）。同じ端末では、現在のセッションの `PATH` にも足し、すぐ `yunagi` を使えるようにする。スタートメニューのショートカットは、インストーラー（NSIS）が作る（スクリプトは作らない）。インストーラーは `bin\yunagi.exe` を含める（2章。配布用 CI の側の条件）。失敗は例外（エラーの表示）で知らせる。`irm | iex` は終了コードを返さないので、自動化で失敗を見分けたいときは、スクリプトを保存して実行する（導入ガイドの「内容を確認してから実行する」手順）。表示は install.sh と同じく英語。スクリプトは ASCII だけで書く（Windows PowerShell 5.1 は、BOM の無いファイルを ANSI で読むため）。
 
-### 4.3 Homebrew（macOS）
+### 4.3 Homebrew（macOS）：v1.0 では出さない
 
-```sh
-brew install <tap名>/yunagi
-```
+**v1.0 では Homebrew（自分の tap も、公式の Cask も）を出さない**（2026-11-07 オーナー決定。YUN-8）。主な導入は `install.sh`・`install.ps1`（4.1・4.2）と手動のダウンロード（2章）である。利用者ガイド・公式サイトのダウンロードのページも、Homebrew を案内しない。
 
-tap 内の Cask でアプリと CLI を配置する。アプリは Cask の既定どおり `/Applications/Yunagi.app` に置き、CLI は Cask の `binary` で Homebrew の bin にリンクする。
+理由：
+
+- 署名のない（アドホック署名の）アプリは、Gatekeeper に止められる。Homebrew は Gatekeeper を迂回するものを認めない方針で、`--no-quarantine` の廃止が進んでおり、Gatekeeper に通らない Cask は 2026-09-01 以降に段階的に非推奨になる（Homebrew/brew#20755、Homebrew/discussions#7050。公式の発表での最終確認はできていない。暫定の情報）。自分の tap の `postflight` で隔離属性（`com.apple.quarantine`）を外す方法も、将来効かなくなるおそれがある。
+- そのため、Cask の `postflight` で隔離属性を外せるかを Mac の実機で確かめる作業（YUN-8 の元の完了の条件）は、v1.0 では要らなくなった。
+- アプリ内の更新と Homebrew の記録のずれ（5章）も、出さなければ起きない。
+- tap 用の新しい公開リポジトリも要らない。
+
+**再検討の条件**：Apple の開発者登録（Developer ID の署名と公証）を取る時期に、公式の Cask（`homebrew/cask`）を含めて、Homebrew で出すかを改めて決める。署名と公証が済んだアプリなら Gatekeeper に通るので、上の理由は当てはまらなくなる。出すと決めたら、次のことを決める：Cask の置き場（公式か自分の tap か）、5章の更新の方式（`auto_updates true` か `brew upgrade` に任せるか）、配布用 CI の自動 PR（3 の 7）、利用者ガイド・サイトへの案内、`yunagi uninstall` の案内の確認（4.4）。
+
+`yunagi uninstall` の Homebrew の検出（4.4）は、将来 Cask を出したときのために、**消さずに残す**。Cask が無い v1.0 では、この検出に当たる Mac は無い（Caskroom に `yunagi` が無い）ので、動かない。
+
+以下は、**もし出すときの設計メモ**（将来用。v1.0 では使わない）。決めてあることを失わないよう残す。
+
+tap 内の Cask でアプリと CLI を配置する。アプリは Cask の既定どおり `/Applications/Yunagi.app` に置き、CLI は Cask の `binary` で Homebrew の bin にリンクする。導入は `brew install <tap名>/yunagi`（`<tap名>` は未定）。
 
 **アンインストール（`zap`）**（2026-11-05 決定。YUN-44）：Cask は `uninstall` でアプリと CLI のリンクを外し（Cask の既定）、`zap` で `yunagi uninstall --purge`（4.4）が消す macOS の場所を消す（違いは下の段落）。`brew uninstall --cask --zap yunagi` で、アプリとデータをまとめて消せる。`zap` の内容は、アーキテクチャ設計書 6.5 の macOS の場所と、データディレクトリ（6章）である：
 
@@ -330,9 +341,11 @@ zap delete: [
 ]
 ```
 
-`zap` は `trash:`（ゴミ箱へ移す）でなく `delete:`（すぐ消す）にする。ゴミ箱に残ると、データを消す約束にならないため。`uninstall quit:` は、動いているアプリを先に終了させる（消した後に WebView や設定の保存が、ファイルを書き戻さないため）。`delete:` は無いものを飛ばすので、6.5 で実機が未確認の場所を含めても害はない。`yunagi uninstall --purge` との違い：①アプリの終了を頼む（`yunagi` は動いていれば止まる）。②`~/Library/Application Support/Yunagi` を、保存先を変えているかにかかわらず丸ごと消す（`--purge` は既定ディレクトリを全部消すので、既定のままなら同じ。保存先を変えているときは、`zap` は変えた先に触れない）。③plist は `defaults delete` を通さず直接消すので、OS の設定の仕組みが書き戻して残ることがある（アーキテクチャ設計書 6.5。残ったら手で消す。plist は設定の値だけで、ノートのデータではない）。④`config.json` を読まず、順番も取らない。識別子（アーキテクチャ設計書 6.1）か 6.5 の場所を変えたら、この一覧も同時に直す。`zap` は `config.json` を読めないので、設定で変えた保存先は消えない（利用者ガイドの「アンインストール」に書く）。tap のリポジトリはまだ無い。作るときにこの内容で書く。
+`zap` は `trash:`（ゴミ箱へ移す）でなく `delete:`（すぐ消す）にする。ゴミ箱に残ると、データを消す約束にならないため。`uninstall quit:` は、動いているアプリを先に終了させる（消した後に WebView や設定の保存が、ファイルを書き戻さないため）。`delete:` は無いものを飛ばすので、6.5 で実機が未確認の場所を含めても害はない。`yunagi uninstall --purge` との違い：①アプリの終了を頼む（`yunagi` は動いていれば止まる）。②`~/Library/Application Support/Yunagi` を、保存先を変えているかにかかわらず丸ごと消す（`--purge` は既定ディレクトリを全部消すので、既定のままなら同じ。保存先を変えているときは、`zap` は変えた先に触れない）。③plist は `defaults delete` を通さず直接消すので、OS の設定の仕組みが書き戻して残ることがある（アーキテクチャ設計書 6.5。残ったら手で消す。plist は設定の値だけで、ノートのデータではない）。④`config.json` を読まず、順番も取らない。識別子（アーキテクチャ設計書 6.1）か 6.5 の場所を変えたら、この一覧も同時に直す。`zap` は `config.json` を読めないので、設定で変えた保存先は消えない（出すときは、利用者ガイドの「アンインストール」に書く）。tap のリポジトリは作っていない。出すときにこの内容で書く。
 
-Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine`）を付けるため、アドホック署名のままでは初回起動が Gatekeeper に止められる見込みである（要確認：Homebrew の挙動は変わりうるため、実機で確認する）。Cask の `postflight` で隔離属性を外す。外せない場合は、導入ガイドに対処（`xattr -dr com.apple.quarantine /Applications/Yunagi.app`）を載せる。
+Cask はダウンロードしたアプリに隔離属性を付けるため、アドホック署名のままでは初回起動が Gatekeeper に止められる。Cask の `postflight` で隔離属性を外す方法は、上の理由で将来効かなくなるおそれがあり、Mac の実機で確かめていない。署名と公証を取ってから出すのが前提である。
+
+**手動で取ったときの隔離属性**：ブラウザで `.app.tar.gz` を取って展開すると、`Yunagi.app` に隔離属性が付き、アドホック署名のままでは初回起動が止められることがある（`curl` で取ったファイルには付かない見込み。インストールスクリプトはこちら。実機の確認は 08 の 4.9）。公式サイトのダウンロードのページの手動の節に、`xattr -dr com.apple.quarantine <Yunagi.app のパス>` で外す手順を載せる（サポート・障害対応手順の 4.1 と同じ）。
 
 ### 4.4 アンインストール
 
@@ -341,7 +354,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 どの導入かは、実行している `yunagi` の実体（リンクを解いたパス）で見分ける（2026-11-05 決定。YUN-44）。見分けは、下の順番の前に行う（Homebrew の人に「アプリを終了して」でなく、先に `brew` を案内するため）。
 
 - 正規の置き場所（4.1・4.2 が置く場所）：macOS は `~/Applications/Yunagi.app/` の中、Linux は `~/.local/opt/yunagi/` の中、Windows は `%LOCALAPPDATA%\Programs\Yunagi\` の中。この中なら、上の一覧を消す。
-- Homebrew の Cask：実体が `/Applications/Yunagi.app/` の中にあり、かつ Caskroom の `yunagi`（`$HOMEBREW_PREFIX/Caskroom/yunagi`。`HOMEBREW_PREFIX` が無ければ `/opt/homebrew`・`/usr/local` の両方）が在るとき。`--appdir` で別の場所に入れた Cask は見分けられず、次の「どちらでもない」になるので、その案内に「Homebrew で入れたなら `brew uninstall --cask yunagi` を使う」を添える（Cask の `binary` の行き先は `/Applications/Yunagi.app/` の中になるので、パスだけでは手で `/Applications` に置いたものと見分けられない）。何も消さずに、`brew uninstall --cask yunagi`（`--purge` のときは `--zap` 付き）を案内して止まる。Cask が置いたものを `yunagi` が消すと、Homebrew の記録と食い違うため。
+- Homebrew の Cask（**v1.0 では Cask を出さないので、実際には当たらない。将来出したときのために検出を残してある**。4.3。2026-11-07 決定。YUN-8）：実体が `/Applications/Yunagi.app/` の中にあり、かつ Caskroom の `yunagi`（`$HOMEBREW_PREFIX/Caskroom/yunagi`。`HOMEBREW_PREFIX` が無ければ `/opt/homebrew`・`/usr/local` の両方）が在るとき。`--appdir` で別の場所に入れた Cask は見分けられず、次の「どちらでもない」になるので、その案内に「Homebrew で入れたなら `brew uninstall --cask yunagi` を使う」を添える（v1.0 には Cask が無いので、この一文は将来のためのもの。「入れたなら」という条件つきの文で、動きは変えない。Cask の `binary` の行き先は `/Applications/Yunagi.app/` の中になるので、パスだけでは手で `/Applications` に置いたものと見分けられない）。何も消さずに、`brew uninstall --cask yunagi`（`--purge` のときは `--zap` 付き）を案内して止まる。Cask が置いたものを `yunagi` が消すと、Homebrew の記録と食い違うため。
 - どちらでもないとき（手で `/Applications` に置いたもの、開発用のビルド、置き場所を決めていない tar.gz・.deb など）：見つけたパスを示し、何も消さずに止まる。
 
 消す順番（動いている `yunagi.exe` はアンインストーラーが消す `bin\` の中にあり、ロックファイルは消すデータの中にあるため、Windows で失敗しない順にする。macOS・Linux も同じ順にそろえる）：
@@ -358,7 +371,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 
 **試験の作り**（コードは `crates/cli/src/uninstall/`）：場所は OS の区分と環境変数の組から求める関数（試験は Linux で macOS・Windows の場合も確かめる）。消すものはすべて 1 つの層を通り、通す前に「絶対パスで、`..` を含まず、ルートや利用者のホームそのものではない」ことを確かめる。試験では、一時フォルダの外を消そうとしたら消さずに panic する決まりを加える（利用者の実際の環境を消さないため。結合テストは `HOME`・`XDG_DATA_HOME` を一時フォルダに差し替え、動かす前に差し替えが効いていることを表明する）。実機でしか確かめられない部分（`defaults delete`、Windows の `PATH` の読み書き、切り離した後片付けの起動）は、呼び出しの口を差し替えられるようにして偽物で確かめる。実機の項目はテスト計画書 4.9。
 
-置く物を変えたら、ここと 4.1・4.2・4.3 の `zap` を同時に直す。2026-11-05 に、この一覧が `install/install.sh`・`install/install.ps1` の置くものと一致していることを確かめた。
+置く物を変えたら、ここと 4.1・4.2 を同時に直す（4.3 の将来用の `zap` も、出すときのために合わせておく）。2026-11-05 に、この一覧が `install/install.sh`・`install/install.ps1` の置くものと一致していることを確かめた。
 
 ### 4.5 インストールスクリプトの試験
 
@@ -374,7 +387,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - 有効な場合、アプリ起動時と以後24時間ごとに `latest.json` を確認する。
 - 新しい版があれば、サイドバー下端の「New version」で控えめに通知し（画面設計書 3章）、利用者の操作（「New version」を選んで「更新して再起動」、またはパレットの「更新して再起動」コマンド）で更新する（作業中に勝手に再起動しない）。
 - 更新前にデータベースのバックアップを作成する。マイグレーションが失敗した場合は自動でバックアップに戻してデータを変更せず、エラー画面で旧版の再導入方法（`YUNAGI_VERSION=<旧版>` を付けてインストールスクリプトを実行）を案内する。データベースが新しい版で作られていて開けない場合（旧版を入れ直したときなど）は、新しい版の入れ方（`YUNAGI_VERSION` を付けずに実行）を案内する（画面は画面設計書 10.1）。
-- 未決：Homebrew の Cask で入れたアプリ（4.3。`/Applications/Yunagi.app`）の更新。アプリ内の更新で入れ替えると、Homebrew の記録の版と食い違う。アプリ内の更新を出さず `brew upgrade --cask yunagi` に任せるか、アプリ内の更新を使うか（Cask の `auto_updates true`）を、tap を作るとき（YUN-101）に決める。決まるまで、利用者ガイド 1 章「更新」には「Homebrew で入れた場合の更新の手順は決めて書く（要確認）」の 1 行を置いてある。決めたら、その行を手順に置き換える。
+- Homebrew の Cask で入れたアプリの更新（アプリ内の更新と Homebrew の記録の版がずれる問題）は、v1.0 では Homebrew を出さないので起きない（2026-11-07 決定。YUN-8）。Cask を出すときに、アプリ内の更新を出さず `brew upgrade --cask yunagi` に任せるか、アプリ内の更新を使うか（Cask の `auto_updates true`）を決める（4.3）。
 
 ### 5.1 動きの細部
 
@@ -439,8 +452,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] 公式サイトのデプロイ（Cloudflare Pages。2章「公式サイトの置き場所」）で `https://getyunagi.com/latest.json` を新しい版に更新し、`curl -fsS` で取った `version` が新しい版であることを確かめた
 - [ ] （2 回目のリリースから）Pages の「Deployments」に、直前の版の `latest.json` を載せた本番のデプロイが残っていて、そのデプロイの URL（またはデプロイ ID）と公開日時を、リリースの記録に控えた（取り下げ時の戻し先。2章。最初のリリースには戻し先が無い）
 - [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
-- [ ] Homebrew tap の更新がマージされ、Cask で導入したアプリが起動することを確認した
-- [ ] 公式サイトのダウンロード案内と変更履歴を更新した（ダウンロードのページの一覧は `latest.json` の版から出る。変更履歴は CHANGELOG.md・CHANGELOG.en.md から取り込まれる。2章「公式サイトの作り方」）。利用者ガイドの仮の表記（`<tap名>`・`<tap>`・「要確認」）が残っていないことも見た（ガイドはサイトにそのまま載る）
+- [ ] 公式サイトのダウンロード案内と変更履歴を更新した（ダウンロードのページの一覧は `latest.json` の版から出る。変更履歴は CHANGELOG.md・CHANGELOG.en.md から取り込まれる。2章「公式サイトの作り方」）。利用者ガイドに仮の表記や「要確認」が残っていないことも見た（ガイドはサイトにそのまま載る）
 
 最初のリリースの前に、次も確かめる（初回だけ）：
 

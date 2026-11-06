@@ -32,8 +32,8 @@
 
 ### 4.1 起動しない（macOS）
 
-1. `~/Applications/Yunagi.app`（Homebrew で導入した場合は `/Applications/Yunagi.app`）にあるか確認する。
-2. ブラウザでダウンロードした場合や Homebrew（Cask）で導入した場合は隔離属性が付き、起動できないことがある。`xattr -dr com.apple.quarantine <Yunagi.app のパス>` を案内するか、インストールスクリプトでの再導入を案内する。
+1. `~/Applications/Yunagi.app` にあるか確認する（手動のダウンロードなら、利用者が置いた場所）。
+2. ブラウザでダウンロードした場合は隔離属性が付き、起動できないことがある。`xattr -dr com.apple.quarantine <Yunagi.app のパス>` を案内するか、インストールスクリプトでの再導入を案内する。
 3. 解決しない場合は `yunagi doctor` の出力を依頼する。
 
 ### 4.2 データが見当たらない

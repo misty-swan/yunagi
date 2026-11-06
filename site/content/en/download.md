@@ -62,16 +62,12 @@ Without it, the script installs the latest version listed in this site's `latest
 
 Check a file you downloaded by hand with [Verify a download](/en/verify/) before you use it.
 
-- macOS: extract the `.app.tar.gz` and put `Yunagi.app` where you like (for example `~/Applications`).
+- macOS: extract the `.app.tar.gz` and put `Yunagi.app` where you like (for example `~/Applications`). If you downloaded it with a browser, macOS may block the first launch. In that case, remove the download flag (the quarantine attribute) with `xattr -dr com.apple.quarantine <path to Yunagi.app>` and launch it again.
 - Linux: make the AppImage executable (`chmod +x`) and run it. It needs FUSE 2 to start.
 - Windows: run the `-setup.exe`.
 
 The install script sets up the `yunagi` command link and the `PATH`. If you install by hand, set them up yourself.
 
-## 5. Homebrew (macOS)
-
-A Homebrew tap for macOS is in preparation. The steps will be posted here when it is published.
-
-## 6. Uninstall
+## 5. Uninstall
 
 `yunagi uninstall` removes the app and the `yunagi` link. Your data is kept by default. See [chapter 8 of the guide](/en/guide/#8-uninstall) for details.

@@ -5,7 +5,8 @@
 # 6 組（OS × アーキテクチャ）のビルド、配布物の名前の付け替え、`.sha256`。できたファイルは Actions の
 # 成果物（artifact）として残すだけで、Release には置かない。
 # 後続（YUN-101）：アドホック署名・Updater の署名 `.sig` と `latest.json`・`SHA256SUMS` と minisign 署名・
-# GitHub Release の作成と添付・Homebrew tap への PR。署名鍵（YUN-100）が要るので、ここには置かない。
+# GitHub Release の作成と添付。署名鍵（YUN-100）が要るので、ここには置かない。
+# （Homebrew tap への PR は、v1.0 では Homebrew を出さないので作らない。07 4.3）
 #
 # 試運転：このファイルや、ビルドの設定・スクリプトを変える PR では、タグなしで同じ流れを走らせる
 # （`pull_request`）。タグの push と同じ全 6 組を走らせる（除く組は `scripts/release/matrix.ts` の

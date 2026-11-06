@@ -62,16 +62,12 @@ $env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex
 
 手動で取得したファイルは、使う前に[配布物の確かめ方](/ja/verify/)で照合してください。
 
-- macOS：`.app.tar.gz` を展開し、`Yunagi.app` を好きな場所（たとえば `~/Applications`）に置きます。
+- macOS：`.app.tar.gz` を展開し、`Yunagi.app` を好きな場所（たとえば `~/Applications`）に置きます。ブラウザで取ったときは、初回の起動が macOS の警告で止められることがあります。そのときは、ダウンロード時に付いた印（隔離属性）を `xattr -dr com.apple.quarantine <Yunagi.app のパス>` で外してから起動してください。
 - Linux：AppImage に実行の権限を付け（`chmod +x`）、実行します。起動には FUSE 2 が要ります。
 - Windows：`-setup.exe` を実行します。
 
 コマンド `yunagi` のリンクや `PATH` の設定は、インストールスクリプトが行います。手動で入れた場合は、自分で設定してください。
 
-## 5. Homebrew（macOS）
-
-macOS 向けの Homebrew の tap は準備中です。公開したら、ここに手順を載せます。
-
-## 6. アンインストール
+## 5. アンインストール
 
 `yunagi uninstall` で、アプリと `yunagi` のリンクを消せます。データは、既定では残ります。詳しくは[利用者ガイド 8 章](/ja/guide/#8-アンインストール)にあります。
