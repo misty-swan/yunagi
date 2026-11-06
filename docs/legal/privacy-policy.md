@@ -4,7 +4,7 @@
 >
 > *DRAFT — not reviewed by a lawyer and not valid. The final version will be published on the official website.*
 >
-> 本書は検討用の草案です。確定前に必ず専門家の確認を受けてください。GDPR 等、海外の利用者に適用される法令への対応も確認が必要です。
+> 本書は検討用の草案です。確定前に必ず弁護士等の専門家の確認を受けてください。GDPR 等、海外の利用者に適用される法令への対応も確認が必要です。
 
 〔運営者名〕（以下「運営者」）は、Yunagi（以下「本サービス」）における利用者の情報を、以下のとおり取り扱います。
 

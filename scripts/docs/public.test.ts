@@ -152,17 +152,30 @@ describe("法務の草案の表示", () => {
 
   it("3 文書の題名の直後（3 行目と 5 行目）に、日本語と英語の草案の表示が引用ブロックである", () => {
     for (const name of DRAFT_DOCS) {
-      const lines = read(`docs/legal/${name}`).split("\n");
+      const lines = read(`docs/legal/${name}`).split(/\r?\n/);
       expect(lines[0], name).toMatch(/^# /);
       expect(lines[2], name).toBe("> **【草案】弁護士確認前の草案です。有効なものではありません。確定版は公式サイトに掲載します。**");
-      expect(lines[4], name).toMatch(/^> \*DRAFT — not reviewed by a lawyer /);
+      expect(lines[4], name).toBe(
+        "> *DRAFT — not reviewed by a lawyer and not valid. The final version will be published on the official website.*",
+      );
     }
   });
 
-  it("特定商取引法の表記は、所在地と電話番号が仮置きのまま（個人情報を入れない）", () => {
+  it("docs/legal の文書は、third-party-licenses.md 以外すべて、この試験の対象になっている", () => {
+    const found = readdirSync(join(ROOT, "docs/legal"))
+      .filter((f) => f.endsWith(".md") && f !== "third-party-licenses.md")
+      .sort();
+    expect(found).toEqual([...DRAFT_DOCS].sort());
+  });
+
+  it("個人情報を入れない：特定商取引法の表記の各項目と、運営者名が、仮置き（〔 〕）のまま", () => {
     const text = read("docs/legal/tokushoho.md");
-    expect(text).toMatch(/^\| 所在地 \| 〔住所〕 \|$/m);
-    expect(text).toMatch(/^\| 電話番号 \| 〔電話番号〕 \|$/m);
+    for (const row of ["販売事業者", "運営責任者", "所在地", "電話番号", "メールアドレス"]) {
+      expect(text, row).toMatch(new RegExp(`^\\| ${row} \\| 〔[^〕]+〕 \\|$`, "m"));
+    }
+    for (const name of ["terms-of-service.md", "privacy-policy.md"]) {
+      expect(read(`docs/legal/${name}`), name).toContain("〔運営者名〕");
+    }
   });
 
   it("3 文書は引き続き docs/README.md の案内の表にある", () => {
