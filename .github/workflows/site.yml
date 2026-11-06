@@ -36,10 +36,10 @@ on:
         type: boolean
         default: false
 
-# 公開は 1 つずつ。古い実行を途中で止めない（公開の途中で止めると、中途半端な状態になりうるため）。
-# build が取った latest.json が古くなって、先に公開されたリリースのものを上書きしないよう、
-# リリースのデプロイ（YUN-101）も同じ group 名 `site-deploy` を使う（07 の 2章「公式サイトの公開の仕組み」）。
-# 待っていた実行は、前の公開が終わってから始まり、そのときに latest.json を取る
+# 公開は 1 つずつ。実行中のものを途中で止めない（公開の途中で止めると、中途半端な状態になりうるため）。
+# 待っている実行は、新しい実行が来ると置き換えられる（GitHub の仕様）。サイトだけの変更の公開は、
+# 新しいほうがリポジトリの最新の状態を含むので、置き換えられてよい。リリースのデプロイ（YUN-101）は、
+# 置き換えられて失われると困るので、この group を共有しない（07 の 2章「公式サイトの公開の仕組み」）
 concurrency:
   group: site-deploy
   cancel-in-progress: false
@@ -124,6 +124,19 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "::error::Environment cloudflare-pages に CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID が無いので、何も上げずに止める（docs/release/07-build-and-distribution.md の手順書 ③④）"
             exit 1
+          fi
+
+      # build が取り込んだ latest.json が、いま公開中のものと同じことを、上げる直前にもう一度確かめる
+      # （build の後に、リリースのデプロイが先に新しい版を公開していたら、古い写しで戻さないよう止める）。
+      # リポジトリのコードは動かさず、curl と cmp だけを使う。最初の公開（成果物に latest.json が無い）は確かめない
+      - name: Check latest.json is still current
+        run: |
+          if [ -f site/dist/latest.json ]; then
+            curl -fsS --retry 3 --max-time 30 -H 'Cache-Control: no-cache' "https://getyunagi.com/latest.json?_=${GITHUB_RUN_ID}" -o "$RUNNER_TEMP/published.json"
+            if ! cmp -s site/dist/latest.json "$RUNNER_TEMP/published.json"; then
+              echo "::error::公開中の latest.json が、build で取り込んだものと違う（先にリリースが公開された）。上げずに止める。Site を再実行する"
+              exit 1
+            fi
           fi
 
       # wrangler の版は固定する（公開から 14 日たった版。SECURITY.md 4.4）。--branch は Pages のプロジェクトの本番ブランチ名

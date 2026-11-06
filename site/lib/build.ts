@@ -1,14 +1,14 @@
 // 公式サイトをビルドして出力先に書く。使うのは Node.js の標準の機能と marked だけ。
 // 決まり：docs/release/07-build-and-distribution.md 2章「公式サイトの作り方」。
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LANGS, SITE } from "./consts.ts";
 import { esc } from "./html.ts";
 import { parseLatest, type Latest } from "./latest.ts";
 import { buildPages } from "./pages.ts";
-import { pagePath } from "./layout.ts";
+import { HEAD_COMMON, pagePath } from "./layout.ts";
 import { PAGE_KEYS } from "./text.ts";
 
 /** リポジトリの直下 */
@@ -52,10 +52,7 @@ function plain(lang: "ja" | "en", title: string, body: string, head = ""): strin
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="robots" content="noindex">
-<meta name="color-scheme" content="light dark">
-${head}<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/assets/site.css">
-</head>
+${HEAD_COMMON}${head}</head>
 <body>
 <main>
 <div class="wrap"><div class="doc">
@@ -107,12 +104,15 @@ export function redirectsFile(): string {
  * 指していたら消さずに止める。すでにあって空でないときは、前のビルドの出力（`_headers` と `ja/index.html` がある）のときだけ消す。
  */
 function assertSafeOutDir(root: string, outDir: string): void {
-  const out = resolve(outDir);
-  const repo = resolve(root);
+  // シンボリックリンクを解いた実体で比べる（リポジトリやホームへのリンクを通って消してしまわない）
+  const real = (p: string): string => (existsSync(p) ? realpathSync(p) : resolve(p));
+  const out = real(outDir);
+  const repo = real(root);
   const rel = relative(out, repo);
-  // out がリポジトリ自身か、その上のフォルダ（リポジトリが out の中にある）
-  if (rel === "" || !rel.startsWith("..")) throw new Error(`出力先 ${out} はリポジトリ自身かその上のフォルダなので消せない`);
-  if (out === resolve(homedir()) || out === parse(out).root) throw new Error(`出力先 ${out} は消せない`);
+  // リポジトリが out の中にある（out がリポジトリ自身か、その上のフォルダ）。別のドライブなどで相対にできないときは絶対パスが返る
+  const repoInsideOut = rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  if (repoInsideOut) throw new Error(`出力先 ${out} はリポジトリ自身かその上のフォルダなので消せない`);
+  if (out === real(homedir()) || out === parse(out).root) throw new Error(`出力先 ${out} は消せない`);
   if (existsSync(out)) {
     if (!statSync(out).isDirectory()) throw new Error(`出力先 ${out} がフォルダではない`);
     const empty = readdirSync(out).length === 0;

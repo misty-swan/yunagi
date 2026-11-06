@@ -7,27 +7,24 @@
 // 1 = 取れなかった（中止）。`--allow-missing` は、最初の公開（latest.json がまだ無い）の手動実行だけで使う。
 // 404 以外の失敗（5xx・通信の失敗・形の誤り）は `--allow-missing` でも中止する。
 import { writeFileSync } from "node:fs";
+import { parseArgs } from "node:util";
 import { SITE } from "./lib/consts.ts";
 import { fetchPublishedLatest } from "./lib/latest.ts";
 
 async function main(): Promise<number> {
-  const args = process.argv.slice(2);
-  let out = "";
-  let url = `${SITE}/latest.json`;
-  let allowMissing = false;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--out" && args[i + 1]) out = args[++i];
-    else if (args[i] === "--url" && args[i + 1]) url = args[++i];
-    else if (args[i] === "--allow-missing") allowMissing = true;
-    else throw new Error(`知らない引数: ${args[i]}`);
-  }
-  if (out === "") throw new Error("--out が要る");
+  const { values } = parseArgs({
+    options: { out: { type: "string" }, url: { type: "string" }, "allow-missing": { type: "boolean" } },
+    allowPositionals: false,
+  });
+  if (values.out === undefined) throw new Error("--out が要る");
+  const url = values.url ?? `${SITE}/latest.json`;
+  const allowMissing = values["allow-missing"] === true;
 
   // キャッシュを避けるため、毎回違う問い合わせ文字列を付ける
   const result = await fetchPublishedLatest(`${url}?_=${Date.now()}`);
   if (result.kind === "ok") {
-    writeFileSync(out, result.text);
-    console.log(`公開中の latest.json（version ${result.latest.version}）を ${out} に書いた`);
+    writeFileSync(values.out, result.text);
+    console.log(`公開中の latest.json（version ${result.latest.version}）を ${values.out} に書いた`);
     return 0;
   }
   // 許すのは「まだ公開していない（404）」だけ。5xx・通信の失敗・形の誤りは、許さずに中止する
@@ -45,4 +42,9 @@ async function main(): Promise<number> {
   return 1;
 }
 
-process.exitCode = await main();
+try {
+  process.exitCode = await main();
+} catch (e) {
+  console.error(`::error::${e instanceof Error ? e.message : String(e)}`);
+  process.exitCode = 1;
+}

@@ -47,6 +47,12 @@ export const SCENE_SVG = `<svg class="hero-scene" viewBox="0 0 1280 460" preserv
 <path class="scene-wave" opacity="0.3" d="M0 424q80-12 160 0t160 0t160 0t160 0t160 0t160 0t160 0t160 0"/>
 </svg>`;
 
+/** どのページの <head> にも入れる共通の部分（色の方式・アイコン・CSS）。トップの移動ページと 404 も同じものを使う */
+export const HEAD_COMMON = `<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+`;
+
 export interface PageInput {
   lang: Lang;
   page: PageKey;
@@ -94,13 +100,10 @@ export function renderPage(input: PageInput): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(fullTitle)}</title>
 <meta name="description" content="${esc(description)}">
-<meta name="color-scheme" content="light dark">
-<link rel="canonical" href="${url(lang)}">
+${HEAD_COMMON}<link rel="canonical" href="${url(lang)}">
 <link rel="alternate" hreflang="${lang}" href="${url(lang)}">
 <link rel="alternate" hreflang="${other}" href="${url(other)}">
 <link rel="alternate" hreflang="x-default" href="${url("ja")}">
-<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/assets/site.css">
 </head>
 <body>
 <a class="skip" href="#main">${esc(ui.skip)}</a>

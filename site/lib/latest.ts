@@ -38,7 +38,8 @@ export function parseLatest(text: string): Latest {
   if (typeof version !== "string" || !VERSION_PATTERN.test(version)) {
     throw new Error(`latest.json の version が <数>.<数>.<数> の形ではない: ${String(version)}`);
   }
-  // インストールスクリプトは最初の "version" を読む。ほかの項目より前に置く
+  // インストールスクリプトは最初の "version" を読む（文字列として）。ほかの項目より前に置く。
+  // 文字列の中の `"` は JSON では `\"` と書かれ、`"version"` の形にならないので、notes などの文に紛れて照合が狂うことは無い
   const first = text.search(/"version"\s*:/);
   const platformsAt = text.search(/"platforms"\s*:/);
   if (first < 0 || (platformsAt >= 0 && platformsAt < first)) {
@@ -93,24 +94,23 @@ export async function fetchPublishedLatest(url: string, options: FetchOptions = 
   for (let i = 0; i < attempts; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, delayMs));
     let res: Response;
+    let text: string;
     try {
-      // キャッシュに頼らず、配布元から取る
-      res = await fetchImpl(url, {
-        headers: { "Cache-Control": "no-cache" },
-        redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      // キャッシュに頼らず、配布元から取る。時間切れは本文を読み終えるまでかかる（本文の途中の失敗もやり直す）
+      const signal = AbortSignal.timeout(timeoutMs);
+      res = await fetchImpl(url, { headers: { "Cache-Control": "no-cache" }, redirect: "error", signal });
+      if (res.status === 404) return { kind: "missing", reason: `${url} は 404（まだ公開していない）` };
+      // 一時的とみなす状態：5xx、408（時間切れ）、429（回数の制限）
+      if (res.status >= 500 || res.status === 408 || res.status === 429) {
+        last = { kind: "error", reason: `${url} が ${res.status} を返した` };
+        continue;
+      }
+      if (!res.ok) return { kind: "error", reason: `${url} が ${res.status} を返した` };
+      text = await res.text();
     } catch (e) {
       last = { kind: "error", reason: `取得できなかった: ${e instanceof Error ? e.message : String(e)}` };
       continue;
     }
-    if (res.status === 404) return { kind: "missing", reason: `${url} は 404（まだ公開していない）` };
-    if (res.status >= 500) {
-      last = { kind: "error", reason: `${url} が ${res.status} を返した` };
-      continue;
-    }
-    if (!res.ok) return { kind: "error", reason: `${url} が ${res.status} を返した` };
-    const text = await res.text();
     try {
       return { kind: "ok", text, latest: parseLatest(text) };
     } catch (e) {

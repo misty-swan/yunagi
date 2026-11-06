@@ -1,7 +1,7 @@
 // Markdown（利用者ガイド・変更履歴・サイト用の本文）を HTML にする。変換は marked（依存はこれだけ）。
 // 取り込む文書は自分たちのリポジトリのものだが、文書の書き方の誤りがそのままサイトに出ないよう、
 // 生の HTML・画像・サイト外へ出ない相対リンクは、例外にして止める（ビルドが落ちる）。
-import { Marked, type Tokens } from "marked";
+import { Marked, type Token, type Tokens } from "marked";
 import { esc } from "./html.ts";
 
 export interface Heading {
@@ -35,6 +35,16 @@ export function slugify(text: string): string {
     .replace(/\s+/g, "-");
 }
 
+/** 行内の字句から、飾りを除いた文字だけを取り出す（目次・ID・タイトル用。強調やリンクの中の文字も拾う）。 */
+function plainText(tokens: Token[]): string {
+  return tokens
+    .map((t) => {
+      if ("tokens" in t && Array.isArray(t.tokens) && t.type !== "codespan") return plainText(t.tokens as Token[]);
+      return "text" in t ? String(t.text) : "";
+    })
+    .join("");
+}
+
 const SLOT = /^<!-- slot:([a-z][a-z0-9-]*) -->$/;
 
 /** 生成物の置き場所（スロット）で本文を分ける。 */
@@ -55,65 +65,6 @@ function splitSlots(src: string): Array<{ md: string } | { slot: string }> {
   return parts;
 }
 
-/**
- * HTML のコメント（記載ルールなど、読み手に見せないもの）を取り除く。
- * コードの囲み（``` と ~~~）の中と、行内コード（`...`）の中は触らない。閉じていないコメントは、
- * 以降の本文を黙って捨ててしまうので、例外にして止める。
- */
-function stripComments(md: string): string {
-  const out: string[] = [];
-  let fence: string | null = null; // 開いている囲みの記号（``` か ~~~）
-  let inComment = false;
-  for (const line of md.split("\n")) {
-    if (!inComment) {
-      const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-      if (fence === null && m) fence = m[1][0].repeat(3);
-      else if (fence !== null && m && m[1][0] === fence[0]) {
-        out.push(line);
-        fence = null;
-        continue;
-      }
-    }
-    if (fence !== null) {
-      out.push(line);
-      continue;
-    }
-    // 行内コードの区間は、そのまま残す。残りの区間でコメントを探す
-    let result = "";
-    for (const part of line.split(/(`+[^`]*`+)/)) {
-      if (!inComment && part.startsWith("`")) {
-        result += part;
-        continue;
-      }
-      let rest = part;
-      while (rest !== "") {
-        if (inComment) {
-          const end = rest.indexOf("-->");
-          if (end < 0) {
-            rest = "";
-          } else {
-            inComment = false;
-            rest = rest.slice(end + 3);
-          }
-        } else {
-          const start = rest.indexOf("<!--");
-          if (start < 0) {
-            result += rest;
-            rest = "";
-          } else {
-            result += rest.slice(0, start);
-            inComment = true;
-            rest = rest.slice(start + 4);
-          }
-        }
-      }
-    }
-    out.push(result);
-  }
-  if (inComment) throw new Error("閉じていない HTML コメント（<!-- に対応する --> が無い）");
-  return out.join("\n");
-}
-
 export function renderMarkdown(src: string, options: RenderOptions): Rendered {
   const shift = options.shift ?? 0;
   const headings: Heading[] = [];
@@ -130,7 +81,7 @@ export function renderMarkdown(src: string, options: RenderOptions): Rendered {
           return "";
         }
         const level = Math.min(depth + shift, 6);
-        const text = tokens.map((t) => ("text" in t ? String(t.text) : "")).join("");
+        const text = plainText(tokens);
         let id = slugify(text) || "section";
         const n = used.get(id) ?? 0;
         used.set(id, n + 1);
@@ -138,9 +89,15 @@ export function renderMarkdown(src: string, options: RenderOptions): Rendered {
         headings.push({ depth: level, text, id });
         return `<h${level} id="${esc(id)}">${inner}</h${level}>\n`;
       },
-      html({ text }: Tokens.HTML | Tokens.Tag): string {
-        // 生の HTML は通さず、書いたとおりの文字として出す
-        return esc(text);
+      html({ text, block }: Tokens.HTML | Tokens.Tag): string {
+        // HTML のコメント（記載ルールなど、読み手に見せないもの）は取り除く。コードの囲み・行内コードの中は、
+        // marked がコードとして読むので、ここには来ない。閉じていないコメントは、以降を黙って捨てるので止める
+        if (text.trimStart().startsWith("<!--")) {
+          if (!text.includes("-->")) throw new Error("閉じていない HTML コメント（<!-- に対応する --> が無い）");
+          return "";
+        }
+        // それ以外の生の HTML は通さず、書いたとおりの文字として出す
+        return block ? `<p>${esc(text.trim())}</p>\n` : esc(text);
       },
       image({ href }: Tokens.Image): string {
         throw new Error(`画像は使えない（外部の読み込みを入れない決まり）: ${href}`);
@@ -164,8 +121,7 @@ export function renderMarkdown(src: string, options: RenderOptions): Rendered {
       out.push(html);
       continue;
     }
-    const html = marked.parse(stripComments(part.md), { async: false });
-    out.push(html);
+    out.push(marked.parse(part.md, { async: false }));
   }
   const html = out
     .join("\n")

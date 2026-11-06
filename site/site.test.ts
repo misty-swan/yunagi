@@ -260,11 +260,21 @@ describe("取り込む文書", () => {
   it("HTML コメントは取り除くが、コードの囲み（``` と ~~~）と行内コードの中は残す。閉じていないコメントは止める", () => {
     const opts = { tableLabel: "t" };
     expect(renderMarkdown("a <!-- x --> b\n\n<!--\nrule\n-->\n\nc", opts).html).not.toContain("rule");
-    const kept = renderMarkdown("~~~\n<!-- keep -->\n~~~\n\n```\n<!-- keep2 -->\n```\n\n`<!-- slot:x -->` と書く", opts).html;
-    expect(kept).toContain("&lt;!-- keep --&gt;");
-    expect(kept).toContain("&lt;!-- keep2 --&gt;");
+    const kept = renderMarkdown(
+      "~~~\n<!-- keep -->\n~~~\n\n```\n<!-- keep2 -->\n```\n\n    <!-- indented -->\n\n````md\n```sh\n<!-- nested -->\n```\n````\n\n`<!-- slot:x -->` と書く",
+      opts,
+    ).html;
+    for (const s of ["keep", "keep2", "indented", "nested"]) expect(kept, s).toContain(`&lt;!-- ${s} --&gt;`);
     expect(kept).toContain("<code>&lt;!-- slot:x --&gt;</code>");
     expect(() => renderMarkdown("a\n<!-- 閉じ忘れ\nb", opts)).toThrow(/閉じていない/);
+  });
+
+  it("生の HTML のブロックは段落にして、書いたとおりの文字で出す。見出しの文字は飾りを除いて拾う", () => {
+    const opts = { tableLabel: "t" };
+    expect(renderMarkdown("<div>raw</div>\n", opts).html).toContain("<p>&lt;div&gt;raw&lt;/div&gt;</p>");
+    const r = renderMarkdown("## **`x` オプション** と [リンク](/a/)\n", opts);
+    expect(r.headings[0].text).toBe("x オプション と リンク");
+    expect(r.headings[0].id).toBe("x-オプション-と-リンク");
   });
 });
 
@@ -316,6 +326,24 @@ describe("latest.json", () => {
     const missing = (async () => (n++, new Response("", { status: 404 }))) as typeof fetch;
     await fetchPublishedLatest("https://x/latest.json", { fetchImpl: missing, delayMs: 0 });
     expect(n).toBe(1);
+    // 本文を読む途中の失敗（接続が切れた）も、やり直す。429 も一時的な失敗として扱う
+    let k = 0;
+    const brokenBody = (async () => {
+      k++;
+      if (k === 1) {
+        const body = new ReadableStream({ start: (c) => c.error(new Error("reset while reading")) });
+        return new Response(body, { status: 200 });
+      }
+      if (k === 2) return new Response("", { status: 429 });
+      return new Response(LATEST, { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchPublishedLatest("https://x/latest.json", { fetchImpl: brokenBody, delayMs: 0 })).toMatchObject({ kind: "ok" });
+    expect(k).toBe(3);
+  });
+
+  it("文の中に \\\"version\\\": があっても、本物の version の位置の検査は狂わない", () => {
+    const text = '{"notes":"say \\"version\\": 9 and \\"platforms\\": x","version":"1.2.3","platforms":{"linux-x86_64":{"url":"https://x","signature":"s"}}}';
+    expect(parseLatest(text).version).toBe("1.2.3");
   });
 
   it("--allow-missing が許すのは 404 だけ（5xx・形の誤りでは中止する）", () => {
@@ -543,6 +571,8 @@ describe("公開のワークフロー（.github/workflows/site.yml）", () => {
     expect(deploy).toMatch(/needs: build/);
     // deploy はリポジトリのコードを取り出さず、動かさない（成果物を上げるだけ）
     expect(deploy).not.toMatch(/actions\/checkout|pnpm |node /);
+    // 上げる直前に、公開中の latest.json が build で取り込んだものと同じことを確かめる（先に公開されたリリースを戻さない）
+    expect(deploy).toMatch(/Check latest\.json is still current[\s\S]+cmp -s site\/dist\/latest\.json[\s\S]+Deploy\n/);
     expect([...code.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]).sort()).toEqual([
       "CLOUDFLARE_ACCOUNT_ID",
       "CLOUDFLARE_ACCOUNT_ID",
