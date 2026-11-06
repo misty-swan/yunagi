@@ -1,7 +1,7 @@
 // 配布用 CI のビルドの組み合わせ（OS × アーキテクチャ。07 2章・3章）を、GitHub Actions の matrix の JSON にする。
 //
 //   node scripts/release/matrix.ts push           … タグの push（全 6 組）
-//   node scripts/release/matrix.ts pull_request   … 試運転（公開リポジトリになるまで使えないランナーの組を除く）
+//   node scripts/release/matrix.ts pull_request   … 試運転（`DRY_RUN_SKIPPED` の組を除く。いまは除く組が無く、全 6 組）
 //
 // `arch` は配布物の名前に使う 2 つだけ（x86_64・arm64。07 2章）。`target` は Rust の target triple。
 export type Entry = {
