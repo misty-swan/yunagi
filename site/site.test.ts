@@ -410,9 +410,33 @@ describe("配布用の公開鍵", () => {
   const KEY = `untrusted comment: minisign public key: 0123456789ABCDEF\nRWQ${"A".repeat(53)}\n`;
 
   it("鍵が無い間は『最初のリリースの前に掲載』の案内を出し、鍵のファイルは出さない", () => {
-    expect(existsSync(join(plainDir, "yunagi-release.pub"))).toBe(false);
-    expect(existsSync(join(ROOT, "site", "keys", "release.pub"))).toBe(false);
-    expect(readFileSync(join(plainDir, "ja", "verify", "index.html"), "utf8")).toContain("最初のリリースの前に、ここに掲載します");
+    const root = fakeRoot(); // site/keys が無い作業用のルート
+    expect(existsSync(join(root, "site", "keys"))).toBe(false);
+    const out = join(tmp, "nokey-out");
+    build({ root, outDir: out });
+    expect(existsSync(join(out, "yunagi-release.pub"))).toBe(false);
+    expect(readFileSync(join(out, "ja", "verify", "index.html"), "utf8")).toContain("最初のリリースの前に、ここに掲載します");
+    expect(readFileSync(join(out, "en", "verify", "index.html"), "utf8")).toContain("will be published here before the first release");
+  });
+
+  it("リポジトリに置いた site/keys/release.pub を、ビルドが /yunagi-release.pub として公開し、日英のページに値が出る", () => {
+    const key = readFileSync(join(ROOT, "site", "keys", "release.pub"), "utf8");
+    // 1 行目の鍵 ID（16 桁の 16 進）が、2 行目の中身（"Ed" + 鍵 ID 8 バイト + 公開鍵 32 バイト）の鍵 ID と同じこと
+    expect(key).toMatch(/^untrusted comment: minisign public key:? [0-9A-F]{16}\nRW[A-Za-z0-9+/]{54}\n$/);
+    const raw = Buffer.from(key.split("\n")[1], "base64");
+    expect(raw.length).toBe(42);
+    expect(raw.subarray(0, 2).toString("latin1")).toBe("Ed");
+    const idFromBody = [...raw.subarray(2, 10)].reverse().map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    expect(key.split("\n")[0].endsWith(idFromBody)).toBe(true);
+    expect(readFileSync(join(plainDir, "yunagi-release.pub"), "utf8")).toBe(key);
+    const [comment, body] = key.trimEnd().split("\n");
+    for (const lang of ["ja", "en"]) {
+      const html = readFileSync(join(plainDir, lang, "verify", "index.html"), "utf8");
+      expect(html).toContain(comment);
+      expect(html).toContain(body);
+      expect(html).not.toContain("ここに掲載します");
+      expect(html).not.toContain("will be published here");
+    }
   });
 
   it("site/keys/release.pub を置くと、鍵のファイルと本文に出る。形が違えばビルドを止める", () => {

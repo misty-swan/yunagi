@@ -148,7 +148,7 @@ test("ビルドの設定：CLI は macOS で Contents/MacOS/yunagi、Windows で
   expect(read("common.json").mainBinaryName).toBeUndefined();
   expect(read("common.json").bundle.active).toBe(true);
   expect(read("common.json").bundle.resources).toEqual({ "THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md" });
-  // createUpdaterArtifacts は署名鍵が要る（YUN-100・YUN-101）。有効にするのは、鍵を CI に置く課題
+  // createUpdaterArtifacts は署名鍵が要る（鍵は作成済み。CI に置くのは YUN-101）。有効にするのは、鍵を CI に置く課題
   expect(JSON.stringify([read("common.json"), read("macos.json"), read("windows.json")])).not.toContain("createUpdaterArtifacts");
   // 普段の tauri.conf.json は配布用のビルドの設定を持たない（pnpm tauri dev と窓の無い試験に、無いファイルを要求させない）
   const conf = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
