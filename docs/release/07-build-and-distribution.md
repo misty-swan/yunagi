@@ -40,16 +40,16 @@
 - **配布物の実体は置かない**。Pages には 1 ファイル 25 MiB の上限があり（Cloudflare Pages の limits）、AppImage や Windows の配布物が収まらないため。配布物は GitHub Releases（`<配布元>`）に置き、Pages には置かない。サイトが置くのは、小さい文書・スクリプト・`latest.json`・公開鍵だけ。
 - **独自ドメインの結び付け**（オーナーの作業。YUN-107 でサイトを公開するときに行う）：
   - Pages のプロジェクトの「Custom domains」に `getyunagi.com` を追加する。apex ドメイン（`www` の付かないもの）を結び付けるには、そのドメインが、Pages のプロジェクトと同じ Cloudflare アカウントの zone（DNS の管理単位）であること。`getyunagi.com` は Cloudflare Registrar で取得し DNS も Cloudflare なので満たす。CNAME などの DNS の記録は Cloudflare が自動で作る。
-  - **証明書の発行を妨げる CAA 記録が無いことを確かめる**：`dig CAA getyunagi.com`（または Cloudflare の DNS の画面）で見る。CAA 記録が 1 つも無ければ問題ない。ある場合は、`letsencrypt.org`・`pki.goog; cansignhttpexchanges=yes`・`ssl.com` の 3 つの発行を許す記録（`issue` と `issuewild`）がないと、ドメインの追加が検証で止まる（Cloudflare Pages の custom domains の「Known issues」）。
+  - **証明書の発行を妨げる CAA 記録が無いことを確かめる**：`dig CAA getyunagi.com`（または Cloudflare の DNS の画面）で見る。CAA 記録が 1 つも無ければ、何もしなくてよい（記録を足さない）。1 つでもある場合は、Pages が使う認証局（`letsencrypt.org`・`pki.goog; cansignhttpexchanges=yes`・`ssl.com`）の発行を許す記録（`issue` と `issuewild`）が含まれていないと、ドメインの追加が検証で止まる。そのときだけ、足りない認証局の記録を足す（ほかの用途で別の認証局の記録を置いているなら、それは消さない）（Cloudflare Pages の custom domains の「Known issues」）。
   - `www.getyunagi.com` の扱い（apex へ転送するか）は YUN-107 で決める。
 - **サイトの自動公開は、Direct Upload を GitHub Actions から行う方針**（推奨案。Cloudflare の Git 連携は使わない）：
   - 流れ：GitHub Actions のワークフローが、サイトの元（`site/` など。置き場は YUN-107）をビルドして `wrangler pages deploy <出力先> --project-name=<プロジェクト名> --branch=<本番ブランチ>` で上げる。Cloudflare の公式の手順（`cloudflare/wrangler-action`）に沿う。`--branch` には Pages のプロジェクトの本番ブランチ名を指定する（それ以外の名前で上げたものはプレビューになり、本番にならず、戻し先にもならないため）。
   - 理由：①ビルドを自分たちの CI（lock ファイル厳守・action の SHA 固定。3章「action の固定」）で行える。Git 連携だと Cloudflare 側のビルド環境に任せ、固定の決まりが及ばない。②いつ公開するかを自分たちで決められる（`latest.json` は Release の配布物がそろってから公開する。7章）。Git 連携では、サイトのファイルを main に入れると自動で公開されてしまう。③`latest.json` を、リポジトリに書き戻さず、配布用 CI（YUN-101）が作ったものとしてそのまま上げられる。
   - 注意：Pages のプロジェクトは、Git 連携と Direct Upload を後から切り替えられない（Cloudflare の公式の案内）。ここで Direct Upload に決めるので、プロジェクトは **Direct Upload のプロジェクトとして作る**。
-  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする（細部は YUN-107・YUN-101）。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
+  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする。リポジトリは公開されるので、**フォークからの PR（`pull_request`・`pull_request_target`）の実行にはこの secrets（と署名鍵の secrets）を渡さない**：サイトの公開と署名は、タグの push・main への push・手動の実行（`workflow_dispatch`）でだけ動かし、GitHub の Environment にブランチ・タグの制限をかけて secrets をそこに置く。試運転（`pull_request`）は secrets を使わない（今の `release.yml` もそうしている）。細部は YUN-107・YUN-101 で決める（YUN-101 の Linear のコメントに残した）。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
 - **`latest.json` の送り方**：`/latest.json` は、古い内容が使われ続けないよう、サイトの `_headers` ファイルで `Cache-Control: no-cache` を明示する（Pages の `_headers` で付ける。YUN-107 が作り、公開後に `curl -I` で確かめる）。
 - **取り下げ時の戻し方**（サポート・障害対応手順 5章が参照する）：次の 2 つのどちらかで、`latest.json` を前の版に戻す。急ぐときは (1)。
-  1. **前の公開済みのデプロイに戻す**（Pages の「Rollback」。Cloudflare の公式の案内 Rollbacks）：Cloudflare のダッシュボードで対象の Pages のプロジェクトを開き、「Deployments」の「All deployments」から、戻したい本番のデプロイの「⋯」メニュー →「Rollback to this deployment」を選んで確認する。本番のサイトが**すぐに**その時点の内容に変わる。戻せるのは、ビルドに成功した**本番**のデプロイだけ（プレビューは戻し先にならない）。戻るのは `latest.json` だけでなくサイト全体（導入スクリプトなども、そのデプロイの時点の内容）。新しいデプロイに進み直すこともできる。
+  1. **前の公開済みのデプロイに戻す**（Pages の「Rollback」。Cloudflare の公式の案内 Rollbacks）：Cloudflare のダッシュボードで対象の Pages のプロジェクトを開き、「Deployments」の「All deployments」から、戻したい本番のデプロイの「⋯」メニュー →「Rollback to this deployment」を選んで確認する。**戻し先は「直前のデプロイ」ではなく、`latest.json` が良い版（取り下げる版の 1 つ前）を指している最後の本番のデプロイ**を選ぶ（取り下げる版の後に、サイトだけを直したデプロイがあると、直前のものにも取り下げる版の `latest.json` が入っている）。各デプロイの `latest.json` は、リリースごとに版を控えておく（7章）か、そのデプロイの URL で見て確かめる。**戻したあとは、公開用のワークフローを止める**（Actions の画面で無効にするか、実行を保留する）：main から新しく上げる実行が、戻した状態を取り下げる版で上書きしてしまうため。原因を直して、良い版の `latest.json` を作れるようになってから再開する。本番のサイトが**すぐに**その時点の内容に変わる。戻せるのは、ビルドに成功した**本番**のデプロイだけ（プレビューは戻し先にならない）。戻るのは `latest.json` だけでなくサイト全体（導入スクリプトなども、そのデプロイの時点の内容）。新しいデプロイに進み直すこともできる。
   2. **ファイルを差し替えて再デプロイする**：前の版の `latest.json` を元の内容で作り直し（Release の配布物と `.sig` から、配布用 CI の手順で再生成する）、公開用のワークフローを手動で実行して上げる。数分かかるが、サイトのほかの部分は今のままにできる。
   - どちらの後も、`curl -fsS https://<公式サイト>/latest.json` の `version` が前の版に戻ったことを確かめる。すでに新しい版へ更新した利用者の手元は戻らない（アプリは古い版へ自動では戻さない）。広がりを止めるための手段である。GitHub の Release の取り下げ（ドラフトへ戻す・削除）は別に行う。手順は、サポート・障害対応手順 5章。
   - 直前の本番のデプロイが残っていること（戻し先があること）を、リリースのたびに確かめる（7章）。
@@ -160,7 +160,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 
 ### 3.4 署名と公開（YUN-101 で作る）
 
-3 の 4・5・6（`SHA256SUMS` 以降）・7 は、秘密鍵（YUN-100）と、公開リポジトリ・公式サイトが決まってから動かせるので、子課題 YUN-101 が作る。YUN-97 では作らず、動かしてもいない。作るもの：
+3 の 4・5・6（`SHA256SUMS` 以降）・7 は、秘密鍵（YUN-100）と、リポジトリの公開（YUN-109）・公式サイトの公開（YUN-107）が済んでから動かせる（置き場所は決まっている：1章・2章）ので、子課題 YUN-101 が作る。YUN-97 では作らず、動かしてもいない。作るもの：
 
 - macOS のアドホック署名（3 の 4）。
 - Updater 用の署名 `.sig`（`bundle.createUpdaterArtifacts`。5.1 の「署名に版を入れる」）と、`latest.json`（5.1。トップレベルの `version` を入れ子の項目（`platforms` など）より前に置く：4.1 の 2）。
@@ -191,7 +191,7 @@ curl -fsSL https://<公式サイト>/install.sh | sh
 スクリプトの動作：
 
 1. OS とアーキテクチャを判定する。未対応の組み合わせは明確なメッセージで終了する。
-2. 最新版（または `YUNAGI_VERSION` で指定した版）の配布物と `.sha256` を取得する。最新版は、GitHub の「latest」ではなく `https://<公式サイト>/latest.json` の `version` で決める（スクリプトは、ファイルの中で最初に現れる `"version"` の値を読む。そのため `latest.json` は、トップレベルの `version` を、入れ子の項目（`platforms` など）より前に置く。Tauri Updater の形式でも守れる。配布用 CI（YUN-97）の条件。取り下げ時に `latest.json` を前の版に戻すと、新しく入れる利用者も前の版になるため。2章）。スクリプトが使う基本の道具（`curl`・`tar`・`awk`・`grep`・`sed`・`head`・`mktemp`・`cp`・`mv`・`ln` など）が無ければ、最初に名前を挙げて止まる。取得元は環境変数で変えられる：`YUNAGI_VERSION`（`v` が付いていても付いていなくてもよい）、`YUNAGI_BASE_URL`（配布物の取得元。既定は 2章の `<配布元>`。末尾の `/` は取り除く）、`YUNAGI_LATEST_URL`（`latest.json` の場所）。`YUNAGI_BASE_URL`・`YUNAGI_LATEST_URL` は、試験で偽の配布元に向けるためにも使う（4.5）。公開リポジトリと公式サイトが決まるまで、スクリプトの既定値は仮の表記（`<` を含む）のままで、そのまま実行すると変数を設定するよう案内して終わる。決まったら、既定値を `install/install.sh`・`install/install.ps1` の先頭の 2 か所で書き換える。
+2. 最新版（または `YUNAGI_VERSION` で指定した版）の配布物と `.sha256` を取得する。最新版は、GitHub の「latest」ではなく `https://<公式サイト>/latest.json` の `version` で決める（スクリプトは、ファイルの中で最初に現れる `"version"` の値を読む。そのため `latest.json` は、トップレベルの `version` を、入れ子の項目（`platforms` など）より前に置く。Tauri Updater の形式でも守れる。配布用 CI（YUN-97）の条件。取り下げ時に `latest.json` を前の版に戻すと、新しく入れる利用者も前の版になるため。2章）。スクリプトが使う基本の道具（`curl`・`tar`・`awk`・`grep`・`sed`・`head`・`mktemp`・`cp`・`mv`・`ln` など）が無ければ、最初に名前を挙げて止まる。取得元は環境変数で変えられる：`YUNAGI_VERSION`（`v` が付いていても付いていなくてもよい）、`YUNAGI_BASE_URL`（配布物の取得元。既定は 2章の `<配布元>`。末尾の `/` は取り除く）、`YUNAGI_LATEST_URL`（`latest.json` の場所）。`YUNAGI_BASE_URL`・`YUNAGI_LATEST_URL` は、試験で偽の配布元に向けるためにも使う（4.5）。公開リポジトリと公式サイトは決まった（`<配布元>`・`getyunagi.com`。2章）が、既定値を書き換える作業（YUN-11）が済むまで、スクリプトの既定値は仮の表記（`<` を含む）のままで、そのまま実行すると変数を設定するよう案内して終わる。YUN-11 は、既定値を `install/install.sh`・`install/install.ps1` の先頭の 2 か所で実際の値に書き換える（YUN-11 の Linear のコメントに書いた）。
 3. ハッシュを照合し、一致しなければ中止する（何も置かない。配布物ごとに、取得した直後に照合する）。
 4. macOS：`~/Applications/Yunagi.app` に展開する（`/Applications` は権限が必要なため既定にしない）。Linux：`~/.local/opt/yunagi/Yunagi.AppImage` に AppImage を、`~/.local/opt/yunagi/bin/yunagi` に CLI を置き、デスクトップエントリを `~/.local/share/applications/io.github.misty-swan.yunagi.desktop` に作成する（ファイル名はアプリの識別子にそろえる。アーキテクチャ設計書 6.1）。アプリ本体の配置先は、データディレクトリ（アーキテクチャ設計書 6章。Linux は `~/.local/share/yunagi/`）とは別にする。
    - Linux は AppImage と、CLI だけの配布物 `yunagi-cli_<ver>_<arch>.tar.gz`（2章）の 2 つを取って照合する。CLI の配布物は、中身を確かめてから置く（`yunagi` が無ければ何も置かずに止まる）。置くときは、AppImage と CLI の両方を置き場所の隣の一時ファイルにコピーし終えてから、両方の名前を付け替える（動いているアプリを途中の状態で上書きしない。コピーの途中の失敗（容量不足など）で、新旧が混ざった状態にならない。失敗したときの一時ファイルは終了時に消す）。AppImage の起動には FUSE（`fusermount`）が要るので、見つからなければ、置き終えた後に、FUSE 2 のパッケージを入れるか `--appimage-extract-and-run` で起動するよう知らせる（導入は止めない）。
@@ -307,7 +307,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 配布元は決まった（公開リポジトリは `misty-swan/yunagi`、公式サイトは Cloudflare Pages の `getyunagi.com`。1章・2章。2026-11-06）が、公開鍵はまだ無い（署名鍵の作成が未。YUN-100）。このため `src-tauri/tauri.conf.json` の `plugins.updater` は空のまま置いてあり、**空の間は更新の確認をしない**（エラーにも通知にもしない）。入れる値は次の 2 つで、どちらも空でなくなったときから確認が始まる。
 
 - `pubkey`：更新署名鍵（6.1）の公開鍵（`tauri signer generate` が作る `.pub` の中身）。公開鍵は秘密ではないので、リポジトリに置く。
-- `endpoints`：`["https://<公式サイト>/latest.json"]`（`<公式サイト>` は `getyunagi.com`）。`https` 以外はプラグインが断る。サイトと `latest.json` が公開される前に入れると、確認が失敗してログに残るだけになる（5.1）ので、入れる時期は下の手順 ③ のとおり、鍵ができたときとする。
+- `endpoints`：`["https://<公式サイト>/latest.json"]`（`<公式サイト>` は `getyunagi.com`）。`https` 以外はプラグインが断る。この値を入れた版を配る時点で、サイトと最初の `latest.json` が公開されていること（無いと、利用者のアプリが 24 時間ごとに失敗をログに残し続ける。5.1）。このため、サイトの公開（YUN-107）より前に配る版には入れず、最初のリリースでは、Release の配布物を確かめたあと、続けて `latest.json` を公開する（7章）。
 
 手順（鍵と配布元が決まったときに、オーナーが行う。Linear の YUN-100 が追う。②の `.sig` と `latest.json` を作るのは配布用 CI の署名と公開（YUN-101。3.4）で、完了の条件に書いてある）：①`tauri signer generate` で鍵を作り、秘密鍵とパスフレーズを CI のシークレットとオフラインのバックアップに置く（6.1）。②配布用のビルドの設定（`src-tauri/release/common.json`。3.2）に `bundle.createUpdaterArtifacts` を有効にする（配布用 CI で署名ファイル `.sig` を作る。`tauri.conf.json` には入れない：入れると、鍵の無い手元のビルドが失敗する）。③`plugins.updater.pubkey` と `endpoints` に値を入れる。④配布用 CI が、署名と `latest.json` を公開する。窓の無い試験は、配る設定ファイルの `plugins.updater` がプラグインに読めること（`https` のみ・署名に版を入れる設定・Windows の入れ替え方）を確かめるので、③で形を誤ると `pnpm check` が止める。
 
@@ -339,7 +339,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている（`.sig` 以降は YUN-101 が作る。3.4。YUN-97 の範囲では、全 6 組のビルドが成功し、配布物と `.sha256` が成果物に揃っているまで）
 - [ ] 公開リポジトリの Release の配布物（`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` を含む）が、`<配布元>/v<ver>/<ファイル名>` から実際に取得できる（`latest.json` を更新する前に確かめる。先に更新すると、更新が 404 で失敗する）
 - [ ] 公式サイトのデプロイ（Cloudflare Pages。2章「公式サイトの置き場所」）で `https://<公式サイト>/latest.json` を新しい版に更新し、`curl -fsS` で取った `version` が新しい版であることを確かめた
-- [ ] Pages の「Deployments」に、直前の本番のデプロイが残っている（取り下げ時の戻し先。2章）
+- [ ] Pages の「Deployments」に、直前の版の `latest.json` を載せた本番のデプロイが残っていて、そのデプロイが何番目かを控えた（取り下げ時の戻し先。2章）
 - [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
 - [ ] Homebrew tap の更新がマージされ、Cask で導入したアプリが起動することを確認した
 - [ ] 公式サイトのダウンロード案内と変更履歴を更新した
