@@ -62,7 +62,7 @@ Without it, the script installs the latest version listed in this site's `latest
 
 Check a file you downloaded by hand with [Verify a download](/en/verify/) before you use it.
 
-- macOS: extract the `.app.tar.gz` and put `Yunagi.app` where you like (for example `~/Applications`). If you downloaded it with a browser, macOS may block the first launch. In that case, remove the download flag (the quarantine attribute) with `xattr -dr com.apple.quarantine ~/Applications/Yunagi.app` and launch it again (change the path to where you put it).
+- macOS: extract the `.app.tar.gz` and put `Yunagi.app` where you like (for example `~/Applications`). If you downloaded it with a browser, macOS may block the first launch. In that case, remove the download flag (the quarantine attribute) and launch it again. If you put the app in `~/Applications`, the command is `xattr -dr com.apple.quarantine ~/Applications/Yunagi.app`. If you put it somewhere else, use that path instead.
 - Linux: make the AppImage executable (`chmod +x`) and run it. It needs FUSE 2 to start.
 - Windows: run the `-setup.exe`.
 

@@ -18,7 +18,8 @@ use super::Setup;
 pub enum Kind {
     /// 正規の置き場所（インストールスクリプトが置いた場所）。
     Standard(Layout),
-    /// Homebrew の Cask で入れたもの。
+    /// Homebrew の Cask で入れたもの。v1.0 では Cask を出さないので、実際には当たらない。
+    /// 将来 Cask を出したときのために、意図して残している（ビルド・配布手順書 4.3・4.4）。
     Homebrew,
     /// どちらでもない。見つけた実行ファイルのパス。
     Unmanaged(PathBuf),
