@@ -24,8 +24,8 @@ export const ALL: Entry[] = [
   { name: "windows-arm64", runner: "windows-2025", os: "windows", arch: "arm64", target: "aarch64-pc-windows-msvc", bundles: "nsis" },
 ];
 
-/** 試運転で除く組：Linux の arm64 は arm のランナー（`ubuntu-24.04-arm`）が要り、公開リポジトリでないと使えない */
-export const DRY_RUN_SKIPPED = ["linux-arm64"];
+/** 試運転で除く組：いまは無い（Linux の arm64 は arm のランナー `ubuntu-24.04-arm` が要り、公開リポジトリでないと使えなかったので除いていたが、公開後に加えた。07 3.2・8.8） */
+export const DRY_RUN_SKIPPED: string[] = [];
 
 export function matrixFor(event: string): { include: Entry[] } {
   if (event === "push") return { include: ALL };

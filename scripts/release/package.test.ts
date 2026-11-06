@@ -33,9 +33,9 @@ test("版：workspace.package の version を読み、タグ v<版> と同じこ
   expect(checkTag("v1.2.3-rc1", "1.2.3-rc1")).toContain("1.2.3 の形でない");
 });
 
-test("組み合わせ：タグの push は 6 組すべて、試運転は arm の Linux を除く。arch は 2 種類だけ", () => {
+test("組み合わせ：タグの push も試運転も 6 組すべて（arm の Linux を含む）。arch は 2 種類だけ", () => {
   expect(matrixFor("push").include).toHaveLength(6);
-  expect(matrixFor("pull_request").include.map((e) => e.name)).not.toContain("linux-arm64");
+  expect(matrixFor("pull_request").include.map((e) => e.name)).toContain("linux-arm64");
   expect(matrixFor("pull_request").include).toHaveLength(6 - DRY_RUN_SKIPPED.length);
   expect(new Set(ALL.map((e) => e.arch))).toEqual(new Set(["x86_64", "arm64"]));
   // テスト計画書 3章・07 2章の対象と 1 対 1：OS ごとに x86_64 と arm64
@@ -65,7 +65,7 @@ test("version.ts・matrix.ts の CLI：版の不一致と形の誤りは終了�
   const push = JSON.parse(node(["scripts/release/matrix.ts", "push"]).stdout);
   const dry = JSON.parse(node(["scripts/release/matrix.ts", "pull_request"]).stdout);
   expect(push.include).toHaveLength(6);
-  expect(dry.include.map((e: { name: string }) => e.name)).not.toContain("linux-arm64");
+  expect(dry.include.map((e: { name: string }) => e.name)).toContain("linux-arm64");
 });
 
 test("配布物の名前は 07 2章のとおり（v を付けない・arch は x86_64 か arm64）", () => {
