@@ -2,7 +2,7 @@
 
 ## 不具合の報告と要望
 
-公開リポジトリの [GitHub Issues](https://github.com/misty-swan/yunagi/issues) で受け付けます（書き方のテンプレートがあります）。3 営業日以内に最初の返事をすることを目標にしています。
+公開リポジトリの [GitHub Issues](https://github.com/misty-swan/yunagi/issues) で受け付けます（書き方のテンプレートがあります）。3営業日以内に最初の返事をすることを目標にしています。
 
 次のことを書いてください。
 

@@ -109,11 +109,14 @@ ${card(t.windows, `irm ${SITE}/install.ps1 | iex`)}
 
 function home(lang: Lang, latest: Latest | null): string {
   const t = HOME[lang];
+  // 日本語のページに出る英字のラベル（デザインガイド 7章）は、読み上げが英語になるよう lang="en" を付ける
+  const en = lang === "ja" ? ' lang="en"' : "";
+  const eyebrow = (text: string) => `<p class="eyebrow"${en}>${esc(text)}</p>`;
   const at = (p: string) => (p.startsWith("/") ? p : `${pagePath(lang, "home")}${p}`);
   const cards = t.features.cards
     .map(
       (c) =>
-        `<div class="card"><p class="eyebrow">${esc(c.label)}</p><h3>${esc(c.title)}</h3><p>${esc(c.text)}</p></div>`,
+        `<div class="card">${eyebrow(c.label)}<h3>${esc(c.title)}</h3><p>${esc(c.text)}</p></div>`,
     )
     .join("\n");
   const chips = t.features.chips.map((c) => `<li>${esc(c)}</li>`).join("");
@@ -128,7 +131,7 @@ function home(lang: Lang, latest: Latest | null): string {
 ${SCENE_SVG}
 <div class="wrap">
 <div class="hero-copy">
-<p class="eyebrow">${esc(t.eyebrow)}</p>
+${eyebrow(t.eyebrow)}
 <h1>${esc(t.heading[0])}<br>${esc(t.heading[1])}</h1>
 <p>${esc(t.lead)}</p>
 <div class="actions">
@@ -141,7 +144,7 @@ ${SCENE_SVG}
 </section>
 <section class="section" id="features">
 <div class="wrap">
-<p class="eyebrow">${esc(t.features.eyebrow)}</p>
+${eyebrow(t.features.eyebrow)}
 <h2>${esc(t.features.heading)}</h2>
 <div class="cards three">
 ${cards}
@@ -151,7 +154,7 @@ ${cards}
 </section>
 <section class="section" id="install">
 <div class="wrap">
-<p class="eyebrow">${esc(t.download.eyebrow)}</p>
+${eyebrow(t.download.eyebrow)}
 <h2>${esc(t.download.heading)}</h2>
 <p class="section-lead">${esc(t.download.lead)}</p>
 ${installCards(lang, latest)}
@@ -161,7 +164,7 @@ ${installCards(lang, latest)}
 <section class="section" id="trust">
 <div class="wrap split">
 <div>
-<p class="eyebrow">${esc(t.security.eyebrow)}</p>
+${eyebrow(t.security.eyebrow)}
 <h2>${esc(t.security.heading)}</h2>
 </div>
 <ul class="facts">
@@ -171,7 +174,7 @@ ${facts}
 </section>
 <section class="section" id="guide">
 <div class="wrap">
-<p class="eyebrow">${esc(t.guide.eyebrow)}</p>
+${eyebrow(t.guide.eyebrow)}
 <h2>${esc(t.guide.heading)}</h2>
 <p class="actions"><a class="button ghost" href="${pagePath(lang, "guide")}">${esc(t.guide.button)}</a></p>
 </div>

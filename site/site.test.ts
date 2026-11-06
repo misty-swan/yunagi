@@ -167,7 +167,8 @@ describe("各ページの HTML", () => {
         }
       }
     }
-  });
+    // 全ページを jsdom で読む検査は、全体を並列に流すと既定の 5 秒を超えることがある（時間切れで落ちていた）
+  }, 60_000);
 
   it("日英で同じ構成（見出しの並び・コードの囲み・表・リンクの数）", () => {
     for (const dir of dirs) {
@@ -538,6 +539,28 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
       expect(m[1].startsWith("/assets/") || m[1].startsWith("#"), m[1]).toBe(true);
     }
     expect(css).not.toMatch(/@import|https?:\/\//);
+  });
+
+  it("押す場所は高さ 44px 以上（ナビ・言語の切り替え・ボタン・文字だけのリンク・リンクの並び・フッター）", () => {
+    for (const sel of [".logo", ".site-nav a", ".lang a,\n.lang span", ".button", ".actions a:not(.button)", ".links a", ".site-footer a"]) {
+      const start = css.indexOf(`${sel} {`);
+      expect(start, `${sel} の規則が無い`).toBeGreaterThanOrEqual(0);
+      const block = css.slice(start, css.indexOf("}", start));
+      expect(block, `${sel}: min-height: 44px が無い`).toMatch(/min-height: 44px/);
+    }
+  });
+
+  it("日本語のページの英字のラベルには lang=\"en\" が付き、英語のページには付かない", () => {
+    const ja = dom(join(plainDir, "ja", "index.html"));
+    const en = dom(join(plainDir, "en", "index.html"));
+    const labels = (d: Document) => [...d.querySelectorAll("p.eyebrow")];
+    expect(labels(ja).length).toBeGreaterThan(0);
+    for (const e of labels(ja)) expect(e.getAttribute("lang"), e.textContent ?? "").toBe("en");
+    for (const e of labels(en)) expect(e.hasAttribute("lang"), e.textContent ?? "").toBe(false);
+  });
+
+  it("印刷用の規則がある（景色とナビを出さない）。動きの規則は無い", () => {
+    expect(css).toMatch(/@media print \{[\s\S]*\.hero-scene[\s\S]*display: none/);
   });
 
   it("ロゴの色は、アプリのロゴ（src/shell/Logo.svelte）と同じ", () => {
