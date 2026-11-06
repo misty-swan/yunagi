@@ -11,7 +11,7 @@ In this guide, **Mod** means the ⌘ key on macOS and the Ctrl key on Windows an
 #### macOS and Linux
 
 ```sh
-curl -fsSL https://<official-site>/install.sh | sh
+curl -fsSL https://getyunagi.com/install.sh | sh
 ```
 
 On macOS you can also use Homebrew:
@@ -29,7 +29,7 @@ xattr -dr com.apple.quarantine /Applications/Yunagi.app
 #### Windows (PowerShell)
 
 ```powershell
-irm https://<official-site>/install.ps1 | iex
+irm https://getyunagi.com/install.ps1 | iex
 ```
 
 #### Installing safely
@@ -59,11 +59,11 @@ If `~/.local/bin` is not in your `PATH`, the install script shows how to add it.
 To install a specific version (for example, to go back to an older one), run the install script with the environment variable `YUNAGI_VERSION` set to that version.
 
 ```sh
-curl -fsSL https://<official-site>/install.sh | YUNAGI_VERSION=1.2.3 sh   # macOS and Linux
+curl -fsSL https://getyunagi.com/install.sh | YUNAGI_VERSION=1.2.3 sh   # macOS and Linux
 ```
 
 ```powershell
-$env:YUNAGI_VERSION="1.2.3"; irm https://<official-site>/install.ps1 | iex   # Windows
+$env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex   # Windows
 ```
 
 ## 2. First launch

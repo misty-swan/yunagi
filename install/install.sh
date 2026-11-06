@@ -1,7 +1,7 @@
 #!/bin/sh
 # Yunagi installer for macOS and Linux.
 #
-#   curl -fsSL https://<site>/install.sh | sh
+#   curl -fsSL https://getyunagi.com/install.sh | sh
 #
 # What it does: docs/release/07-build-and-distribution.md section 4.1.
 # Environment variables (all optional):
@@ -15,9 +15,9 @@
 
 set -eu
 
-# These two are placeholders until the public repository and the site are decided (docs/release/07 section 4.1).
-DEFAULT_BASE_URL='https://github.com/<public-repository>/releases/download'
-DEFAULT_LATEST_URL='https://<site>/latest.json'
+# Where release files and latest.json are read from (docs/release/07 sections 2 and 4.1).
+DEFAULT_BASE_URL='https://github.com/misty-swan/yunagi/releases/download'
+DEFAULT_LATEST_URL='https://getyunagi.com/latest.json'
 
 APP_ID='io.github.misty-swan.yunagi'
 
@@ -69,13 +69,6 @@ detect_platform() {
   fi
 }
 
-# Fails when a URL still holds the placeholder text.
-check_url() {
-  case "$1" in
-    *'<'*) die "the download location is not decided yet ($1). Set $2 to a real URL." ;;
-  esac
-}
-
 fetch() {
   # fetch URL OUTPUT_FILE
   curl -fsSL --retry 2 -o "$2" "$1" || die "could not download $1"
@@ -86,7 +79,6 @@ resolve_version() {
   version=${YUNAGI_VERSION:-}
   if [ -z "$version" ]; then
     latest_url=${YUNAGI_LATEST_URL:-$DEFAULT_LATEST_URL}
-    check_url "$latest_url" YUNAGI_LATEST_URL
     fetch "$latest_url" "$TMP_DIR/latest.json"
     version=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$TMP_DIR/latest.json" | head -n 1 | sed 's/.*:[[:space:]]*"\([^"]*\)"/\1/')
     [ -n "$version" ] || die "could not read the version from $latest_url"
@@ -112,7 +104,6 @@ sha256_of() {
 download_verified() {
   name=$1
   base=${YUNAGI_BASE_URL:-$DEFAULT_BASE_URL}
-  check_url "$base" YUNAGI_BASE_URL
   base=${base%/} # a trailing slash would make "//" in the URL
   fetch "$base/v$VERSION/$name" "$TMP_DIR/$name"
   fetch "$base/v$VERSION/$name.sha256" "$TMP_DIR/$name.sha256"

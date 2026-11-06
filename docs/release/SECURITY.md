@@ -12,7 +12,7 @@ Yunagi は利用者の業務メモを扱うため、データを端末の外に�
 
 ## 3. 脆弱性の報告
 
-- 報告先：security@<公式ドメイン>（TBD）。公開リポジトリの Private vulnerability reporting も受け付ける。
+- 報告先：security@getyunagi.com（メールの受け口は Cloudflare の Email Routing。ビルド・配布手順書 2章）。公開リポジトリの Private vulnerability reporting も受け付ける。
 - 公開の Issue には書き込まないでください。
 - 受領の連絡は 3 営業日以内、初期評価の結果は 10 営業日以内に返すことを目標とする。
 - 修正版の公開後、報告者の同意を得て謝辞を記載する。

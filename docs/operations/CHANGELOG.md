@@ -26,4 +26,4 @@
 - 末尾に比較リンクを置く。初回リリースまでは省略してよい。
 -->
 
-[Unreleased]: https://<公開リポジトリ>/compare/vX.Y.Z...HEAD
+[Unreleased]: https://github.com/misty-swan/yunagi/compare/vX.Y.Z...HEAD

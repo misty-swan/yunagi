@@ -1,6 +1,6 @@
 # Yunagi installer for Windows.
 #
-#   irm https://<site>/install.ps1 | iex
+#   irm https://getyunagi.com/install.ps1 | iex
 #
 # What it does: docs/release/07-build-and-distribution.md section 4.2.
 # Environment variables (all optional):
@@ -13,9 +13,9 @@
 # halfway never runs a half-written command. Setting YUNAGI_INSTALL_NO_RUN=1 loads the functions
 # without installing (the tests use this).
 
-# These two are placeholders until the public repository and the site are decided (docs/release/07 section 4.1).
-$script:DefaultBaseUrl = 'https://github.com/<public-repository>/releases/download'
-$script:DefaultLatestUrl = 'https://<site>/latest.json'
+# Where release files and latest.json are read from (docs/release/07 sections 2 and 4.2).
+$script:DefaultBaseUrl = 'https://github.com/misty-swan/yunagi/releases/download'
+$script:DefaultLatestUrl = 'https://getyunagi.com/latest.json'
 
 function Stop-Install([string]$Message) {
     throw "install.ps1: $Message"
@@ -27,12 +27,6 @@ function Get-YunagiArch([string]$Architecture) {
         'X64' { return 'x86_64' }
         'Arm64' { return 'arm64' }
         default { Stop-Install "unsupported architecture: $Architecture (supported: x64, arm64)." }
-    }
-}
-
-function Test-PlaceholderUrl([string]$Url, [string]$VariableName) {
-    if ($Url.Contains('<')) {
-        Stop-Install "the download location is not decided yet ($Url). Set $VariableName to a real URL."
     }
 }
 
@@ -94,7 +88,6 @@ function Install-Yunagi {
         $version = $env:YUNAGI_VERSION
         if (-not $version) {
             $latestUrl = if ($env:YUNAGI_LATEST_URL) { $env:YUNAGI_LATEST_URL } else { $script:DefaultLatestUrl }
-            Test-PlaceholderUrl $latestUrl 'YUNAGI_LATEST_URL'
             $latestFile = Join-Path $tmp 'latest.json'
             Save-File $latestUrl $latestFile
             $version = (Get-Content -Raw -LiteralPath $latestFile | ConvertFrom-Json).version
@@ -104,7 +97,6 @@ function Install-Yunagi {
         Write-Host "Installing Yunagi $version (windows, $arch)"
 
         $base = if ($env:YUNAGI_BASE_URL) { $env:YUNAGI_BASE_URL } else { $script:DefaultBaseUrl }
-        Test-PlaceholderUrl $base 'YUNAGI_BASE_URL'
         $base = $base.TrimEnd('/') # a trailing slash would make "//" in the URL
         $name = "Yunagi_${version}_${arch}-setup.exe"
         $setup = Join-Path $tmp $name

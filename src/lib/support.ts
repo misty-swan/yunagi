@@ -2,17 +2,16 @@
 // サポート・障害対応手順 1章）。URL とメールの宛先はここにだけ書く。
 //
 // 公式サイトのドメイン（getyunagi.com）と、配布・問い合わせ用の公開リポジトリ（misty-swan/yunagi）は
-// 決まった（2026-11-06。ビルド・配布手順書 1章・2章）が、実際の値に置き換える作業（YUN-11）はまだ。
-// それまでは設計書と同じ仮の表記（`<公式サイト>` など）を出し、YUN-11 でここを書き換える。
+// 2026-11-06 に決まった（ビルド・配布手順書 1章・2章。YUN-11 で実際の値にした）。
 
 import { isMacPlatform } from "./keys";
 
 /** 公式サイト（install.sh・install.ps1 を置く）。 */
-export const SITE = "https://<公式サイト>";
+export const SITE = "https://getyunagi.com";
 /** 不具合報告の窓口（公開リポジトリの GitHub Issues）。 */
-export const ISSUES_URL = "https://github.com/<公開リポジトリ>/issues";
+export const ISSUES_URL = "https://github.com/misty-swan/yunagi/issues";
 /** GitHub のアカウントが無い人の問い合わせ先。 */
-export const SUPPORT_MAIL = "support@<公式ドメイン>";
+export const SUPPORT_MAIL = "support@getyunagi.com";
 
 export type Os = "mac" | "windows" | "linux";
 

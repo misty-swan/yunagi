@@ -867,6 +867,9 @@ mod tests {
             &json!({"pubkey": " ", "endpoints": ["https://example.test/latest.json"]})
         )));
         assert!(!is_configured(Some(
+            &json!({"pubkey": "", "endpoints": ["https://example.test/latest.json"]})
+        )));
+        assert!(!is_configured(Some(
             &json!({"pubkey": "k", "endpoints": [""]})
         )));
         assert!(is_configured(Some(
