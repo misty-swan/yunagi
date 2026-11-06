@@ -421,7 +421,13 @@ describe("配布用の公開鍵", () => {
 
   it("リポジトリに置いた site/keys/release.pub を、ビルドが /yunagi-release.pub として公開し、日英のページに値が出る", () => {
     const key = readFileSync(join(ROOT, "site", "keys", "release.pub"), "utf8");
-    expect(key).toMatch(/^untrusted comment: minisign public key [0-9A-F]{16}\nRW[A-Za-z0-9+/]{54}\n$/);
+    // 1 行目の鍵 ID（16 桁の 16 進）が、2 行目の中身（"Ed" + 鍵 ID 8 バイト + 公開鍵 32 バイト）の鍵 ID と同じこと
+    expect(key).toMatch(/^untrusted comment: minisign public key:? [0-9A-F]{16}\nRW[A-Za-z0-9+/]{54}\n$/);
+    const raw = Buffer.from(key.split("\n")[1], "base64");
+    expect(raw.length).toBe(42);
+    expect(raw.subarray(0, 2).toString("latin1")).toBe("Ed");
+    const idFromBody = [...raw.subarray(2, 10)].reverse().map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    expect(key.split("\n")[0].endsWith(idFromBody)).toBe(true);
     expect(readFileSync(join(plainDir, "yunagi-release.pub"), "utf8")).toBe(key);
     const [comment, body] = key.trimEnd().split("\n");
     for (const lang of ["ja", "en"]) {
