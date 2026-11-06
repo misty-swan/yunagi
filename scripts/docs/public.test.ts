@@ -82,15 +82,6 @@ describe("SECURITY.md", () => {
   });
 });
 
-/**
- * 公開しない文書を移した先の一覧（docs/ からの相対パス）。ビルド・配布手順書 8.3 の手順で
- * 非公開のリポジトリへ移すとき、3 つのパスをここに入れる。入れると、公開側にその文書が無いこと
- * （戻し忘れ）と、docs/README.md の案内の表がその文書を指していないことを、下の試験が確かめる。
- * 移すまでは空で、docs/README.md の表のパスはすべて実在しなければならない。
- */
-const PRIVATE_MOVED: string[] = [];
-// 移すと決めた 3 文書：legal/terms-of-service.md、legal/privacy-policy.md、legal/tokushoho.md
-
 function markdownFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
@@ -145,22 +136,51 @@ describe("文書の参照", () => {
     expect(broken).toEqual([]);
   });
 
-  it("docs/README.md の案内の表の文書が、実在する（移した文書を除く）", () => {
+  it("docs/README.md の案内の表の文書が、実在する", () => {
     const missing: string[] = [];
     for (const m of read("docs/README.md").matchAll(/^\| ([A-Za-z/-]+) \| ([A-Za-z0-9._-]+\.md) \|/gm)) {
       const path = `${m[1]}/${m[2]}`;
-      if (PRIVATE_MOVED.includes(path)) continue;
       if (!existsSync(join(ROOT, "docs", path))) missing.push(path);
     }
     expect(missing).toEqual([]);
   });
+});
 
-  it("移した文書は、公開側に無く、docs/README.md の表も指していない", () => {
-    const table = read("docs/README.md");
-    for (const path of PRIVATE_MOVED) {
-      expect(existsSync(join(ROOT, "docs", path)), path).toBe(false);
-      expect(table, path).not.toMatch(new RegExp(`^\\| ${path.replace("/", " \\| ")} \\|`, "m"));
+describe("法務の草案の表示", () => {
+  // 弁護士確認前の草案を公開に残すための表示（ビルド・配布手順書 8.3。YUN-110）。確定版（YUN-106）で外すときは、この試験も直す。
+  const DRAFT_DOCS = ["terms-of-service.md", "privacy-policy.md", "tokushoho.md"];
+
+  it("3 文書の題名の直後（3 行目と 5 行目）に、日本語と英語の草案の表示が引用ブロックである", () => {
+    for (const name of DRAFT_DOCS) {
+      const lines = read(`docs/legal/${name}`).split(/\r?\n/);
+      expect(lines[0], name).toMatch(/^# /);
+      expect(lines[2], name).toBe("> **【草案】弁護士確認前の草案です。有効なものではありません。確定版は公式サイトに掲載します。**");
+      expect(lines[4], name).toBe(
+        "> *DRAFT — not reviewed by a lawyer and not valid. The final version will be published on the official website.*",
+      );
     }
+  });
+
+  it("docs/legal の文書は、third-party-licenses.md 以外すべて、この試験の対象になっている", () => {
+    const found = readdirSync(join(ROOT, "docs/legal"))
+      .filter((f) => f.endsWith(".md") && f !== "third-party-licenses.md")
+      .sort();
+    expect(found).toEqual([...DRAFT_DOCS].sort());
+  });
+
+  it("個人情報を入れない：特定商取引法の表記の各項目と、運営者名が、仮置き（〔 〕）のまま", () => {
+    const text = read("docs/legal/tokushoho.md");
+    for (const row of ["販売事業者", "運営責任者", "所在地", "電話番号", "メールアドレス"]) {
+      expect(text, row).toMatch(new RegExp(`^\\| ${row} \\| 〔[^〕]+〕 \\|$`, "m"));
+    }
+    for (const name of ["terms-of-service.md", "privacy-policy.md"]) {
+      expect(read(`docs/legal/${name}`), name).toContain("〔運営者名〕");
+    }
+  });
+
+  it("3 文書は引き続き docs/README.md の案内の表にある", () => {
+    const table = read("docs/README.md");
+    for (const name of DRAFT_DOCS) expect(table, name).toMatch(new RegExp(`^\\| legal \\| ${name} \\|`, "m"));
   });
 });
 
