@@ -47,10 +47,53 @@ Yunagi は利用者の業務メモを扱うため、データを端末の外に�
 
 ### 4.4 依存関係
 
-- Rust・JavaScript の依存はロックファイルで固定し、CI で既知の脆弱性を検査する（ビルド・配布手順書 3章）。修正版が無い指摘を通す許可リストは、理由と見直す期限を添えて置き、期限を過ぎると開発用 CI も止まる（同 3.1）。許可外ライセンスの検出も同じ配布用 CI で行う。許可するか決まっていないライセンス（`pending`）がある間は、この検出は落ちる。BSL-1.0・CDLA-Permissive-2.0・Unicode-3.0 は、2026-11-06 に許可へ加えた（YUN-96。以下の `clipboard-win`・`webpki-root-certs` の記述のとおり）。
+- Rust・JavaScript の依存はロックファイルで固定し、CI で既知の脆弱性を検査する（ビルド・配布手順書 3章）。修正版が無い指摘を通す許可リストは、理由と見直す期限を添えて置き、期限を過ぎると開発用 CI も止まる（同 3.1）。GitHub の Dependabot の警告の扱い（却下してよい条件・記録の残し方）は 4.5。許可外ライセンスの検出も同じ配布用 CI で行う。許可するか決まっていないライセンス（`pending`）がある間は、この検出は落ちる。BSL-1.0・CDLA-Permissive-2.0・Unicode-3.0 は、2026-11-06 に許可へ加えた（YUN-96。以下の `clipboard-win`・`webpki-root-certs` の記述のとおり）。
 - CI で使う GitHub Actions の action は、タグではなくコミットの SHA で固定し、乗っ取りで書き換えられた action が CI（配布用 CI では署名鍵の近く）で動かないようにする。更新は Dependabot が PR で知らせ、人が確かめてマージする（ビルド・配布手順書 3章「action の固定」）。
 - 依存の更新は、公開から一定期間（目安 14 日）を経た版を採用する。action の更新も同じ目安に従う。クリップボードのプラグイン（`tauri-plugin-clipboard-manager` 2.5.0）が連れてくる依存のうち、入れた時点（2026-11-05）で公開から 14 日たっていなかった `wl-clipboard-rs`（0.9.5）と `clipboard-win`（5.4.3）は、`Cargo.lock` で 14 日を経た一つ前の版（0.9.4・5.4.1）に下げた。`clipboard-win` と `error-code` のライセンスは BSL-1.0（Boost。Windows でだけ使う）で、許可するライセンスの一覧（サードパーティライセンス表記の方針 2章）に無かったため、一覧に加えるかをオーナーの判断に回し、寛容なライセンスなので加えると決めた（2026-11-06。YUN-96。決定と理由は third-party-licenses.md 2章 3 が正本）。
   自動更新のプラグイン（`tauri-plugin-updater` 2.14.0。公開 2026-10-14。YUN-83）を入れたときの扱いも同じ形にした（`deny.toml` は置かず、一時的な設定で `cargo deny` を確かめた）。①公開から 14 日たっていなかった `openssl-probe`（0.2.2 → 0.2.1）・`xattr`（1.7.0 → 1.6.1）は、`Cargo.lock` で一つ前の版に下げた。`webpki-root-certs` は、最新の 1.0.11 が 14 日未満で、14 日を経た中で最も新しい 1.0.10（2026-10-19 公開）にした（その前の 1.0.9 には RUSTSEC-2026-0383 があるので、1.0.9 までは下げない）。②`webpki-root-certs` のライセンス CDLA-Permissive-2.0（Mozilla の CA 証明書の一覧の使用許諾。寛容なライセンス）も許可リストに無かったので、YUN-96 の「一覧に加えるか」に 1 件足し、同じ日に加えると決めた。③`zip` 4.6.1 の脆弱性 4 件（プラグインが固定していて上げられない）は、`.cargo/audit.toml` の許可リストに理由と期限（2027-02-05）を添えて載せた（ビルド・配布手順書 3章）。更新の確認と入れ替えは Rust 側だけで行い、画面にプラグインの権限を渡さない（同 5.1）。
+
+### 4.5 Dependabot の警告の扱い（2026-11-06 決定。YUN-112）
+
+公開したリポジトリでは、GitHub の Dependabot alerts（脆弱性のある依存を知らせる警告。Security → Dependabot）が、ロックファイルを見て警告を出す。Dependabot security updates（自動で直す PR）はオフにしてある（ビルド・配布手順書 8.6）ので、警告への対応は人が決める。
+
+**基本は「通常の課題にして直す」**（同 8.6）。修正版があるなら、依存を上げる（14 日の目安に従う。4.4）。警告を **却下（Dismiss）してよいのは、直さない理由を書けるときだけ**。理由が書けないものや、「あとで見る」だけのものは、却下せず課題にする。
+
+**却下してよい条件**（どれか 1 つ以上に当たり、理由を書けること）：
+
+1. **使わない経路**：脆弱性のある機能を、Yunagi が呼ばない（またはその経路を通る前に別の検査を通る）。呼ばないことを、依存の木（`cargo tree -i <クレート> --target all` など）と依存先のソースで確かめてある。
+2. **影響が小さい**：重大度が低い、または未定義動作の注意（`unsound`）など、悪用の筋道がなく、自分たちでは直せない（上流が固定している）。ビルド・配布手順書 3.1「警告の扱い」と同じ考え方。
+3. **修正版が無い**：上流がまだ直していない。許可リストに載せ、期限を置く。
+4. **本番に含まれない**：ビルドにも配布物にも入らない（`experiments/` の技術選定の記録など）。
+
+**却下のコメントに書くこと**（GitHub の却下の画面のコメント欄）：
+- 理由。許可リスト（`.cargo/audit.toml`・`scripts/release/audit-allowlist.json`。ビルド・配布手順書 3.1）に載せたものは、**同じ理由と期限**を書く（食い違わせない）。
+- 見直す期限（期限のあるもの）。
+- 関連の設計書の章（4.4、ビルド・配布手順書 3.1 など）。
+
+**`dismissed_reason` の選び方**（GitHub の却下の理由の選択肢）：
+- `not_used`（脆弱性のあるコードを使っていない）：条件 1 と 4。
+- `tolerable_risk`（リスクを受け入れる）：条件 2 と 3。
+- `inaccurate`・`no_bandwidth` は使わない（`no_bandwidth` は「手が足りない」であり、直さない理由にならないため）。
+
+**期限の見直し**：期限のある却下は、期限つきの課題に残す。zip の 4 件は YUN-113（期限 2027-02-05。プラグインが zip 9 以上に上がっていれば、プラグインを上げて、許可リストの 4 件と Dependabot の却下を外す。上がっていなければ、残すか決め直す）。許可リストの期限（`pnpm check:allowlist`）と、却下の期限は同じ日にそろえる。許可リストから外したら、Dependabot の却下も取り消す（Dependabot が警告を出し直して、修正の確認になる）。
+
+**`experiments/` のロックファイル**：`experiments/` は技術選定の記録で、本番に含まれない（ビルドにも配布にも入らない）。警告は Dependabot の設定（`dependabot.yml`）では除外できない（警告は、リポジトリの全てのロックファイルを見る）ので、`not_used` で理由つきに却下する。本番のロックファイルの警告と同じ中身なら、本番の側の対応（上げる・許可リスト）に合わせる。
+
+**却下した警告**（2026-11-06。`#` は GitHub の Dependabot の警告の番号）：
+
+| # | GHSA | パッケージ | 対象のロックファイル | 重大度 | 却下の理由（`dismissed_reason`） |
+| --- | --- | --- | --- | --- | --- |
+| 6 | GHSA-m665-v7pm-7grj | zip（Rust） | `Cargo.lock` | critical | `not_used` |
+| 7 | GHSA-q7v9-x93c-xqv3 | zip | `Cargo.lock` | high | `not_used` |
+| 8 | GHSA-8hxf-qr8p-62x4 | zip | `Cargo.lock` | medium | `not_used` |
+| 1 | GHSA-wrw7-89jp-8q8g | glib（Rust） | `Cargo.lock` | medium | `tolerable_risk` |
+| 5 | GHSA-gcqx-w48m-w2h4 | deepmerge（npm） | `pnpm-lock.yaml` | low | `tolerable_risk` |
+| 2・4 | GHSA-wrw7-89jp-8q8g | glib | `experiments/yun-2-frontend/{solid,svelte}/src-tauri/Cargo.lock` | medium | `not_used`（条件 4） |
+| 3 | GHSA-gcqx-w48m-w2h4 | deepmerge | `experiments/yun-2-frontend/svelte/pnpm-lock.yaml` | low | `not_used`（条件 4） |
+
+- **zip**（#6〜8）：`tauri-plugin-updater` 2.14.0 が zip 4.6.1 に固定している（Windows 専用の依存。`cfg(target_os = "windows")`）。使うのは、ダウンロードした更新が zip 形式のときの `ZipArchive::extract` だけ（プラグインの `updater.rs` の `extract_zip`）。Yunagi は Windows に NSIS の `.exe` で配る（zip ではない）ので通らない。通る場合も、署名の検証（`verify_signature`）の後に展開する。`cargo tree -i zip@4.6.1 --target all` とプラグインのソースで確かめた。許可リストに同じ理由と期限（2027-02-05）で載っている（RUSTSEC-2026-0367・0368・0369・0429）。見直しは YUN-113。
+- **glib**（#1）：`Cargo.lock` の 0.18.5 は gtk-rs（Tauri の Linux 用の部品）が固定していて、こちらでは上げられない（修正は 0.20.0）。未定義動作（`unsound`）の注意で、止める対象にしない決まり（ビルド・配布手順書 3.1「警告の扱い」。RUSTSEC-2024-0429）。リリースのたびに 7 章の確認表で、警告の一覧を人が見る。
+- **deepmerge**（#5）：修正版が無い。許可リスト（`audit-allowlist.json`）に理由と期限（2027-02-05）つきで載っている（ビルド・配布手順書 3.1）。開発時とビルド時にだけ使い、配布物に入らない。
 
 ## 5. 範囲外
 
