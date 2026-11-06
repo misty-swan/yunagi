@@ -28,4 +28,6 @@
 
 規範に合わないふるまいは、`support@getyunagi.com` に知らせてください。報告者の情報は、対応に必要な範囲でしか使いません。
 
+運営者本人のふるまいについての報告は、運営者に届けても対応できないので、GitHub の「Report content」（問題のある投稿の横のメニュー）や GitHub のサポート（https://support.github.com/contact/report-abuse）に知らせてください。
+
 脆弱性の報告は、この窓口ではなく [SECURITY.md](SECURITY.md) に従ってください。

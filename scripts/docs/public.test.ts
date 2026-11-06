@@ -123,6 +123,28 @@ describe("文書の参照", () => {
     expect(broken).toEqual([]);
   });
 
+  it(".github のテンプレートが指すこのリポジトリのファイル（…/blob/main/<パス>）が実在する", () => {
+    const broken: string[] = [];
+    const templates = [
+      ".github/pull_request_template.md",
+      ".github/ISSUE_TEMPLATE/config.yml",
+      ".github/ISSUE_TEMPLATE/bug_report.yml",
+      ".github/ISSUE_TEMPLATE/feature_request.yml",
+    ];
+    for (const file of templates) {
+      for (const m of read(file).matchAll(/misty-swan\/yunagi\/blob\/main\/([^\s)"']+)/g)) {
+        if (!existsSync(join(ROOT, m[1]))) broken.push(`${file} → ${m[1]}`);
+      }
+      for (const m of withoutCode(read(file)).matchAll(/\]\(([^)\s]+)\)/g)) {
+        const target = m[1].split("#")[0];
+        if (target === "" || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+        if (!existsSync(join(ROOT, target.startsWith("/") ? target.slice(1) : join(dirname(file), target))))
+          broken.push(`${file} → ${m[1]}`);
+      }
+    }
+    expect(broken).toEqual([]);
+  });
+
   it("docs/README.md の案内の表の文書が、実在する（移した文書を除く）", () => {
     const missing: string[] = [];
     for (const m of read("docs/README.md").matchAll(/^\| ([A-Za-z/-]+) \| ([A-Za-z0-9._-]+\.md) \|/gm)) {
@@ -145,7 +167,9 @@ describe("文書の参照", () => {
 describe("Actions の許可の一覧", () => {
   it("GitHub 以外の action がすべて、手順書 8.6 の許可の一覧に書いてある", () => {
     const used = new Set<string>();
-    for (const wf of ["ci.yml", "release.yml"]) {
+    const workflows = readdirSync(join(ROOT, ".github/workflows")).filter((f) => /\.ya?ml$/.test(f));
+    expect(workflows.length).toBeGreaterThan(0);
+    for (const wf of workflows) {
       for (const m of read(`.github/workflows/${wf}`).matchAll(/^\s*(?:-\s+)?uses:\s*([^@\s]+)@/gm)) {
         const repo = m[1];
         if (repo.startsWith("./") || repo.startsWith("actions/")) continue;
@@ -154,8 +178,20 @@ describe("Actions の許可の一覧", () => {
     }
     expect(used.size).toBeGreaterThan(0);
     const doc = read("docs/release/07-build-and-distribution.md");
-    const section = doc.slice(doc.indexOf("### 8.6"), doc.indexOf("### 8.7"));
-    for (const repo of used) expect(section, repo).toContain(`${repo}@*`);
+    const from = doc.indexOf("### 8.6");
+    const to = doc.indexOf("### 8.7");
+    expect(from, "8.6 の見出し").toBeGreaterThan(-1);
+    expect(to, "8.7 の見出し").toBeGreaterThan(from);
+    // 「Allow specified actions and reusable workflows」の欄に書く、`a/b@*, c/d@*` の形の行
+    const line = doc
+      .slice(from, to)
+      .split("\n")
+      .find((l) => l.includes("Allow specified actions"));
+    expect(line, "許可の一覧の行").toBeDefined();
+    const listed = new Set(
+      [...(line ?? "").matchAll(/`([^`]*@\*[^`]*)`/g)].flatMap((m) => m[1].split(",").map((s) => s.trim())),
+    );
+    for (const repo of used) expect(listed, repo).toContain(`${repo}@*`);
   });
 });
 

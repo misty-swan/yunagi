@@ -413,6 +413,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 6. リポジトリ全体の secrets（Settings → Secrets and variables → Actions → Repository secrets）が**空**であることを見る。Cloudflare のトークンや署名鍵は、`environment:` と手動の実行の制限を持つワークフロー（YUN-101・YUN-107）ができるまで、リポジトリ全体の secrets に置かない（2章）。
 7. ほかの人のアカウントや、外部のサービスの連携（Settings → Integrations）に、公開してはいけないものが無いことを見る。
 8. 開いている PR が無い、または 8.6 の 5（SHA 固定の必須化）の前に main へ追いつかせる予定がある。
+9. **公開前にできる設定は先に済ませる**（公開の瞬間から効かせるため）：8.6 の 3（マージの設定）と 5（Actions の設定。とくに **Require approval for all external contributors**、`GITHUB_TOKEN` の既定、許可する action の一覧）。画面に項目が出ない、または押せないもの（非公開のリポジトリでは使えない機能）は、公開後に 8.6 で行う。SHA 固定の必須化は、8 の条件を満たしてから。
 
 ### 8.5 切り替え（オーナー）
 
@@ -425,7 +426,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 
 Settings の画面は、すべてリポジトリ `misty-swan/yunagi` の Settings。1 から順に行う。
 
-1. **機能の整理**（Settings → General → Features）：**Wikis**・**Discussions**・**Projects** のチェックを外す（情報の置き場を増やさないため。窓口は Issues とメール）。**Issues** はオンのまま（利用者の不具合報告・要望の窓口。サポート手順書 1章。作業管理は Linear。CLAUDE.md）。**Sponsorships** はオフのまま。
+1. **機能の整理**（Settings → General → Features）：**Wikis**・**Discussions**・**Projects** のチェックを外す（情報の置き場を増やさないため。窓口は Issues とメール）。**Issues** はオンのままにし、Issue のラベル `bug`・`enhancement`（テンプレートが付ける。Issues → Labels）が残っているか確かめる（無ければ同じ名前で作る。GitHub は無いラベルを黙って付けない）（利用者の不具合報告・要望の窓口。サポート手順書 1章。作業管理は Linear。CLAUDE.md）。**Sponsorships** はオフのまま。
 2. **説明とトピック**（リポジトリの最初の画面の右の **About** の歯車）：Description に `PC画面全体を「その日の仕事ノート1枚」として使う、エンジニア向けの日次業務整理アプリ`、Website に `https://getyunagi.com`（公式サイトの公開後。まだなら空でよい）、Topics に `tauri`・`svelte`・`rust`・`note-taking`・`productivity`・`mcp`・`cli` を入れる。**Releases**・**Packages** の表示はそのまま。
 3. **マージの設定**（Settings → General → Pull Requests）：**Allow merge commits** をオン（今までのマージの形）、**Allow squash merging**・**Allow rebase merging** はオフ、**Automatically delete head branches** をオンにする。
 4. **コードのセキュリティ**（Settings → Code security）：
@@ -440,7 +441,7 @@ Settings の画面は、すべてリポジトリ `misty-swan/yunagi` の Setting
 6. **main のブランチ保護**（Settings → Rules → Rulesets → **New ruleset → New branch ruleset**）：
    - Ruleset Name：`main`。Enforcement status：**Active**。Bypass list：空（オーナーも PR を通す。緊急のときは、このルールセットを一時的に Disabled にする）。
    - Target branches：**Add target → Include default branch**。
-   - Rules：**Restrict deletions**・**Require a pull request before merging**（Required approvals は 0 のままでよい。一人運営で、自分の PR は自分で承認できないため。中身の確認は `/code-review` とオーナーのマージで行う）・**Require status checks to pass**（**Require branches to be up to date before merging** をオン。**Add checks** で `pnpm check (Linux)`・`cargo test (macOS)`・`cargo test (Windows)` を選ぶ。後ろの 2 つは、一度走ったあとでないと一覧に出ない。8.7 のあとで足す）・**Block force pushes** をオン。**Require linear history** はオフ（マージコミットを使っているため）。
+   - Rules：**Restrict deletions**・**Require a pull request before merging**（Required approvals は 0 のままでよい。一人運営で、自分の PR は自分で承認できないため。中身の確認は `/code-review` とオーナーのマージで行う）・**Require status checks to pass**（**Require branches to be up to date before merging** はオフ：オンにすると、1 つの PR をマージするたびに、ほかの PR（週ごとの Dependabot の PR を含む）が古くなり、追いつかせ直しが要る。古さは CLAUDE.md の手順（マージ前に main へ追いつかせる）で見る。**Add checks** で `pnpm check (Linux)`・`cargo test (macOS)`・`cargo test (Windows)` を選ぶ。後ろの 2 つは、一度走ったあとでないと一覧に出ない。8.7 のあとで足す）・**Block force pushes** をオン。**Require linear history** はオフ（マージコミットを使っているため）。
    - 配布用 CI（`Release`）の検査は、変更したファイルによってしか走らないので、必須にしない（走らないと永遠に待つため）。
    - 保存したあと、Rulesets の一覧で `main` が **Active** になっていることを見る。
 7. **タグの保護**（Settings → Rules → Rulesets → **New ruleset → New tag ruleset**）：Ruleset Name：`release tags`。Enforcement：Active。Target tags：**Add target → Include by pattern** に `v*`。Rules：**Restrict updates**・**Restrict deletions**・**Block force pushes**（出した版のタグを動かせないようにする。タグの作成はオーナーだけが行う）。
