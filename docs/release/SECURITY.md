@@ -61,7 +61,7 @@ Yunagi は利用者の業務メモを扱うため、データを端末の外に�
 **却下してよい条件**（どれか 1 つ以上に当たり、理由を書けること）：
 
 1. **使わない経路**：脆弱性のある機能を、Yunagi が呼ばない（またはその経路を通る前に別の検査を通る）。呼ばないことを、依存の木（`cargo tree -i <クレート> --target all` など）と依存先のソースで確かめてある。
-2. **影響が小さい**：重大度が低い、または未定義動作の注意（`unsound`）など、悪用の筋道がなく、自分たちでは直せない（上流が固定している）。ビルド・配布手順書 3.1「警告の扱い」と同じ考え方。
+2. **影響が小さい**：悪用の筋道が限られる（重大度が低い、または未定義動作の注意 `unsound` など。重大度が medium でも、筋道が限られると説明できれば当てはまる）うえで、自分たちでは直せない（上流が固定している）。ビルド・配布手順書 3.1「警告の扱い」と同じ考え方。
 3. **修正版が無い**：上流がまだ直していない。許可リストに載せ、期限を置く。
 4. **本番に含まれない**：ビルドにも配布物にも入らない（`experiments/` の技術選定の記録など）。
 
@@ -75,19 +75,21 @@ Yunagi は利用者の業務メモを扱うため、データを端末の外に�
 - `tolerable_risk`（リスクを受け入れる）：条件 2 と 3。
 - `inaccurate`・`no_bandwidth` は使わない（`no_bandwidth` は「手が足りない」であり、直さない理由にならないため）。
 
-**期限の見直し**：期限のある却下は、期限つきの課題に残す。zip の 4 件は YUN-113（期限 2027-02-05。プラグインが zip 9 以上に上がっていれば、プラグインを上げて、許可リストの 4 件と Dependabot の却下を外す。上がっていなければ、残すか決め直す）。許可リストの期限（`pnpm check:allowlist`）と、却下の期限は同じ日にそろえる。許可リストから外したら、Dependabot の却下も取り消す（Dependabot が警告を出し直して、修正の確認になる）。
+**期限の見直し**：期限のある却下は、期限つきの課題に残す。zip の 4 件は YUN-113（期限 2027-02-05。プラグインが zip 9 以上に上がっていれば、プラグインを上げて、許可リストの 4 件と Dependabot の却下を外す。上がっていなければ、残すか決め直す）。許可リストの期限（`pnpm check:allowlist`）と、却下の期限は同じ日にそろえる。許可リストから外したら、**同じ PR で**Dependabot の却下も取り消す（Dependabot が警告を出し直して、修正の確認になる）。許可リストの項目を外す（または期限を延ばす）PR の確認事項に、この取り消し（延ばすときは、却下のコメントの期限の書き直し）を含める。zip 以外は専用の課題を置かず、許可リストの期限（2027-02-05）の PR で次のように扱う：deepmerge は #5 と #3 を、期限を延ばすなら却下のコメントの期限を書き直し、修正版で外すなら取り消す。glib は期限を置かない代わりに、「外す条件」を、Tauri（gtk-rs）が glib 0.20 以上に上がったとき、とする。上がったら、#1・#2・#4 の却下を取り消して、`Cargo.lock` を上げる（Tauri を上げる PR で見る）。
 
-**`experiments/` のロックファイル**：`experiments/` は技術選定の記録で、本番に含まれない（ビルドにも配布にも入らない）。警告は Dependabot の設定（`dependabot.yml`）では除外できない（警告は、リポジトリの全てのロックファイルを見る）ので、`not_used` で理由つきに却下する。本番のロックファイルの警告と同じ中身なら、本番の側の対応（上げる・許可リスト）に合わせる。
+**期限のある却下の書き方**：`not_used` の却下にも期限を付けてよい。zip は「使わない経路」だが、プラグインが固定している限りは残るので、許可リストと同じ期限（2027-02-05）をコメントに書き、見直す。期限のない `not_used` は、本番に含まれないもの（条件 4）だけ。
+
+**`experiments/` のロックファイル**：`experiments/` は技術選定の記録で、本番に含まれない（ビルドにも配布にも入らない）。警告は Dependabot の設定（`dependabot.yml`）では除外できない（警告は、リポジトリの全てのロックファイルを見る）ので、条件 4（`not_used`）で理由つきに却下する。本番側の同じ GHSA の却下（glib #1、deepmerge #5）を取り消す・書き直すときは、`experiments/` 側（#2・#4・#3）も同じ PR で見直す（本番に含まれなくても、警告が出続けないよう揃えておく）。期限は置かない。
 
 **却下した警告**（2026-11-06。`#` は GitHub の Dependabot の警告の番号）：
 
 | # | GHSA | パッケージ | 対象のロックファイル | 重大度 | 却下の理由（`dismissed_reason`） |
 | --- | --- | --- | --- | --- | --- |
-| 6 | GHSA-m665-v7pm-7grj | zip（Rust） | `Cargo.lock` | critical | `not_used` |
-| 7 | GHSA-q7v9-x93c-xqv3 | zip | `Cargo.lock` | high | `not_used` |
-| 8 | GHSA-8hxf-qr8p-62x4 | zip | `Cargo.lock` | medium | `not_used` |
-| 1 | GHSA-wrw7-89jp-8q8g | glib（Rust） | `Cargo.lock` | medium | `tolerable_risk` |
-| 5 | GHSA-gcqx-w48m-w2h4 | deepmerge（npm） | `pnpm-lock.yaml` | low | `tolerable_risk` |
+| 6 | GHSA-m665-v7pm-7grj | zip（Rust） | `Cargo.lock` | critical | `not_used`（期限 2027-02-05。YUN-113） |
+| 7 | GHSA-q7v9-x93c-xqv3 | zip | `Cargo.lock` | high | `not_used`（期限 2027-02-05。YUN-113） |
+| 8 | GHSA-8hxf-qr8p-62x4 | zip | `Cargo.lock` | medium | `not_used`（期限 2027-02-05。YUN-113） |
+| 1 | GHSA-wrw7-89jp-8q8g | glib（Rust） | `Cargo.lock` | medium | `tolerable_risk`（外す条件：glib 0.20 以上） |
+| 5 | GHSA-gcqx-w48m-w2h4 | deepmerge（npm） | `pnpm-lock.yaml` | low | `tolerable_risk`（期限 2027-02-05） |
 | 2・4 | GHSA-wrw7-89jp-8q8g | glib | `experiments/yun-2-frontend/{solid,svelte}/src-tauri/Cargo.lock` | medium | `not_used`（条件 4） |
 | 3 | GHSA-gcqx-w48m-w2h4 | deepmerge | `experiments/yun-2-frontend/svelte/pnpm-lock.yaml` | low | `not_used`（条件 4） |
 
