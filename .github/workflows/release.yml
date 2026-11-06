@@ -8,11 +8,11 @@
 # GitHub Release の作成と添付・Homebrew tap への PR。署名鍵（YUN-100）が要るので、ここには置かない。
 #
 # 試運転：このファイルや、ビルドの設定・スクリプトを変える PR では、タグなしで同じ流れを走らせる
-# （`pull_request`）。タグの push と違い、arm の Linux のビルド（公開リポジトリでないと使えないランナー）を除く。
-# どちらの場合も、Release の作成・公開、署名鍵の使用はしない。
+# （`pull_request`）。タグの push と同じ全 6 組を走らせる（除く組は `scripts/release/matrix.ts` の
+# `DRY_RUN_SKIPPED` で決める。いまは空）。どちらの場合も、Release の作成・公開、署名鍵の使用はしない。
 # 非公開の間は、試運転のビルド（macOS・Windows の料金がかかる）は PR では自動で走らせず、手動
 # （`workflow_dispatch`。`gh workflow run Release --ref <ブランチ>`）で走らせる。公開した時点で、直さなくても
-# PR で自動で走り出す（`build` ジョブの `if`）。手動の実行もタグなしの試運転で、同じ組を除く。
+# PR で自動で走り出す（`build` ジョブの `if`）。手動の実行もタグなしの試運転で、同じ組が動く。
 #
 # `uses:` の action は、コミットの SHA で固定し、行末に版を書く（07 3章「action の固定」。更新は Dependabot）。
 # 配布物を作るので、キャッシュ（rust-cache・pnpm のキャッシュ）は使わない（キャッシュに混ぜ込まれた物が
