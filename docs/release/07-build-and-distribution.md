@@ -40,13 +40,13 @@
 - **配布物の実体は置かない**。Pages には 1 ファイル 25 MiB の上限があり（Cloudflare Pages の limits）、AppImage や Windows の配布物が収まらないため。配布物は GitHub Releases（`<配布元>`）に置き、Pages には置かない。サイトが置くのは、小さい文書・スクリプト・`latest.json`・公開鍵だけ。
 - **独自ドメインの結び付け**（オーナーの作業。YUN-107 でサイトを公開するときに行う）：
   - Pages のプロジェクトの「Custom domains」に `getyunagi.com` を追加する。apex ドメイン（`www` の付かないもの）を結び付けるには、そのドメインが、Pages のプロジェクトと同じ Cloudflare アカウントの zone（DNS の管理単位）であること。`getyunagi.com` は Cloudflare Registrar で取得し DNS も Cloudflare なので満たす。CNAME などの DNS の記録は Cloudflare が自動で作る。
-  - **証明書の発行を妨げる CAA 記録が無いことを確かめる**：`dig CAA getyunagi.com`（または Cloudflare の DNS の画面）で見る。CAA 記録が 1 つも無ければ、何もしなくてよい（記録を足さない）。1 つでもある場合は、Pages が使う認証局（`letsencrypt.org`・`pki.goog; cansignhttpexchanges=yes`・`ssl.com`）の発行を許す記録（`issue` と `issuewild`）が含まれていないと、ドメインの追加が検証で止まる。そのときだけ、足りない認証局の記録を足す（ほかの用途で別の認証局の記録を置いているなら、それは消さない）（Cloudflare Pages の custom domains の「Known issues」）。
+  - **証明書の発行を妨げる CAA 記録が無いことを確かめる**：`dig CAA getyunagi.com`（または Cloudflare の DNS の画面）で見る。CAA 記録が 1 つも無ければ、何もしなくてよい（記録を足さない）。1 つでもある場合は、Pages が使う認証局（`letsencrypt.org`・`pki.goog; cansignhttpexchanges=yes`・`ssl.com`）の発行を許す記録（`issue` と `issuewild`）が含まれていないと、ドメインの追加が検証で止まる。そのときだけ、足りない認証局の記録を足す（ほかの用途で別の認証局の記録を置いているなら、それは消さない）。ここに書いた認証局の名前は 2026-11-06 時点の Cloudflare の案内（https://developers.cloudflare.com/pages/configuration/custom-domains/ の「Known issues」）の写しで、変わりうるので、足すときはそのページの最新の一覧を見る。確かめるのは、Cloudflare の DNS の画面に出る記録（ダッシュボードで足した分も含む）と `dig` の結果の両方（Cloudflare Pages の custom domains の「Known issues」）。
   - `www.getyunagi.com` の扱い（apex へ転送するか）は YUN-107 で決める。
 - **サイトの自動公開は、Direct Upload を GitHub Actions から行う方針**（推奨案。Cloudflare の Git 連携は使わない）：
   - 流れ：GitHub Actions のワークフローが、サイトの元（`site/` など。置き場は YUN-107）をビルドして `wrangler pages deploy <出力先> --project-name=<プロジェクト名> --branch=<本番ブランチ>` で上げる。Cloudflare の公式の手順（`cloudflare/wrangler-action`）に沿う。`--branch` には Pages のプロジェクトの本番ブランチ名を指定する（それ以外の名前で上げたものはプレビューになり、本番にならず、戻し先にもならないため）。
   - 理由：①ビルドを自分たちの CI（lock ファイル厳守・action の SHA 固定。3章「action の固定」）で行える。Git 連携だと Cloudflare 側のビルド環境に任せ、固定の決まりが及ばない。②いつ公開するかを自分たちで決められる（`latest.json` は Release の配布物がそろってから公開する。7章）。Git 連携では、サイトのファイルを main に入れると自動で公開されてしまう。③`latest.json` を、リポジトリに書き戻さず、配布用 CI（YUN-101）が作ったものとしてそのまま上げられる。
   - 注意：Pages のプロジェクトは、Git 連携と Direct Upload を後から切り替えられない（Cloudflare の公式の案内）。ここで Direct Upload に決めるので、プロジェクトは **Direct Upload のプロジェクトとして作る**。
-  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする。リポジトリは公開されるので、**フォークからの PR（`pull_request`・`pull_request_target`）の実行にはこの secrets（と署名鍵の secrets）を渡さない**：サイトの公開と署名は、タグの push・main への push・手動の実行（`workflow_dispatch`）でだけ動かし、GitHub の Environment にブランチ・タグの制限をかけて secrets をそこに置く。試運転（`pull_request`）は secrets を使わない（今の `release.yml` もそうしている）。細部は YUN-107・YUN-101 で決める（YUN-101 の Linear のコメントに残した）。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
+  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする。リポジトリは公開されるので、**フォークからの PR（`pull_request`・`pull_request_target`）の実行にはこの secrets（と署名鍵の secrets）を渡さない**：サイトの公開と署名は、タグの push・main への push・手動の実行（`workflow_dispatch`）でだけ動かし、GitHub の Environment にブランチ・タグの制限をかけて secrets をそこに置く。試運転（`pull_request`）は secrets を使わない（今の `release.yml` もそうしている）。今の `release.yml` には `environment:` も、手動の実行を main やタグに限る条件も無い。そのため、YUN-101・YUN-107 がこの制限を作るまで、リポジトリ全体の secrets として Cloudflare のトークンや署名鍵を**置かない**（リポジトリの公開は YUN-109 で、それより前でも後でも同じ）。細部は YUN-107・YUN-101 で決める（YUN-101 の Linear のコメントに残した）。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
 - **`latest.json` の送り方**：`/latest.json` は、古い内容が使われ続けないよう、サイトの `_headers` ファイルで `Cache-Control: no-cache` を明示する（Pages の `_headers` で付ける。YUN-107 が作り、公開後に `curl -I` で確かめる）。
 - **取り下げ時の戻し方**（サポート・障害対応手順 5章が参照する）：次の 2 つのどちらかで、`latest.json` を前の版に戻す。急ぐときは (1)。
   1. **前の公開済みのデプロイに戻す**（Pages の「Rollback」。Cloudflare の公式の案内 Rollbacks）：Cloudflare のダッシュボードで対象の Pages のプロジェクトを開き、「Deployments」の「All deployments」から、戻したい本番のデプロイの「⋯」メニュー →「Rollback to this deployment」を選んで確認する。**戻し先は「直前のデプロイ」ではなく、`latest.json` が良い版（取り下げる版の 1 つ前）を指している最後の本番のデプロイ**を選ぶ（取り下げる版の後に、サイトだけを直したデプロイがあると、直前のものにも取り下げる版の `latest.json` が入っている）。各デプロイの `latest.json` は、リリースごとに版を控えておく（7章）か、そのデプロイの URL で見て確かめる。**戻したあとは、公開用のワークフローを止める**（Actions の画面で無効にするか、実行を保留する）：main から新しく上げる実行が、戻した状態を取り下げる版で上書きしてしまうため。原因を直して、良い版の `latest.json` を作れるようになってから再開する。本番のサイトが**すぐに**その時点の内容に変わる。戻せるのは、ビルドに成功した**本番**のデプロイだけ（プレビューは戻し先にならない）。戻るのは `latest.json` だけでなくサイト全体（導入スクリプトなども、そのデプロイの時点の内容）。新しいデプロイに進み直すこともできる。
@@ -165,6 +165,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 - macOS のアドホック署名（3 の 4）。
 - Updater 用の署名 `.sig`（`bundle.createUpdaterArtifacts`。5.1 の「署名に版を入れる」）と、`latest.json`（5.1。トップレベルの `version` を入れ子の項目（`platforms` など）より前に置く：4.1 の 2）。
 - 全配布物の `SHA256SUMS` と、配布用鍵での `SHA256SUMS.sig`（2章・6.2）。
+- **公式サイトの公開（Pages へのデプロイ）の段**（2026-11-06 決定。YUN-103）：リリースのワークフローの最後の段として、GitHub Release の配布物が `<配布元>` から取得できることを確かめた**あとだけ**、サイトを `latest.json` つきでデプロイする（確認が通らなければデプロイしない。先に `latest.json` だけが公開される順序の入れ替わりを防ぐ）。サイトだけの変更のデプロイ（YUN-107）は、**いま公開中の `latest.json` を取得して含める**（取得できなければ中止する。含め忘れて 404 にしない、古い写しで上書きしない）。取り下げて戻したあとも、この取得のおかげで戻した状態が引き継がれる。どちらの段も 2章の secrets の決まり（フォークの PR に渡さない・Environment で制限する）に従う。
 - GitHub Release の作成と、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig`・`THIRD_PARTY_LICENSES.md` の添付。
 - Homebrew tap への自動 PR（3 の 7。4.3）。
 - 「署名鍵を持つジョブの権限」：鍵を使うジョブだけに `contents: write` と鍵のシークレットを渡し、検査・ビルドのジョブには渡さない（このファイルの `permissions` は `contents: read`）。
@@ -339,7 +340,7 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている（`.sig` 以降は YUN-101 が作る。3.4。YUN-97 の範囲では、全 6 組のビルドが成功し、配布物と `.sha256` が成果物に揃っているまで）
 - [ ] 公開リポジトリの Release の配布物（`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` を含む）が、`<配布元>/v<ver>/<ファイル名>` から実際に取得できる（`latest.json` を更新する前に確かめる。先に更新すると、更新が 404 で失敗する）
 - [ ] 公式サイトのデプロイ（Cloudflare Pages。2章「公式サイトの置き場所」）で `https://<公式サイト>/latest.json` を新しい版に更新し、`curl -fsS` で取った `version` が新しい版であることを確かめた
-- [ ] Pages の「Deployments」に、直前の版の `latest.json` を載せた本番のデプロイが残っていて、そのデプロイが何番目かを控えた（取り下げ時の戻し先。2章）
+- [ ] （2 回目のリリースから）Pages の「Deployments」に、直前の版の `latest.json` を載せた本番のデプロイが残っていて、そのデプロイの URL（またはデプロイ ID）と公開日時を、リリースの記録に控えた（取り下げ時の戻し先。2章。最初のリリースには戻し先が無い）
 - [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
 - [ ] Homebrew tap の更新がマージされ、Cask で導入したアプリが起動することを確認した
 - [ ] 公式サイトのダウンロード案内と変更履歴を更新した
@@ -349,4 +350,4 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] リポジトリを公開した（YUN-109）。公開後に macOS・Windows の CI と配布用のビルドが走ることを確かめた（テスト計画書 2章）
 - [ ] 公式サイト（YUN-107）が `getyunagi.com` で見られ、HTTPS の証明書が有効になっている。`dig CAA getyunagi.com` で、証明書の発行を妨げる CAA 記録が無いことを確かめた（2章）
 - [ ] Cloudflare のアカウントに 2 要素認証がかかっている。公開用の API トークンは Pages の編集だけの権限で、GitHub Actions の secrets に置いてある（2章）
-- [ ] 取り下げの戻し方（2章）を、公開前に 1 度試し、`latest.json` が前のデプロイの内容に戻ることを確かめた
+- [ ] 取り下げの戻し方（2章）を、サイトの本番のデプロイを 2 つ以上作ったあと（最初のリリースの前に、試しの `latest.json` で 2 回デプロイしてよい）に 1 度試し、`latest.json` が前のデプロイの内容に戻り、公開用のワークフローを止める手順も確かめた
