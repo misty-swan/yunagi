@@ -256,11 +256,25 @@ describe("取り込む文書", () => {
     expect(r.headings.map((h) => h.id)).toEqual(["a", "8-アンインストール", "b", "b-2"]);
     expect(slugify("macOS・Linux")).toBe("macoslinux");
   });
+
+  it("HTML コメントは取り除くが、コードの囲み（``` と ~~~）と行内コードの中は残す。閉じていないコメントは止める", () => {
+    const opts = { tableLabel: "t" };
+    expect(renderMarkdown("a <!-- x --> b\n\n<!--\nrule\n-->\n\nc", opts).html).not.toContain("rule");
+    const kept = renderMarkdown("~~~\n<!-- keep -->\n~~~\n\n```\n<!-- keep2 -->\n```\n\n`<!-- slot:x -->` と書く", opts).html;
+    expect(kept).toContain("&lt;!-- keep --&gt;");
+    expect(kept).toContain("&lt;!-- keep2 --&gt;");
+    expect(kept).toContain("<code>&lt;!-- slot:x --&gt;</code>");
+    expect(() => renderMarkdown("a\n<!-- 閉じ忘れ\nb", opts)).toThrow(/閉じていない/);
+  });
 });
 
 describe("latest.json", () => {
   it("形の検査：版の形・version の位置・platforms・https", () => {
-    expect(parseLatest(LATEST)).toEqual({ version: "1.2.3", pubDate: "2026-12-01T00:00:00Z" });
+    expect(parseLatest(LATEST)).toEqual({
+      version: "1.2.3",
+      pubDate: "2026-12-01T00:00:00Z",
+      platforms: ["darwin-aarch64", "linux-x86_64"],
+    });
     expect(() => parseLatest("{")).toThrow(/JSON/);
     expect(() => parseLatest('{"version":"v1.2.3","platforms":{}}')).toThrow(/version/);
     expect(() => parseLatest('{"platforms":{"linux-x86_64":{"url":"https://x","signature":"s"}},"version":"1.2.3"}')).toThrow(/より後ろ/);
@@ -271,15 +285,42 @@ describe("latest.json", () => {
   });
 
   it("公開中の取得：200 は取り込む、404 は『まだ公開していない』、それ以外の失敗は『取れなかった』", async () => {
-    const res = (status: number, body = "") => (async () => new Response(body, { status })) as typeof fetch;
-    expect(await fetchPublishedLatest("https://x/latest.json", res(200, LATEST))).toMatchObject({ kind: "ok" });
-    expect(await fetchPublishedLatest("https://x/latest.json", res(404))).toMatchObject({ kind: "missing" });
-    expect(await fetchPublishedLatest("https://x/latest.json", res(503))).toMatchObject({ kind: "error" });
-    expect(await fetchPublishedLatest("https://x/latest.json", res(200, "{}"))).toMatchObject({ kind: "error" });
+    const res = (status: number, body = "") => ({
+      fetchImpl: (async () => new Response(body, { status })) as typeof fetch,
+      delayMs: 0,
+    });
+    const url = "https://x/latest.json";
+    expect(await fetchPublishedLatest(url, res(200, LATEST))).toMatchObject({ kind: "ok" });
+    expect(await fetchPublishedLatest(url, res(404))).toMatchObject({ kind: "missing" });
+    expect(await fetchPublishedLatest(url, res(503))).toMatchObject({ kind: "error" });
+    expect(await fetchPublishedLatest(url, res(403))).toMatchObject({ kind: "error" });
+    expect(await fetchPublishedLatest(url, res(200, "{}"))).toMatchObject({ kind: "error" });
     const boom = (async () => {
       throw new Error("ECONNREFUSED");
     }) as typeof fetch;
-    expect(await fetchPublishedLatest("https://x/latest.json", boom)).toMatchObject({ kind: "error" });
+    expect(await fetchPublishedLatest(url, { fetchImpl: boom, delayMs: 0 })).toMatchObject({ kind: "error" });
+  });
+
+  it("一時的な失敗（5xx・通信の失敗）はやり直す。404・形の誤りはやり直さない。時間切れの信号を渡す", async () => {
+    const calls: number[] = [];
+    const flaky = (async (_url: unknown, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      calls.push(1);
+      if (calls.length === 1) return new Response("", { status: 502 });
+      if (calls.length === 2) throw new Error("ECONNRESET");
+      return new Response(LATEST, { status: 200 });
+    }) as typeof fetch;
+    expect(await fetchPublishedLatest("https://x/latest.json", { fetchImpl: flaky, delayMs: 0 })).toMatchObject({ kind: "ok" });
+    expect(calls).toHaveLength(3);
+    let n = 0;
+    const missing = (async () => (n++, new Response("", { status: 404 }))) as typeof fetch;
+    await fetchPublishedLatest("https://x/latest.json", { fetchImpl: missing, delayMs: 0 });
+    expect(n).toBe(1);
+  });
+
+  it("--allow-missing が許すのは 404 だけ（5xx・形の誤りでは中止する）", () => {
+    const src = read("site/fetch-latest.ts");
+    expect(src).toContain('allowMissing && result.kind === "missing"');
   });
 
   it("含めたときは最新版を出し、含めないときは『最初のリリースの前』を出す", () => {
@@ -290,7 +331,15 @@ describe("latest.json", () => {
       expect(plainHome).not.toContain("1.2.3");
       const withDl = readFileSync(join(withDir, lang, "download", "index.html"), "utf8");
       expect(withDl).toContain("https://github.com/misty-swan/yunagi/releases/download/v1.2.3/Yunagi_1.2.3_arm64.app.tar.gz");
-      expect(withDl).toContain("Yunagi_1.2.3_x86_64-setup.exe.sha256");
+      // 一覧は latest.json の platforms にある組だけ（この試験用の latest.json は macOS arm64 と Linux x86_64）
+      expect(withDl).toContain("Yunagi_1.2.3_x86_64.AppImage.sha256");
+      expect(withDl).not.toContain("Yunagi_1.2.3_x86_64-setup.exe");
+      expect(withDl).not.toContain("Yunagi_1.2.3_x86_64.app.tar.gz");
+      // 表を包む領域は 1 つだけ（スロットの中の表を二重に包まない）
+      const doc = new JSDOM(withDl).window.document;
+      for (const t of doc.querySelectorAll("main table")) {
+        expect(t.closest(".scroll")?.parentElement?.closest(".scroll")).toBeNull();
+      }
       expect(readFileSync(join(plainDir, lang, "download", "index.html"), "utf8")).toContain("github.com/misty-swan/yunagi/releases");
     }
   });
@@ -299,6 +348,24 @@ describe("latest.json", () => {
     const bad = join(tmp, "bad.json");
     writeFileSync(bad, '{"version":"x"}');
     expect(() => build({ outDir: join(tmp, "bad-out"), latestJson: bad })).toThrow(/version/);
+  });
+
+  it("出力先を消す前に入力を読む。リポジトリやその上、関係ないフォルダは消さずに止める", () => {
+    // 入力が出力先の中にあっても、先に読むので消えて失敗しない
+    const out = join(tmp, "inside");
+    build({ outDir: out });
+    writeFileSync(join(out, "in.json"), LATEST);
+    expect(() => build({ outDir: out, latestJson: join(out, "in.json") })).not.toThrow();
+    expect(readFileSync(join(out, "latest.json"), "utf8")).toBe(LATEST);
+    // リポジトリ自身・その上
+    expect(() => build({ outDir: ROOT })).toThrow(/消せない/);
+    expect(() => build({ outDir: join(ROOT, "..") })).toThrow(/消せない/);
+    // 空でなく、前のビルドの出力でもない
+    const other = join(tmp, "other");
+    mkdirSync(other);
+    writeFileSync(join(other, "keep.txt"), "x");
+    expect(() => build({ outDir: other })).toThrow(/消さない/);
+    expect(existsSync(join(other, "keep.txt"))).toBe(true);
   });
 });
 
@@ -497,7 +564,7 @@ describe("公開のワークフロー（.github/workflows/site.yml）", () => {
   });
 
   it("トリガーのパスに、サイトの元になるファイルが入っている", () => {
-    for (const p of ["site/**", "install/install.sh", "install/install.ps1", "docs/user/**", "docs/operations/CHANGELOG.md", "docs/operations/CHANGELOG.en.md"]) {
+    for (const p of ["site/**", "install/install.sh", "install/install.ps1", "scripts/release/package.ts", "scripts/release/version.ts", "docs/user/**", "docs/operations/CHANGELOG.md", "docs/operations/CHANGELOG.en.md"]) {
       expect(code, p).toContain(`- "${p}"`);
     }
   });

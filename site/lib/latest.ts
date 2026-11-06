@@ -1,5 +1,7 @@
 // latest.json（更新情報。ビルド・配布手順書 5.1）の読み取りと検査。
 // サイトのビルドと、公開用のワークフローが「いま公開中の latest.json」を取り込む段が使う。
+import { VERSION_PATTERN } from "../../scripts/release/version.ts";
+
 // 形は Tauri の静的な形（version・notes・pub_date・platforms）。インストールスクリプトは
 // ファイルの中で最初に現れる "version" の値を読むので、トップレベルの version を入れ子の項目より前に置く（4.1 の 2）。
 
@@ -7,9 +9,10 @@
 export interface Latest {
   version: string;
   pubDate: string | null;
+  /** 公開する配布物の組（`platforms` のキー。ダウンロードのページの一覧は、これにある組だけを出す） */
+  platforms: string[];
 }
 
-const VERSION = /^\d+\.\d+\.\d+$/;
 const PLATFORMS = [
   "darwin-aarch64",
   "darwin-x86_64",
@@ -32,7 +35,7 @@ export function parseLatest(text: string): Latest {
   }
   const obj = json as Record<string, unknown>;
   const version = obj.version;
-  if (typeof version !== "string" || !VERSION.test(version)) {
+  if (typeof version !== "string" || !VERSION_PATTERN.test(version)) {
     throw new Error(`latest.json の version が <数>.<数>.<数> の形ではない: ${String(version)}`);
   }
   // インストールスクリプトは最初の "version" を読む。ほかの項目より前に置く
@@ -58,7 +61,7 @@ export function parseLatest(text: string): Latest {
     }
   }
   const pubDate = typeof obj.pub_date === "string" ? obj.pub_date : null;
-  return { version, pubDate };
+  return { version, pubDate, platforms: entries.map(([key]) => key) };
 }
 
 /** 取得の結果を、公開用のワークフローが取るべき動きに直す。 */
@@ -67,28 +70,52 @@ export type FetchedLatest =
   | { kind: "missing"; reason: string }
   | { kind: "error"; reason: string };
 
+/** 取得の試み。通信が止まったままにならないよう時間切れを付け、一時的な失敗は数回やり直す。 */
+export interface FetchOptions {
+  fetchImpl?: typeof fetch;
+  /** 1 回の取得の時間切れ（ミリ秒） */
+  timeoutMs?: number;
+  /** 試す回数の上限 */
+  attempts?: number;
+  /** やり直すまでの待ち（ミリ秒） */
+  delayMs?: number;
+}
+
 /**
  * いま公開中の latest.json を取る（サイトだけの変更のデプロイが、これを含める。ビルド・配布手順書 3.4）。
  * 404 は「まだ公開していない」、それ以外の失敗（通信できない・5xx・形の誤り）は「取れなかった」で分ける。
+ * 通信の失敗と 5xx は、時間切れを付けて数回やり直す（一時的な失敗で公開全体を止めないため）。404 と形の誤りはやり直さない。
  * 取れなかったときに、含め忘れて 404 にしない・古い写しで上書きしないのは、呼ぶ側が決める。
  */
-export async function fetchPublishedLatest(
-  url: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<FetchedLatest> {
-  let res: Response;
-  try {
-    // キャッシュに頼らず、配布元から取る
-    res = await fetchImpl(url, { headers: { "Cache-Control": "no-cache" }, redirect: "error" });
-  } catch (e) {
-    return { kind: "error", reason: `取得できなかった: ${e instanceof Error ? e.message : String(e)}` };
+export async function fetchPublishedLatest(url: string, options: FetchOptions = {}): Promise<FetchedLatest> {
+  const { fetchImpl = fetch, timeoutMs = 15_000, attempts = 3, delayMs = 2_000 } = options;
+  let last: FetchedLatest = { kind: "error", reason: "取得を試していない" };
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, delayMs));
+    let res: Response;
+    try {
+      // キャッシュに頼らず、配布元から取る
+      res = await fetchImpl(url, {
+        headers: { "Cache-Control": "no-cache" },
+        redirect: "error",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      last = { kind: "error", reason: `取得できなかった: ${e instanceof Error ? e.message : String(e)}` };
+      continue;
+    }
+    if (res.status === 404) return { kind: "missing", reason: `${url} は 404（まだ公開していない）` };
+    if (res.status >= 500) {
+      last = { kind: "error", reason: `${url} が ${res.status} を返した` };
+      continue;
+    }
+    if (!res.ok) return { kind: "error", reason: `${url} が ${res.status} を返した` };
+    const text = await res.text();
+    try {
+      return { kind: "ok", text, latest: parseLatest(text) };
+    } catch (e) {
+      return { kind: "error", reason: e instanceof Error ? e.message : String(e) };
+    }
   }
-  if (res.status === 404) return { kind: "missing", reason: `${url} は 404（まだ公開していない）` };
-  if (!res.ok) return { kind: "error", reason: `${url} が ${res.status} を返した` };
-  const text = await res.text();
-  try {
-    return { kind: "ok", text, latest: parseLatest(text) };
-  } catch (e) {
-    return { kind: "error", reason: e instanceof Error ? e.message : String(e) };
-  }
+  return last;
 }

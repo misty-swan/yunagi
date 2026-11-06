@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023", "DOM"],
+    "lib": ["ES2023"],
     "types": ["node"],
     "allowJs": true,
     "checkJs": true,
@@ -13,5 +13,5 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["vite.config.ts", "svelte.config.js", "install/**/*.ts", "scripts/**/*.ts", "site/**/*.ts"]
+  "include": ["vite.config.ts", "svelte.config.js", "install/**/*.ts", "scripts/**/*.ts"]
 }

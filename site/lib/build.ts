@@ -1,7 +1,8 @@
 // 公式サイトをビルドして出力先に書く。使うのは Node.js の標準の機能と marked だけ。
 // 決まり：docs/release/07-build-and-distribution.md 2章「公式サイトの作り方」。
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, parse, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LANGS, SITE } from "./consts.ts";
 import { esc } from "./html.ts";
@@ -101,19 +102,42 @@ export function redirectsFile(): string {
   return `/ /ja/ 302\n`;
 }
 
+/**
+ * 出力先は、ビルドのたびに丸ごと消して作り直す。誤って別のフォルダ（リポジトリ自身・その上・ホーム）を
+ * 指していたら消さずに止める。すでにあって空でないときは、前のビルドの出力（`_headers` と `ja/index.html` がある）のときだけ消す。
+ */
+function assertSafeOutDir(root: string, outDir: string): void {
+  const out = resolve(outDir);
+  const repo = resolve(root);
+  const rel = relative(out, repo);
+  // out がリポジトリ自身か、その上のフォルダ（リポジトリが out の中にある）
+  if (rel === "" || !rel.startsWith("..")) throw new Error(`出力先 ${out} はリポジトリ自身かその上のフォルダなので消せない`);
+  if (out === resolve(homedir()) || out === parse(out).root) throw new Error(`出力先 ${out} は消せない`);
+  if (existsSync(out)) {
+    if (!statSync(out).isDirectory()) throw new Error(`出力先 ${out} がフォルダではない`);
+    const empty = readdirSync(out).length === 0;
+    const previous = existsSync(join(out, "_headers")) && existsSync(join(out, "ja", "index.html"));
+    if (!empty && !previous) throw new Error(`出力先 ${out} は空でなく、前のビルドの出力でもないので消さない`);
+  }
+}
+
 export function build(options: BuildOptions): BuildResult {
   const root = options.root ?? ROOT;
   const { outDir } = options;
   const files: string[] = [];
+
+  // 入力は、出力先を消す前に読む（出力先の中にある入力を消してしまわない）
+  let latest: Latest | null = null;
+  let latestText: string | null = null;
+  if (options.latestJson !== undefined) {
+    latestText = readFileSync(options.latestJson, "utf8");
+    latest = parseLatest(latestText);
+  }
+
+  assertSafeOutDir(root, outDir);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
-
-  let latest: Latest | null = null;
-  if (options.latestJson !== undefined) {
-    const text = readFileSync(options.latestJson, "utf8");
-    latest = parseLatest(text);
-    write(outDir, "latest.json", text, files);
-  }
+  if (latestText !== null) write(outDir, "latest.json", latestText, files);
 
   const keyPath = join(root, "site", "keys", "release.pub");
   let releaseKey: string | null = null;

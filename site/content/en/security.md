@@ -22,7 +22,6 @@ Security fixes are released as patch versions of the latest minor version (for e
 - `SHA256SUMS`, which lists the hashes of every download, carries a minisign signature made with the release key. The steps are in [Verify a download](/en/verify/).
 - In-app updates apply only packages signed with Yunagi's own key, and only after the signature is verified.
 - Yunagi does not use paid OS code signing. Instead, the methods above let you check that a download is the official one.
-- The account behind this site is protected with two-factor authentication.
 
 ## Data
 

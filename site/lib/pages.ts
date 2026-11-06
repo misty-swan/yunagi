@@ -1,5 +1,6 @@
 // 各ページの本文を作る。Markdown の本文は site/content/<言語>/ と docs/ から取り込む（コピーを置かない）。
 import { readFileSync } from "node:fs";
+import { names, type Arch } from "../../scripts/release/package.ts";
 import { join } from "node:path";
 import { DOWNLOAD_BASE, RELEASES_URL, SITE, type Lang } from "./consts.ts";
 import { esc } from "./html.ts";
@@ -49,21 +50,25 @@ function download(lang: Lang, latest: Latest | null): string {
   const v = latest.version;
   const base = `${DOWNLOAD_BASE}/v${v}`;
   const link = (name: string) => `<a href="${esc(`${base}/${name}`)}">${esc(name)}</a>`;
-  const rows: Array<[string, string, string]> = [
-    ["macOS", "arm64", `Yunagi_${v}_arm64.app.tar.gz`],
-    ["macOS", "x86_64", `Yunagi_${v}_x86_64.app.tar.gz`],
-    ["Linux", "x86_64", `Yunagi_${v}_x86_64.AppImage`],
-    ["Linux", "arm64", `Yunagi_${v}_arm64.AppImage`],
-    ["Windows", "x86_64", `Yunagi_${v}_x86_64-setup.exe`],
-    ["Windows", "arm64", `Yunagi_${v}_arm64-setup.exe`],
+  // 出す組は latest.json の platforms にあるものだけ（公開しなかった組へのリンクを作らない）。
+  // ファイル名は配布用 CI の定義（scripts/release/package.ts の names）を使う
+  const all: Array<[string, string, Arch, string]> = [
+    ["darwin-aarch64", "macOS", "arm64", names.macApp(v, "arm64")],
+    ["darwin-x86_64", "macOS", "x86_64", names.macApp(v, "x86_64")],
+    ["linux-x86_64", "Linux", "x86_64", names.appImage(v, "x86_64")],
+    ["linux-aarch64", "Linux", "arm64", names.appImage(v, "arm64")],
+    ["windows-x86_64", "Windows", "x86_64", names.setup(v, "x86_64")],
+    ["windows-aarch64", "Windows", "arm64", names.setup(v, "arm64")],
   ];
+  const rows = all.filter(([key]) => latest.platforms.includes(key));
   const head = ja ? ["OS", "アーキテクチャ", "ファイル", "ハッシュ"] : ["OS", "Architecture", "File", "Hash"];
-  const table = `<div class="scroll" role="region" tabindex="0" aria-label="${esc(UI[lang].tableLabel)}"><table>
+  // 表を横にスクロールできる領域で包むのは、Markdown の変換（renderMarkdown）が、スロットの中の表も含めて行う
+  const table = `<table>
 <thead><tr>${head.map((h) => `<th scope="col">${esc(h)}</th>`).join("")}</tr></thead>
 <tbody>
-${rows.map(([os, arch, name]) => `<tr><td>${os}</td><td>${arch}</td><td>${link(name)}</td><td>${link(`${name}.sha256`)}</td></tr>`).join("\n")}
+${rows.map(([, os, arch, name]) => `<tr><td>${os}</td><td>${arch}</td><td>${link(name)}</td><td>${link(`${name}.sha256`)}</td></tr>`).join("\n")}
 </tbody>
-</table></div>`;
+</table>`;
   const lead = ja
     ? `最新版は <strong>${esc(v)}</strong> です。ファイルは GitHub の Releases（<a href="${esc(`${RELEASES_URL}/tag/v${v}`)}">v${esc(v)}</a>）にあります。`
     : `The latest version is <strong>${esc(v)}</strong>. The files are on GitHub Releases (<a href="${esc(`${RELEASES_URL}/tag/v${v}`)}">v${esc(v)}</a>).`;

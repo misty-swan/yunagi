@@ -55,29 +55,62 @@ function splitSlots(src: string): Array<{ md: string } | { slot: string }> {
   return parts;
 }
 
-/** HTML のコメント（記載ルールなど、読み手に見せないもの）を取り除く。コードの囲みの中は触らない。 */
+/**
+ * HTML のコメント（記載ルールなど、読み手に見せないもの）を取り除く。
+ * コードの囲み（``` と ~~~）の中と、行内コード（`...`）の中は触らない。閉じていないコメントは、
+ * 以降の本文を黙って捨ててしまうので、例外にして止める。
+ */
 function stripComments(md: string): string {
   const out: string[] = [];
-  let fence = false;
+  let fence: string | null = null; // 開いている囲みの記号（``` か ~~~）
   let inComment = false;
   for (const line of md.split("\n")) {
-    if (!inComment && /^\s*```/.test(line)) fence = !fence;
-    if (fence) {
+    if (!inComment) {
+      const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (fence === null && m) fence = m[1][0].repeat(3);
+      else if (fence !== null && m && m[1][0] === fence[0]) {
+        out.push(line);
+        fence = null;
+        continue;
+      }
+    }
+    if (fence !== null) {
       out.push(line);
       continue;
     }
-    if (inComment) {
-      if (line.includes("-->")) inComment = false;
-      continue;
+    // 行内コードの区間は、そのまま残す。残りの区間でコメントを探す
+    let result = "";
+    for (const part of line.split(/(`+[^`]*`+)/)) {
+      if (!inComment && part.startsWith("`")) {
+        result += part;
+        continue;
+      }
+      let rest = part;
+      while (rest !== "") {
+        if (inComment) {
+          const end = rest.indexOf("-->");
+          if (end < 0) {
+            rest = "";
+          } else {
+            inComment = false;
+            rest = rest.slice(end + 3);
+          }
+        } else {
+          const start = rest.indexOf("<!--");
+          if (start < 0) {
+            result += rest;
+            rest = "";
+          } else {
+            result += rest.slice(0, start);
+            inComment = true;
+            rest = rest.slice(start + 4);
+          }
+        }
+      }
     }
-    const start = line.indexOf("<!--");
-    if (start >= 0 && !line.slice(start).includes("-->")) {
-      inComment = true;
-      if (line.slice(0, start).trim() !== "") out.push(line.slice(0, start));
-      continue;
-    }
-    out.push(line.replace(/<!--.*?-->/g, ""));
+    out.push(result);
   }
+  if (inComment) throw new Error("閉じていない HTML コメント（<!-- に対応する --> が無い）");
   return out.join("\n");
 }
 

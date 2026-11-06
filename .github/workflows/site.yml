@@ -18,6 +18,8 @@ on:
       - "site/**"
       - "install/install.sh"
       - "install/install.ps1"
+      - "scripts/release/package.ts"
+      - "scripts/release/version.ts"
       - "docs/user/**"
       - "docs/operations/CHANGELOG.md"
       - "docs/operations/CHANGELOG.en.md"
@@ -34,7 +36,10 @@ on:
         type: boolean
         default: false
 
-# 公開は 1 つずつ。古い実行を途中で止めない（公開の途中で止めると、中途半端な状態になりうるため）
+# 公開は 1 つずつ。古い実行を途中で止めない（公開の途中で止めると、中途半端な状態になりうるため）。
+# build が取った latest.json が古くなって、先に公開されたリリースのものを上書きしないよう、
+# リリースのデプロイ（YUN-101）も同じ group 名 `site-deploy` を使う（07 の 2章「公式サイトの公開の仕組み」）。
+# 待っていた実行は、前の公開が終わってから始まり、そのときに latest.json を取る
 concurrency:
   group: site-deploy
   cancel-in-progress: false
