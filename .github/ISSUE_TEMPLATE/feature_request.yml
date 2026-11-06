@@ -1,0 +1,27 @@
+name: 要望（Feature request）
+description: こうなっていたら使いやすい、という提案。日本語でも英語でも書けます。
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Yunagi は「その日の仕事ノート 1 枚」に絞ったアプリです。何を作るかは設計書（`docs/`）が正本で、画面の構成や操作の流れは運営者が決めます。要望は読みますが、実現を約束するものではありません。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること
+      description: 提案の前に、いまの使い方で何が困るかを書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: こうなっていてほしい
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 今のやりくり・ほかの案
+    validations:
+      required: false

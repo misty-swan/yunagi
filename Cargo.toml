@@ -9,6 +9,9 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
+# 本体のライセンス（利用する人がどちらかを選べる。LICENSE-MIT・LICENSE-APACHE。docs/legal/third-party-licenses.md 3章）。
+# 4つのクレートは `license.workspace = true` で使う。crates.io には出さない（publish = false）
+license = "MIT OR Apache-2.0"
 
 # 説明（doc コメント）の警告。rustdoc が既定で警告にするもの（`rustdoc -W help` で warn のもの）を、
 # すべて失敗にする（`pnpm check:doc`）。Rust の版を上げたら、増えたものが無いかを確かめて足す。

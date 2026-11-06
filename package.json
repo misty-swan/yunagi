@@ -1,6 +1,7 @@
 {
   "name": "yunagi",
   "private": true,
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "scripts": {
