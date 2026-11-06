@@ -43,7 +43,8 @@
   --on-accent: var(--surface);
 }
 
-@media (prefers-color-scheme: dark) {
+/* 印刷は、背景を印刷しない設定が多く、明るい文字が紙で見えなくなるので、ダークは画面だけに当てる */
+@media screen and (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1320;
     --side: #0b0f19;
@@ -99,6 +100,11 @@ h1,
 h2,
 h3 {
   text-wrap: balance;
+}
+
+/* 日本語の見出しは、文節の切れ目で折り返す（対応していない環境では、ふつうの折り返し） */
+:lang(ja) :is(h1, h2, h3) {
+  word-break: auto-phrase;
 }
 
 a {

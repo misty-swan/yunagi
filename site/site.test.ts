@@ -144,6 +144,13 @@ describe("各ページの HTML", () => {
   });
 
   it("リンク切れが無い（内部のリンクは出力の中のファイルと見出しの id に着く）", () => {
+    // 見出しの id は、行き先のページごとに 1 回だけ読む（リンクのたびに読み直すと、全体を並列に流したとき 5 秒を超えた）
+    const idsOf = new Map<string, Set<string>>();
+    const ids = (file: string) => {
+      let found = idsOf.get(file);
+      if (!found) idsOf.set(file, (found = new Set([...dom(file).querySelectorAll("[id]")].map((e) => e.id))));
+      return found;
+    };
     for (const dir of dirs) {
       for (const file of htmlFiles(dir)) {
         const rel = relative(tmp, file);
@@ -161,14 +168,12 @@ describe("各ページの HTML", () => {
           }
           if (frag) {
             expect(target.endsWith(".html"), `${rel}: ${href}`).toBe(true);
-            const ids = new Set([...dom(target).querySelectorAll("[id]")].map((e) => e.id));
-            expect(ids.has(decodeURIComponent(frag)), `${rel}: ${href} の見出しが無い`).toBe(true);
+            expect(ids(target).has(decodeURIComponent(frag)), `${rel}: ${href} の見出しが無い`).toBe(true);
           }
         }
       }
     }
-    // 全ページを jsdom で読む検査は、全体を並列に流すと既定の 5 秒を超えることがある（時間切れで落ちていた）
-  }, 60_000);
+  });
 
   it("日英で同じ構成（見出しの並び・コードの囲み・表・リンクの数）", () => {
     for (const dir of dirs) {
@@ -463,7 +468,9 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     return new Map([...block.matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1], norm(m[2])]));
   };
   const lightBlock = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
-  const darkStart = css.indexOf("@media (prefers-color-scheme: dark)");
+  // ダークは画面だけに当てる（印刷で明るい文字が紙で見えなくなるのを防ぐ）
+  const darkStart = css.indexOf("@media screen and (prefers-color-scheme: dark)");
+  if (darkStart < 0) throw new Error("ダークのトークンの規則が見つからない");
   const darkBlock = css.slice(css.indexOf(":root {", darkStart), css.indexOf("}", css.indexOf(":root {", darkStart)));
   const light = tokens(lightBlock);
   const dark = tokens(darkBlock);
@@ -559,7 +566,7 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     for (const e of labels(en)) expect(e.hasAttribute("lang"), e.textContent ?? "").toBe(false);
   });
 
-  it("印刷用の規則がある（景色とナビを出さない）。動きの規則は無い", () => {
+  it("印刷用の規則がある（景色とナビを出さない）", () => {
     expect(css).toMatch(/@media print \{[\s\S]*\.hero-scene[\s\S]*display: none/);
   });
 
