@@ -5,8 +5,10 @@
 - 有料の開発者登録（Apple Developer Program、Windows のコード署名証明書）を使わずに配布する。
 - 主な導入方法は、ターミナルからの1行インストール。macOS は Homebrew tap も提供する。
 - アプリの自動更新は Tauri Updater を使い、Yunagi 独自の鍵で署名する。
-- 配布物の実体は GitHub Releases に置き、利用者への案内は公式サイトに一本化する（Homebrew tap は公式サイトから案内する補助経路）。要件定義書 9章の「配布経路は公式サイトのみ」は「ストアでは販売しない」の意味である。
-- 本体ソースの公開可否にかかわらず、配布・Issue・脆弱性報告用の公開リポジトリ（インストールスクリプト、CHANGELOG、SECURITY.md を置く）を用意する。本書で「GitHub」と書くときはこの公開リポジトリを指す。
+- 配布物の実体は GitHub Releases に置き、利用者への案内は公式サイトに一本化する（Homebrew tap は公式サイトから案内する補助経路）。公式サイトは Cloudflare Pages に置く（2章「公式サイトの置き場所」）。要件定義書 9章の「配布経路は公式サイトのみ」は「ストアでは販売しない」の意味である。
+- **本体のソースは、今のリポジトリ `misty-swan/yunagi` をそのまま公開する**（2026-11-06 オーナー決定。YUN-103）。配布・Issue・脆弱性報告も、同じ公開リポジトリで受ける（インストールスクリプト、CHANGELOG、SECURITY.md もここに置く）。本書で「GitHub」と書くときはこの公開リポジトリを指す。
+  - 本体ソースのライセンスは **MIT と Apache-2.0 のデュアル**（利用する人がどちらかを選べる）。LICENSE ファイルを置くのは YUN-109（third-party-licenses.md 3章）。
+  - 公開への切り替えは、公開前の点検（秘密情報・公開してよくないファイル・LICENSE・公開向けの README など）を済ませてから、オーナーが行う（YUN-109）。切り替えまでは、リポジトリは非公開のままで、この書の「公開した時点で〜」と書いた動きは、まだ確かめられていない。
 - 全配布物の SHA-256 ハッシュと、その署名を公開する（2章）。
 
 ## 2. 配布物
@@ -19,7 +21,7 @@
 
 - CLI は GUI とは別のコンソール用バイナリ `yunagi`（Windows は `yunagi.exe`）として同梱する。
 - **配布物の名前と中身**（2026-11-05 決定。YUN-95。インストールスクリプトと配布用 CI（YUN-97）が食い違わないための取り決め）：
-  - `<ver>` は `1.2.3` の形（`v` を付けない）。Release のタグは `v<ver>`。ファイルは `<配布元>/v<ver>/<ファイル名>` に置く（`<配布元>` は公開リポジトリの Release のダウンロード先。公開リポジトリが決まるまで仮の表記）。
+  - `<ver>` は `1.2.3` の形（`v` を付けない）。Release のタグは `v<ver>`。ファイルは `<配布元>/v<ver>/<ファイル名>` に置く（`<配布元>` は `https://github.com/misty-swan/yunagi/releases/download`。公開リポジトリの Release のダウンロード先。2026-11-06 決定。YUN-103。たとえば `https://github.com/misty-swan/yunagi/releases/download/v1.2.3/Yunagi_1.2.3_arm64.app.tar.gz`）。
   - `<arch>` は `x86_64` か `arm64` の 2 つだけ。Tauri がビルドで付ける名前（`amd64`・`aarch64`・`x64` など）は、配布用 CI がこの名前に付け替えてから Release に置く（付け替えは 3.3 で作った。Release に置くのは YUN-101）。インストールスクリプトは `uname -m` の `aarch64` を `arm64` に読み替える。
   - 配布物ごとに `<ファイル名>.sha256` を添える。中身は `sha256sum` の出力と同じ `<64 桁の 16 進のハッシュ>  <ファイル名>` の 1 行。スクリプトは最初の欄だけを読む。
   - Linux の `yunagi-cli_<ver>_<arch>.tar.gz` は CLI だけの配布物で、中身はルートに置いた実行ファイル `yunagi` 1 つ（AppImage の中の CLI は外から取り出せないため、別に出す。`install.sh` が使う）。
@@ -28,7 +30,29 @@
 - アプリ内自動更新の対象は、macOS の `.app.tar.gz`、Linux の AppImage、Windows の NSIS 版に限る。Linux の `.tar.gz`・`.deb` は自動更新の対象外で、再導入で更新する（利用者ガイドに明記する）。
 - 配布するアーキテクチャは、テスト計画書 3章の対象環境と1対1で対応させる。リリース前に検証できなかった組み合わせは、ダウンロード案内とリリースノートで「試験提供（動作未保証）」と明記する。
 
-各配布物に対応する `.sha256` と、Tauri Updater 用の署名ファイル（`.sig`）を同時に公開する。あわせて、全配布物のハッシュをまとめた `SHA256SUMS` と、その minisign 署名 `SHA256SUMS.sig` を公開する。`SHA256SUMS.sig` の署名には、Updater 鍵とは別の配布用鍵を使う。配布用の公開鍵は公式サイトと公開リポジトリの両方に掲載し、検証手順を導入ガイドに載せる。更新情報 `latest.json` は `https://<公式サイト>/latest.json` に置き、取り下げ時にすぐ差し替えられるようにする。
+各配布物に対応する `.sha256` と、Tauri Updater 用の署名ファイル（`.sig`）を同時に公開する。あわせて、全配布物のハッシュをまとめた `SHA256SUMS` と、その minisign 署名 `SHA256SUMS.sig` を公開する。`SHA256SUMS.sig` の署名には、Updater 鍵とは別の配布用鍵を使う。配布用の公開鍵は公式サイトと公開リポジトリの両方に掲載し、検証手順を導入ガイドに載せる。更新情報 `latest.json` は、公式サイト（Cloudflare Pages）の `https://<公式サイト>/latest.json` に置き、取り下げ時にすぐ前の版へ戻せるようにする（下の「公式サイトの置き場所」）。
+
+### 公式サイトの置き場所（2026-11-06 決定。YUN-103）
+
+導入案内・ダウンロード・`latest.json`・導入スクリプト（`install.sh`・`install.ps1`）・配布用の公開鍵・お知らせを載せる公式サイトは、**Cloudflare Pages**（無料枠）に置く。ドメインは **`getyunagi.com`**（Cloudflare Registrar で取得済み。DNS も Cloudflare）。本書などの `<公式サイト>` は `getyunagi.com` のこと。仮の表記を実際の値に置き換える作業は YUN-11（`<公式サイト>`・`<公式ドメイン>` の対象の一覧は、その課題の完了の条件）。サイトの作り方（静的サイトの道具・日英の切り替え・ページ構成）は YUN-107 で決める。
+
+- **選んだ理由**：①独自ドメインの結び付けが簡単（ドメインの DNS も Cloudflare にあるので、記録は Cloudflare が自動で作る）。②リポジトリが非公開でも公開できる。③`latest.json` を含むサイトを、操作 1 つで前の公開済みの状態へ戻せる（下の「取り下げ時の戻し方」）。
+- **配布物の実体は置かない**。Pages には 1 ファイル 25 MiB の上限があり（Cloudflare Pages の limits）、AppImage や Windows の配布物が収まらないため。配布物は GitHub Releases（`<配布元>`）に置き、Pages には置かない。サイトが置くのは、小さい文書・スクリプト・`latest.json`・公開鍵だけ。
+- **独自ドメインの結び付け**（オーナーの作業。YUN-107 でサイトを公開するときに行う）：
+  - Pages のプロジェクトの「Custom domains」に `getyunagi.com` を追加する。apex ドメイン（`www` の付かないもの）を結び付けるには、そのドメインが、Pages のプロジェクトと同じ Cloudflare アカウントの zone（DNS の管理単位）であること。`getyunagi.com` は Cloudflare Registrar で取得し DNS も Cloudflare なので満たす。CNAME などの DNS の記録は Cloudflare が自動で作る。
+  - **証明書の発行を妨げる CAA 記録が無いことを確かめる**：`dig CAA getyunagi.com`（または Cloudflare の DNS の画面）で見る。CAA 記録が 1 つも無ければ問題ない。ある場合は、`letsencrypt.org`・`pki.goog; cansignhttpexchanges=yes`・`ssl.com` の 3 つの発行を許す記録（`issue` と `issuewild`）がないと、ドメインの追加が検証で止まる（Cloudflare Pages の custom domains の「Known issues」）。
+  - `www.getyunagi.com` の扱い（apex へ転送するか）は YUN-107 で決める。
+- **サイトの自動公開は、Direct Upload を GitHub Actions から行う方針**（推奨案。Cloudflare の Git 連携は使わない）：
+  - 流れ：GitHub Actions のワークフローが、サイトの元（`site/` など。置き場は YUN-107）をビルドして `wrangler pages deploy <出力先> --project-name=<プロジェクト名> --branch=<本番ブランチ>` で上げる。Cloudflare の公式の手順（`cloudflare/wrangler-action`）に沿う。`--branch` には Pages のプロジェクトの本番ブランチ名を指定する（それ以外の名前で上げたものはプレビューになり、本番にならず、戻し先にもならないため）。
+  - 理由：①ビルドを自分たちの CI（lock ファイル厳守・action の SHA 固定。3章「action の固定」）で行える。Git 連携だと Cloudflare 側のビルド環境に任せ、固定の決まりが及ばない。②いつ公開するかを自分たちで決められる（`latest.json` は Release の配布物がそろってから公開する。7章）。Git 連携では、サイトのファイルを main に入れると自動で公開されてしまう。③`latest.json` を、リポジトリに書き戻さず、配布用 CI（YUN-101）が作ったものとしてそのまま上げられる。
+  - 注意：Pages のプロジェクトは、Git 連携と Direct Upload を後から切り替えられない（Cloudflare の公式の案内）。ここで Direct Upload に決めるので、プロジェクトは **Direct Upload のプロジェクトとして作る**。
+  - 秘密：Cloudflare の API トークンは、「Account → Cloudflare Pages → Edit」だけの権限で作り、GitHub Actions の secrets（`CLOUDFLARE_API_TOKEN`・`CLOUDFLARE_ACCOUNT_ID`）に置く。公開用のワークフローだけが読める形にする（細部は YUN-107・YUN-101）。`wrangler-action` も 3章「action の固定」に従って SHA で固定する。Cloudflare のアカウントには 2 要素認証をかける：アカウントを奪われると、導入スクリプトと `latest.json` を差し替えられる（更新自体は署名を検証するので不正な更新は入らないが、導入スクリプトは署名で守られないため、守りの要になる。SECURITY.md 4.3）。
+- **`latest.json` の送り方**：`/latest.json` は、古い内容が使われ続けないよう、サイトの `_headers` ファイルで `Cache-Control: no-cache` を明示する（Pages の `_headers` で付ける。YUN-107 が作り、公開後に `curl -I` で確かめる）。
+- **取り下げ時の戻し方**（サポート・障害対応手順 5章が参照する）：次の 2 つのどちらかで、`latest.json` を前の版に戻す。急ぐときは (1)。
+  1. **前の公開済みのデプロイに戻す**（Pages の「Rollback」。Cloudflare の公式の案内 Rollbacks）：Cloudflare のダッシュボードで対象の Pages のプロジェクトを開き、「Deployments」の「All deployments」から、戻したい本番のデプロイの「⋯」メニュー →「Rollback to this deployment」を選んで確認する。本番のサイトが**すぐに**その時点の内容に変わる。戻せるのは、ビルドに成功した**本番**のデプロイだけ（プレビューは戻し先にならない）。戻るのは `latest.json` だけでなくサイト全体（導入スクリプトなども、そのデプロイの時点の内容）。新しいデプロイに進み直すこともできる。
+  2. **ファイルを差し替えて再デプロイする**：前の版の `latest.json` を元の内容で作り直し（Release の配布物と `.sig` から、配布用 CI の手順で再生成する）、公開用のワークフローを手動で実行して上げる。数分かかるが、サイトのほかの部分は今のままにできる。
+  - どちらの後も、`curl -fsS https://<公式サイト>/latest.json` の `version` が前の版に戻ったことを確かめる。すでに新しい版へ更新した利用者の手元は戻らない（アプリは古い版へ自動では戻さない）。広がりを止めるための手段である。GitHub の Release の取り下げ（ドラフトへ戻す・削除）は別に行う。手順は、サポート・障害対応手順 5章。
+  - 直前の本番のデプロイが残っていること（戻し先があること）を、リリースのたびに確かめる（7章）。
 
 ### アプリアイコン
 
@@ -52,7 +76,7 @@
 
 ## 3. ビルド（CI）
 
-GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフローは `.github/workflows/release.yml`（開発用 CI の `ci.yml` とは別）。作る範囲は 2 つの課題に分けている（2026-11-05 決定）：1〜3 と 6 の `.sha256` までを YUN-97（検査・ビルド・配布物の名前と中身。3.1〜3.3）、4・5 と 6 の `SHA256SUMS` 以降・7 を YUN-101（署名と公開。3.4。秘密鍵（YUN-100）と公開リポジトリ・公式サイトが決まってから動かせる）が作る。
+GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフローは `.github/workflows/release.yml`（開発用 CI の `ci.yml` とは別）。作る範囲は 2 つの課題に分けている（2026-11-05 決定）：1〜3 と 6 の `.sha256` までを YUN-97（検査・ビルド・配布物の名前と中身。3.1〜3.3）、4・5 と 6 の `SHA256SUMS` 以降・7 を YUN-101（署名と公開。3.4。秘密鍵（YUN-100）と、リポジトリの公開（YUN-109）・公式サイトの公開（YUN-107）が済んでから動かせる。置き場所は決まっている：1章・2章）が作る。
 
 1. タグ `v<ver>` の push を契機に起動する。タグの `<ver>` は、直下の `Cargo.toml` の `[workspace.package]` の `version` と同じでなければ中止する（版は 1 か所にだけ書く。README.md）。
 2. 依存を固定したまま（lock ファイルを厳守）ビルドする。
@@ -108,8 +132,8 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 
 - 手順：①Rust・pnpm・Node.js を入れる（版は `rust-toolchain.toml`・`package.json`・`.node-version` から読む。開発用 CI と同じ）。②`pnpm install --frozen-lockfile`。③`yunagi`（CLI）を `cargo build --release --locked -p yunagi-cli --target <target>` で作る。④`pnpm tauri build --ci --target <target> --bundles <bundles> --config src-tauri/release/common.json`（macOS・Windows は OS ごとの設定 `src-tauri/release/<os>.json` を重ねる）。⑤`scripts/release/package.ts` が配布物の名前と中身をそろえ、`.sha256` を添える（3.3）。⑥成果物（artifact `dist-<名前>`。14 日残す）として保存する。
 - **配布用のビルドの設定は `tauri.conf.json` に入れず、`src-tauri/release/` の設定を `--config` で重ねる。** `tauri.conf.json` の `bundle.active` は `false` のままにする：`bundle.resources`・`bundle.macOS.files` の元のファイル（`THIRD_PARTY_LICENSES.md`・`cli-bin/yunagi`）は CI が置くもので、普段の `cargo test`・`pnpm tauri dev` にその有無を要求させないため。試験（`scripts/release/package.test.ts`）が、`tauri.conf.json` に配布用の設定が入らないことを確かめる。
-- **Linux の arm64 だけ、arm のランナーが要る**（webkit2gtk の交差ビルドは難しいため）。`ubuntu-24.04-arm` は公開リポジトリでないと使えない（2026-11-05 時点。リポジトリは非公開なので、公開リポジトリが決まるまで確かめられない）。macOS の x86_64 は arm のランナー上で交差ビルドし、Windows の arm64 は x64 のランナー上で交差ビルドする。交差ビルドの組が実際に通るかは、試運転（下）と実機で確かめる。
-- **試運転：** このファイル、ビルドの成否を決めるファイル（`src-tauri/` の `tauri.conf.json`・`Cargo.toml`・`capabilities/`・`icons/`・`build.rs`、直下の `Cargo.toml`・`package.json`・`rust-toolchain.toml`・`.node-version`・`vite.config.ts`、フォント）、`src-tauri/release/`、スクリプト、`about.toml`、許可リストの設定、ロックファイルを変える PR では、タグなしで同じ流れを走らせる（`release.yml` の `pull_request`）。公開リポジトリが決まるまで使えない `linux-arm64` を除く 5 組が動く。**ビルド（5 組。macOS・Windows の料金がかかる）は、リポジトリが公開のときだけ PR で自動で走る**（2026-11-05 決定。YUN-102。非公開の間は、料金が月の無料枠（12 ドル）を使い切って Linux のジョブも含めて全部止めるため。単価と見込みはテスト計画書 2章の「macOS・Windows での開発用 CI」）。非公開の間は、検査（`verify`。Linux だけ）が PR で走り、ビルドは手動で走らせる：`gh workflow run Release --ref <ブランチ>`（または Actions 画面の「Run workflow」）。手動もタグなしの試運転で、同じ 5 組が動く。公開した時点で、ワークフローを直さなくても PR で自動で走り出す。タグの push の動きは変えない（常に全 6 組を走らせる）。**公開前（最初のタグを打つ前）に、手動で全部通すこと**（テスト計画書 6章の確認項目）。成果物は残るだけで、Release の作成・公開、署名鍵の使用は、タグの push でも試運転でもこの課題の範囲では行わない。許可外ライセンスの検査の失敗は、試運転でも落とす（3.1）。
+- **Linux の arm64 だけ、arm のランナーが要る**（webkit2gtk の交差ビルドは難しいため）。`ubuntu-24.04-arm` は公開リポジトリでないと使えない（2026-11-05 時点）。リポジトリは 2026-11-06 に公開と決まったが（1章）、切り替え（YUN-109）までは非公開なので、まだ確かめられない。macOS の x86_64 は arm のランナー上で交差ビルドし、Windows の arm64 は x64 のランナー上で交差ビルドする。交差ビルドの組が実際に通るかは、試運転（下）と実機で確かめる。
+- **試運転：** このファイル、ビルドの成否を決めるファイル（`src-tauri/` の `tauri.conf.json`・`Cargo.toml`・`capabilities/`・`icons/`・`build.rs`、直下の `Cargo.toml`・`package.json`・`rust-toolchain.toml`・`.node-version`・`vite.config.ts`、フォント）、`src-tauri/release/`、スクリプト、`about.toml`、許可リストの設定、ロックファイルを変える PR では、タグなしで同じ流れを走らせる（`release.yml` の `pull_request`）。リポジトリを公開するまで使えない `linux-arm64` を除く 5 組が動く（除外は `scripts/release/matrix.ts` の `DRY_RUN_SKIPPED` で決めている）。**ビルド（5 組。macOS・Windows の料金がかかる）は、リポジトリが公開のときだけ PR で自動で走る**（2026-11-05 決定。YUN-102。非公開の間は、料金が月の無料枠（12 ドル）を使い切って Linux のジョブも含めて全部止めるため。単価と見込みはテスト計画書 2章の「macOS・Windows での開発用 CI」）。非公開の間は、検査（`verify`。Linux だけ）が PR で走り、ビルドは手動で走らせる：`gh workflow run Release --ref <ブランチ>`（または Actions 画面の「Run workflow」）。手動もタグなしの試運転で、同じ 5 組が動く。公開した時点で、ワークフローを直さなくても、この 5 組は PR で自動で走り出す（`build` ジョブの `if` が `github.event.repository.private == false` を見るため）。`linux-arm64` は、公開しても試運転からは**除いたまま**で、自動では入らない（`DRY_RUN_SKIPPED` が決めている）。arm のランナーでの確認は、公開後に YUN-109 が行い、試運転に加えるかどうかも、その確認の結果で決める（YUN-109 の完了の条件に書いた）。タグの push の動きは変えない（常に全 6 組を走らせる）。**公開前（最初のタグを打つ前）に、手動で全部通すこと**（テスト計画書 6章の確認項目）。成果物は残るだけで、Release の作成・公開、署名鍵の使用は、タグの push でも試運転でもこの課題の範囲では行わない。許可外ライセンスの検査の失敗は、試運転でも落とす（3.1）。
 - **キャッシュは使わない。** 開発用 CI の `Swatinem/rust-cache` や pnpm のキャッシュは、配布物を作る流れに、過去の実行が置いた物が混ざる経路になるため。ビルドの時間は長くなる。
 - **Tauri が取得する道具は固定していない（既知の制限）。** Tauri のバンドラーは、Linux の AppImage の作成に `linuxdeploy`・AppRun・`linuxdeploy-plugin-appimage`（取得元の `continuous` は移動するリリース）、Windows の NSIS に NSIS 本体とプラグインを、ビルドの中でダウンロードする。action の SHA の固定（下の「action の固定」）の対象外で、Tauri の版を固定する以外の手段が今は無い。許容する理由：取得元は Tauri 公式の `binary-releases` と各プロジェクトの GitHub リリースで、ビルドの結果は 6 章の署名と `.sha256` で利用者が確かめる。署名鍵を持つ段階（YUN-101）では、取得物をハッシュで確かめる手順を足すかを決める（YUN-101 の完了の条件に書いた）。
 - **ビルドの入力：** AppImage の作成は、FUSE の無いランナーでも動くよう `APPIMAGE_EXTRACT_AND_RUN=1` を付ける。
@@ -280,10 +304,10 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 
 ### 5.2 公開鍵と配布元の設定（オーナーの作業）
 
-公開鍵と配布元の本物はまだ決まっていない（署名鍵の作成・公開リポジトリ・公式サイトのどれも未決）。このため `src-tauri/tauri.conf.json` の `plugins.updater` は空のまま置いてあり、**空の間は更新の確認をしない**（エラーにも通知にもしない）。入れる値は次の 2 つで、どちらも空でなくなったときから確認が始まる。
+配布元は決まった（公開リポジトリは `misty-swan/yunagi`、公式サイトは Cloudflare Pages の `getyunagi.com`。1章・2章。2026-11-06）が、公開鍵はまだ無い（署名鍵の作成が未。YUN-100）。このため `src-tauri/tauri.conf.json` の `plugins.updater` は空のまま置いてあり、**空の間は更新の確認をしない**（エラーにも通知にもしない）。入れる値は次の 2 つで、どちらも空でなくなったときから確認が始まる。
 
 - `pubkey`：更新署名鍵（6.1）の公開鍵（`tauri signer generate` が作る `.pub` の中身）。公開鍵は秘密ではないので、リポジトリに置く。
-- `endpoints`：`["https://<公式サイト>/latest.json"]`。`https` 以外はプラグインが断る。
+- `endpoints`：`["https://<公式サイト>/latest.json"]`（`<公式サイト>` は `getyunagi.com`）。`https` 以外はプラグインが断る。サイトと `latest.json` が公開される前に入れると、確認が失敗してログに残るだけになる（5.1）ので、入れる時期は下の手順 ③ のとおり、鍵ができたときとする。
 
 手順（鍵と配布元が決まったときに、オーナーが行う。Linear の YUN-100 が追う。②の `.sig` と `latest.json` を作るのは配布用 CI の署名と公開（YUN-101。3.4）で、完了の条件に書いてある）：①`tauri signer generate` で鍵を作り、秘密鍵とパスフレーズを CI のシークレットとオフラインのバックアップに置く（6.1）。②配布用のビルドの設定（`src-tauri/release/common.json`。3.2）に `bundle.createUpdaterArtifacts` を有効にする（配布用 CI で署名ファイル `.sig` を作る。`tauri.conf.json` には入れない：入れると、鍵の無い手元のビルドが失敗する）。③`plugins.updater.pubkey` と `endpoints` に値を入れる。④配布用 CI が、署名と `latest.json` を公開する。窓の無い試験は、配る設定ファイルの `plugins.updater` がプラグインに読めること（`https` のみ・署名に版を入れる設定・Windows の入れ替え方）を確かめるので、③で形を誤ると `pnpm check` が止める。
 
@@ -313,7 +337,16 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 - [ ] 型チェックの道具（svelte-check）の新しい版が TypeScript 7 系に正式に対応したかを、アーキテクチャ設計書 3.2 の目安で確かめた（対応していれば移行を判断する）
 - [ ] タグを作成して push した
 - [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている（`.sig` 以降は YUN-101 が作る。3.4。YUN-97 の範囲では、全 6 組のビルドが成功し、配布物と `.sha256` が成果物に揃っているまで）
-- [ ] `https://<公式サイト>/latest.json` を新しい版に更新した
+- [ ] 公開リポジトリの Release の配布物（`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` を含む）が、`<配布元>/v<ver>/<ファイル名>` から実際に取得できる（`latest.json` を更新する前に確かめる。先に更新すると、更新が 404 で失敗する）
+- [ ] 公式サイトのデプロイ（Cloudflare Pages。2章「公式サイトの置き場所」）で `https://<公式サイト>/latest.json` を新しい版に更新し、`curl -fsS` で取った `version` が新しい版であることを確かめた
+- [ ] Pages の「Deployments」に、直前の本番のデプロイが残っている（取り下げ時の戻し先。2章）
 - [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
 - [ ] Homebrew tap の更新がマージされ、Cask で導入したアプリが起動することを確認した
 - [ ] 公式サイトのダウンロード案内と変更履歴を更新した
+
+最初のリリースの前に、次も確かめる（初回だけ）：
+
+- [ ] リポジトリを公開した（YUN-109）。公開後に macOS・Windows の CI と配布用のビルドが走ることを確かめた（テスト計画書 2章）
+- [ ] 公式サイト（YUN-107）が `getyunagi.com` で見られ、HTTPS の証明書が有効になっている。`dig CAA getyunagi.com` で、証明書の発行を妨げる CAA 記録が無いことを確かめた（2章）
+- [ ] Cloudflare のアカウントに 2 要素認証がかかっている。公開用の API トークンは Pages の編集だけの権限で、GitHub Actions の secrets に置いてある（2章）
+- [ ] 取り下げの戻し方（2章）を、公開前に 1 度試し、`latest.json` が前のデプロイの内容に戻ることを確かめた
