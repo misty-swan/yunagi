@@ -110,11 +110,17 @@ describe("日英の構成がそろっている", () => {
     expect(count(GUIDES.en, "to be confirmed")).toBe(count(GUIDES.ja, "要確認"));
   });
 
-  it("公開前に決まる仮の表記が、日英で同じ数だけ残っている", () => {
+  it("公開前に決まる仮の表記（tap の名前）が、日英で同じ数だけ残っている", () => {
     const count = (t: string, s: string) => t.split(s).length - 1;
-    expect(count(GUIDES.en, "<official-site>")).toBe(count(GUIDES.ja, "<公式サイト>"));
     expect(count(GUIDES.en, "<tap>")).toBe(count(GUIDES.ja, "<tap名>"));
-    expect(count(GUIDES.ja, "<公式サイト>")).toBeGreaterThan(0);
+  });
+
+  it("公式サイトの仮の表記は残っておらず、導入コマンドは本物の公式サイト（getyunagi.com）を指す", () => {
+    for (const t of [GUIDES.ja, GUIDES.en]) {
+      expect(t).not.toMatch(/<公式サイト>|<official-site>/);
+      expect(t).toContain("curl -fsSL https://getyunagi.com/install.sh | sh");
+      expect(t).toContain("irm https://getyunagi.com/install.ps1 | iex");
+    }
   });
 });
 

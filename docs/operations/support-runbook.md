@@ -4,9 +4,9 @@
 
 | 種類 | 窓口 | 目標応答時間 |
 | --- | --- | --- |
-| 不具合報告・要望 | 公開リポジトリの GitHub Issues（テンプレートあり）。アカウントが無い場合は support@<公式ドメイン> | 3 営業日以内に初回反応 |
-| 購入・ライセンス | support@<公式ドメイン>（TBD） | 2 営業日以内 |
-| 個人情報の開示等の請求 | support@<公式ドメイン>（TBD） | 〔法令に沿った期限〕 |
+| 不具合報告・要望 | 公開リポジトリの GitHub Issues（テンプレートあり）。アカウントが無い場合は support@getyunagi.com | 3 営業日以内に初回反応 |
+| 購入・ライセンス | support@getyunagi.com | 2 営業日以内 |
+| 個人情報の開示等の請求 | support@getyunagi.com | 〔法令に沿った期限〕 |
 | 脆弱性 | release/SECURITY.md の窓口 | 3 営業日以内 |
 
 ## 2. 不具合報告テンプレート（Issue）
@@ -60,7 +60,7 @@
 
 ## 5. 障害発生時（配布・更新の問題）
 
-1. 不正な配布物や更新が疑われる場合は、直ちに GitHub の Release を取り下げ（ドラフトへ戻すか削除する）、`https://<公式サイト>/latest.json` を前の版に戻す。戻し方は、Cloudflare Pages の「Rollback to this deployment」（急ぐとき）か、ファイルを差し替えての再デプロイ（ビルド・配布手順書 2章「取り下げ時の戻し方」）。戻し先は、直前のデプロイではなく、`latest.json` が良い版を指している最後の本番のデプロイ（リリースの記録に控えてある）。**戻したら、公式サイトの公開用のワークフロー（GitHub Actions）を止める**（止めないと、次の main への push や手動の実行が、取り下げた版で上書きする）。そして `curl -fsS https://<公式サイト>/latest.json` の `version` で確かめる。
+1. 不正な配布物や更新が疑われる場合は、直ちに GitHub の Release を取り下げ（ドラフトへ戻すか削除する）、`https://getyunagi.com/latest.json` を前の版に戻す。戻し方は、Cloudflare Pages の「Rollback to this deployment」（急ぐとき）か、ファイルを差し替えての再デプロイ（ビルド・配布手順書 2章「取り下げ時の戻し方」）。戻し先は、直前のデプロイではなく、`latest.json` が良い版を指している最後の本番のデプロイ（リリースの記録に控えてある）。**戻したら、公式サイトの公開用のワークフロー（GitHub Actions）を止める**（止めないと、次の main への push や手動の実行が、取り下げた版で上書きする）。そして `curl -fsS https://getyunagi.com/latest.json` の `version` で確かめる。
 2. 公式サイトと GitHub で状況を告知する。
 3. 更新署名鍵の漏えいが疑われる場合は、ビルド・配布手順書 6章の手順に従う。
 4. 利用者への影響と対処を CHANGELOG の Security または Fixed に記載し、原因と再発防止策は本書 6章の記録に残す。

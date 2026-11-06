@@ -38,7 +38,7 @@ Web版は、同期機能を提供する段階で閲覧用・補助用として�
 
 ### インストール方式
 
-有料の開発者登録（Apple Developer Program、Windows のコード署名証明書）を使わず、ターミナルから1行で導入する方式を主とする。macOS と Linux は `curl -fsSL https://<公式サイト>/install.sh | sh`、Windows は PowerShell の `irm https://<公式サイト>/install.ps1 | iex` を想定する。
+有料の開発者登録（Apple Developer Program、Windows のコード署名証明書）を使わず、ターミナルから1行で導入する方式を主とする。macOS と Linux は `curl -fsSL https://getyunagi.com/install.sh | sh`、Windows は PowerShell の `irm https://getyunagi.com/install.ps1 | iex` を想定する。
 
 | OS | 配布物 | 署名・OS警告の扱い |
 | --- | --- | --- |
@@ -230,12 +230,12 @@ AIエージェント連携（MCP・CLI）は、第2フェーズ（ロードマ�
 - [x] 外部の課題を障害・詰まりに紐付け、課題の完了時に解消を促す
 - [x] 主な想定ユーザーはエンジニア・技術職に絞る
 - [x] 公式サイトは Cloudflare Pages に置き、ドメインは getyunagi.com とする（2026-11-06。詳細はビルド・配布手順書 2章）
+- [x] アプリ名「Yunagi」の商標（第9類・第42類）の確認：J-PlatPat で「YUNAGI」を検索し、該当なし。アプリ名は「Yunagi」のまま。公式ドメインは getyunagi.com（Cloudflare Registrar で取得済み）（2026-11-06。YUN-11。ビルド・配布手順書 2章）
 - [x] 本体のソースは、今のリポジトリをそのまま公開し、配布物も同じリポジトリの GitHub Releases に置く。ライセンスは MIT と Apache-2.0 のデュアルとする（2026-11-06。ビルド・配布手順書 1章、サードパーティライセンス表記の方針 3章）
 
 ### 未決事項
 
 - [ ] サポーターライセンスと有料同期の価格帯、サポーター特典の内容
-- [ ] アプリ名「Yunagi」の商標（第9類・第42類）の確認（ドメイン getyunagi.com は取得済み。2026-11-06。YUN-11 が商標の確認と、仮の表記の置き換えを行う）
 - [ ] 将来、一般層向けに有料署名とストア配布へ切り替える条件（売上規模など）
 - [ ] Homebrew Cask の postflight で隔離属性を外す方式が使えるか（使えない場合は導入ガイドでの案内のみとする）
 - [ ] Intel Mac に対応する最後の macOS の版の確認（8章の対応OS）

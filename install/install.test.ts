@@ -298,11 +298,14 @@ describe("install.sh：判定と版", () => {
     expect(r.err).toContain("could not read the version");
   });
 
-  it("配布先がまだ仮の表記のままなら、設定する変数を示して中止する", () => {
-    const r = run({ YUNAGI_BASE_URL: "" });
-    expect(r.status).toBe(1);
-    expect(r.err).toContain("YUNAGI_BASE_URL");
-    expect(existsSync(join(home, ".local"))).toBe(false);
+  // 既定の配布元・latest.json の場所で動かすと本物のネットワークに出るので、動かさず、書いてある値だけを確かめる
+  it("既定の配布元と latest.json の場所が、決まった本物の値で、仮の表記を含まない", () => {
+    for (const file of [SCRIPT, PS1]) {
+      const text = readFileSync(file, "utf8");
+      expect(text).toContain("'https://github.com/misty-swan/yunagi/releases/download'");
+      expect(text).toContain("'https://getyunagi.com/latest.json'");
+      expect(text).not.toMatch(/<(site|public-repository)>/);
+    }
   });
 });
 

@@ -11,7 +11,7 @@ Yunagi は、PC の画面を「今日の仕事ノート1枚」として使うア
 #### macOS・Linux
 
 ```sh
-curl -fsSL https://<公式サイト>/install.sh | sh
+curl -fsSL https://getyunagi.com/install.sh | sh
 ```
 
 macOS では Homebrew も使えます。
@@ -29,7 +29,7 @@ xattr -dr com.apple.quarantine /Applications/Yunagi.app
 #### Windows（PowerShell）
 
 ```powershell
-irm https://<公式サイト>/install.ps1 | iex
+irm https://getyunagi.com/install.ps1 | iex
 ```
 
 #### 安全に入れるために
@@ -59,11 +59,11 @@ irm https://<公式サイト>/install.ps1 | iex
 特定の版を入れたいとき（旧版に戻すときなど）は、環境変数 `YUNAGI_VERSION` に版を指定して、インストールスクリプトを実行します。
 
 ```sh
-curl -fsSL https://<公式サイト>/install.sh | YUNAGI_VERSION=1.2.3 sh   # macOS・Linux
+curl -fsSL https://getyunagi.com/install.sh | YUNAGI_VERSION=1.2.3 sh   # macOS・Linux
 ```
 
 ```powershell
-$env:YUNAGI_VERSION="1.2.3"; irm https://<公式サイト>/install.ps1 | iex   # Windows
+$env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex   # Windows
 ```
 
 ## 2. 最初の起動
