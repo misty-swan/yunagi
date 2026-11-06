@@ -1,0 +1,71 @@
+# 不具合報告の項目は、サポート・障害対応手順 2章に合わせる。
+name: 不具合の報告（Bug report）
+description: 思ったとおりに動かない。日本語でも英語でも書けます。
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **脆弱性（セキュリティの問題）は、ここに書かないでください。** [SECURITY.md](https://github.com/misty-swan/yunagi/blob/main/SECURITY.md) の窓口へ。
+        業務ノートの内容など、人に見せたくない情報は貼らないでください。
+  - type: input
+    id: version
+    attributes:
+      label: Yunagi の版
+      description: "`yunagi --version` の出力"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS と版、CPU
+      description: "例：macOS 15（Apple Silicon）、Windows 11（x86_64）、Ubuntu 24.04（arm64）"
+    validations:
+      required: true
+  - type: input
+    id: ime
+    attributes:
+      label: 日本語入力の種類
+      description: 入力に関する不具合のとき。例：macOS の日本語入力、Google 日本語入力、Microsoft IME、Mozc
+    validations:
+      required: false
+  - type: dropdown
+    id: vim
+    attributes:
+      label: Vim モード
+      options:
+        - 無効
+        - 有効
+        - 関係ない・分からない
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現の手順
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した動作
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: 診断情報
+      description: "`yunagi doctor` の出力。業務データの内容は含まれませんが、貼る前に中身を見てください。"
+      render: text
+    validations:
+      required: false

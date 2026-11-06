@@ -2,6 +2,15 @@
 
 PC画面全体を「その日の仕事ノート1枚」として使う、エンジニア向けの日次業務整理アプリ。設計書は `docs/`（案内は `docs/README.md`）。
 
+## 使いたい方へ
+
+- 導入のしかたと使い方は、公式サイト（https://getyunagi.com）と利用者ガイド（[日本語](docs/user/ja/guide.md)・[English](docs/user/en/guide.md)）にあります。このリポジトリのソースを自分でビルドする必要はありません。
+- 最初のリリースを出すまで、配布物とインストールスクリプトはまだありません。
+- 不具合の報告と要望は GitHub の Issues へ（テンプレートがあります）。脆弱性は公開の Issue に書かず、[SECURITY.md](SECURITY.md) の窓口へ。
+- 協力のしかた（外部からの PR は読みますが、取り込みは保証しません）は [CONTRIBUTING.md](CONTRIBUTING.md)、行動規範は [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+
+以下は、このリポジトリのコードを読む・直す人向けの説明です。
+
 ## 構成
 
 | 場所 | 中身 |
@@ -72,3 +81,22 @@ GitHub Actions の開発用 CI（`.github/workflows/ci.yml`）は、PR と main 
 - 原因が2つある種類（`StorageError::RestoreFailed` など）は、主な原因を `source()` で返し、もう一方は原因まで含めて Display に書く。主な原因が後ろにつながったとき、どの失敗の原因かが分かるよう、主な失敗を文の最後に書く。
 - 利用者やログに1行で出すときは、`yunagi_core::error::ErrorChain` で原因まで `: ` でつなぐ。rusqlite など外部のエラーには Display と `source()` の両方に同じ文を出すものがあるので、`ErrorChain` は、前の文と同じ原因の文や、前の文の先頭・末尾に区切って付いている原因の文を省く。
 - MCP・CLI のエラーの `message` と画面のエラー表示の文は、Display をそのまま使わない（`docs/design/05-mcp-cli-spec.md` 4.3、`docs/design/03-ui-spec.md` 3章の保存の失敗の表示）。
+
+## ライセンス
+
+Copyright (c) 2026 misty-swan
+
+Yunagi 本体のソースコードは、次の 2 つのライセンスのデュアルライセンスです。**どちらか好きなほうを選んで**使えます。
+
+- Apache License, Version 2.0（[LICENSE-APACHE](LICENSE-APACHE)）
+- MIT license（[LICENSE-MIT](LICENSE-MIT)）
+
+特に書かない限り、このプロジェクトに提出された変更も、追加の条件なしに同じデュアルライセンスで提供されたものとして扱います（[CONTRIBUTING.md](CONTRIBUTING.md)）。
+
+次のものは、本体とは別のライセンスです。本体のライセンスの対象ではありません。
+
+- 同梱するフォント（`src/assets/fonts/`。Inter と UDEV Gothic HS）：SIL Open Font License 1.1。ライセンス文書はフォントと同じフォルダにあります。
+- 依存するオープンソースのライブラリ：それぞれのライセンスに従います。配布物には、その著作権表示とライセンス本文をまとめた `THIRD_PARTY_LICENSES.md` を同梱します（方針は [docs/legal/third-party-licenses.md](docs/legal/third-party-licenses.md)）。
+- `experiments/`（技術選定の試作）と `prototype/`（画面の見本）は本番のコードではありません。ここに含まれる依存やフォントは、それぞれのライセンスに従います。
+
+「Yunagi」の名前とアイコンは、ソースのライセンスとは別に扱います（Apache-2.0 の 6 条のとおり、ライセンスは商標の使用を許すものではありません）。

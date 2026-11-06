@@ -19,7 +19,7 @@ Yunagi は、PC画面全体を「その日の仕事ノート1枚」として使�
 | design | 06-design-guide.md | デザインガイド | 開発前 |
 | release | 07-build-and-distribution.md | ビルド・配布手順書 | 公開前 |
 | release | 08-test-plan.md | テスト計画書 | 公開前 |
-| release | SECURITY.md | セキュリティ方針（公開リポジトリではルートまたは `.github/` に置く） | 公開前 |
+| release | SECURITY.md | セキュリティ方針の全文（GitHub が認識する窓口の短い版は、リポジトリ直下の `SECURITY.md`） | 公開前 |
 | user/ja | guide.md | 利用者ガイド（日本語） | 公開前 |
 | user/en | guide.md | User Guide (English) | 公開前 |
 | legal | terms-of-service.md | 利用規約（ひな形） | 公開前 |

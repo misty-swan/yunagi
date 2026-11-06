@@ -1,0 +1,10 @@
+# 空の Issue を禁止し、テンプレートから書いてもらう。脆弱性の窓口はここから案内する
+# （サポート・障害対応手順 1章、SECURITY.md）。
+blank_issues_enabled: false
+contact_links:
+  - name: セキュリティの問題を報告する（Report a security issue）
+    url: https://github.com/misty-swan/yunagi/security/advisories/new
+    about: 脆弱性は公開の Issue に書かず、こちら（非公開）か security@getyunagi.com へ。
+  - name: アカウントなしで問い合わせる（Contact by email）
+    url: https://getyunagi.com
+    about: GitHub のアカウントが無い場合は support@getyunagi.com へ。

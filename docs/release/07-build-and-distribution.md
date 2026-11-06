@@ -7,8 +7,8 @@
 - アプリの自動更新は Tauri Updater を使い、Yunagi 独自の鍵で署名する。
 - 配布物の実体は GitHub Releases に置き、利用者への案内は公式サイトに一本化する（Homebrew tap は公式サイトから案内する補助経路）。公式サイトは Cloudflare Pages に置く（2章「公式サイトの置き場所」）。要件定義書 9章の「配布経路は公式サイトのみ」は「ストアでは販売しない」の意味である。
 - **本体のソースは、今のリポジトリ `misty-swan/yunagi` をそのまま公開する**（2026-11-06 オーナー決定。YUN-103）。配布・Issue・脆弱性報告も、同じ公開リポジトリで受ける（インストールスクリプト、CHANGELOG、SECURITY.md もここに置く）。本書で「GitHub」と書くときはこの公開リポジトリを指す。
-  - 本体ソースのライセンスは **MIT と Apache-2.0 のデュアル**（利用する人がどちらかを選べる）。LICENSE ファイルを置くのは YUN-109（third-party-licenses.md 3章）。
-  - 公開への切り替えは、公開前の点検（秘密情報・公開してよくないファイル・LICENSE・公開向けの README など）を済ませてから、オーナーが行う（YUN-109）。切り替えまでは、リポジトリは非公開のままで、この書の「公開した時点で〜」と書いた動きは、まだ確かめられていない。
+  - 本体ソースのライセンスは **MIT と Apache-2.0 のデュアル**（利用する人がどちらかを選べる）。LICENSE ファイル（直下の `LICENSE-MIT`・`LICENSE-APACHE`）の置き方は third-party-licenses.md 3章（YUN-109）。
+  - 公開への切り替えは、公開前の点検（秘密情報・公開してよくないファイル・LICENSE・公開向けの README など）を済ませてから、オーナーが行う（YUN-109。手順は 8章）。切り替えまでは、リポジトリは非公開のままで、この書の「公開した時点で〜」と書いた動きは、まだ確かめられていない。
 - 全配布物の SHA-256 ハッシュと、その署名を公開する（2章）。
 
 ## 2. 配布物
@@ -141,7 +141,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 - 手順：①Rust・pnpm・Node.js を入れる（版は `rust-toolchain.toml`・`package.json`・`.node-version` から読む。開発用 CI と同じ）。②`pnpm install --frozen-lockfile`。③`yunagi`（CLI）を `cargo build --release --locked -p yunagi-cli --target <target>` で作る。④`pnpm tauri build --ci --target <target> --bundles <bundles> --config src-tauri/release/common.json`（macOS・Windows は OS ごとの設定 `src-tauri/release/<os>.json` を重ねる）。⑤`scripts/release/package.ts` が配布物の名前と中身をそろえ、`.sha256` を添える（3.3）。⑥成果物（artifact `dist-<名前>`。14 日残す）として保存する。
 - **配布用のビルドの設定は `tauri.conf.json` に入れず、`src-tauri/release/` の設定を `--config` で重ねる。** `tauri.conf.json` の `bundle.active` は `false` のままにする：`bundle.resources`・`bundle.macOS.files` の元のファイル（`THIRD_PARTY_LICENSES.md`・`cli-bin/yunagi`）は CI が置くもので、普段の `cargo test`・`pnpm tauri dev` にその有無を要求させないため。試験（`scripts/release/package.test.ts`）が、`tauri.conf.json` に配布用の設定が入らないことを確かめる。
 - **Linux の arm64 だけ、arm のランナーが要る**（webkit2gtk の交差ビルドは難しいため）。`ubuntu-24.04-arm` は公開リポジトリでないと使えない（2026-11-05 時点）。リポジトリは 2026-11-06 に公開と決まったが（1章）、切り替え（YUN-109）までは非公開なので、まだ確かめられない。macOS の x86_64 は arm のランナー上で交差ビルドし、Windows の arm64 は x64 のランナー上で交差ビルドする。交差ビルドの組が実際に通るかは、試運転（下）と実機で確かめる。
-- **試運転：** このファイル、ビルドの成否を決めるファイル（`src-tauri/` の `tauri.conf.json`・`Cargo.toml`・`capabilities/`・`icons/`・`build.rs`、直下の `Cargo.toml`・`package.json`・`rust-toolchain.toml`・`.node-version`・`vite.config.ts`、フォント）、`src-tauri/release/`、スクリプト、`about.toml`、許可リストの設定、ロックファイルを変える PR では、タグなしで同じ流れを走らせる（`release.yml` の `pull_request`）。リポジトリを公開するまで使えない `linux-arm64` を除く 5 組が動く（除外は `scripts/release/matrix.ts` の `DRY_RUN_SKIPPED` で決めている）。**ビルド（5 組。macOS・Windows の料金がかかる）は、リポジトリが公開のときだけ PR で自動で走る**（2026-11-05 決定。YUN-102。非公開の間は、料金が月の無料枠（12 ドル）を使い切って Linux のジョブも含めて全部止めるため。単価と見込みはテスト計画書 2章の「macOS・Windows での開発用 CI」）。非公開の間は、検査（`verify`。Linux だけ）が PR で走り、ビルドは手動で走らせる：`gh workflow run Release --ref <ブランチ>`（または Actions 画面の「Run workflow」）。手動もタグなしの試運転で、同じ 5 組が動く。公開した時点で、ワークフローを直さなくても、この 5 組は PR で自動で走り出す（`build` ジョブの `if` が `github.event.repository.private == false` を見るため）。`linux-arm64` は、公開しても試運転からは**除いたまま**で、自動では入らない（`DRY_RUN_SKIPPED` が決めている）。arm のランナーでの確認は、公開後に YUN-109 が行い、試運転に加えるかどうかも、その確認の結果で決める（YUN-109 の完了の条件に書いた）。タグの push の動きは変えない（常に全 6 組を走らせる）。**公開前（最初のタグを打つ前）に、手動で全部通すこと**（テスト計画書 6章の確認項目）。成果物は残るだけで、Release の作成・公開、署名鍵の使用は、タグの push でも試運転でもこの課題の範囲では行わない。許可外ライセンスの検査の失敗は、試運転でも落とす（3.1）。
+- **試運転：** このファイル、ビルドの成否を決めるファイル（`src-tauri/` の `tauri.conf.json`・`Cargo.toml`・`capabilities/`・`icons/`・`build.rs`、直下の `Cargo.toml`・`package.json`・`rust-toolchain.toml`・`.node-version`・`vite.config.ts`、フォント）、`src-tauri/release/`、スクリプト、`about.toml`、許可リストの設定、ロックファイルを変える PR では、タグなしで同じ流れを走らせる（`release.yml` の `pull_request`）。リポジトリを公開するまで使えない `linux-arm64` を除く 5 組が動く（除外は `scripts/release/matrix.ts` の `DRY_RUN_SKIPPED` で決めている）。**ビルド（5 組。macOS・Windows の料金がかかる）は、リポジトリが公開のときだけ PR で自動で走る**（2026-11-05 決定。YUN-102。非公開の間は、料金が月の無料枠（12 ドル）を使い切って Linux のジョブも含めて全部止めるため。単価と見込みはテスト計画書 2章の「macOS・Windows での開発用 CI」）。非公開の間は、検査（`verify`。Linux だけ）が PR で走り、ビルドは手動で走らせる：`gh workflow run Release --ref <ブランチ>`（または Actions 画面の「Run workflow」）。手動もタグなしの試運転で、同じ 5 組が動く。公開した時点で、ワークフローを直さなくても、この 5 組は PR で自動で走り出す（`build` ジョブの `if` が `github.event.repository.private == false` を見るため）。`linux-arm64` は、公開しても試運転からは**除いたまま**で、自動では入らない（`DRY_RUN_SKIPPED` が決めている）。arm のランナーでの確認は、公開後に 8.8 の手順で行い、試運転に加えるかどうかも、その確認の結果で決める（YUN-109 の完了の条件に書いた）。タグの push の動きは変えない（常に全 6 組を走らせる）。**公開前（最初のタグを打つ前）に、手動で全部通すこと**（テスト計画書 6章の確認項目）。成果物は残るだけで、Release の作成・公開、署名鍵の使用は、タグの push でも試運転でもこの課題の範囲では行わない。許可外ライセンスの検査の失敗は、試運転でも落とす（3.1）。
 - **キャッシュは使わない。** 開発用 CI の `Swatinem/rust-cache` や pnpm のキャッシュは、配布物を作る流れに、過去の実行が置いた物が混ざる経路になるため。ビルドの時間は長くなる。
 - **Tauri が取得する道具は固定していない（既知の制限）。** Tauri のバンドラーは、Linux の AppImage の作成に `linuxdeploy`・AppRun・`linuxdeploy-plugin-appimage`（取得元の `continuous` は移動するリリース）、Windows の NSIS に NSIS 本体とプラグインを、ビルドの中でダウンロードする。action の SHA の固定（下の「action の固定」）の対象外で、Tauri の版を固定する以外の手段が今は無い。許容する理由：取得元は Tauri 公式の `binary-releases` と各プロジェクトの GitHub リリースで、ビルドの結果は 6 章の署名と `.sha256` で利用者が確かめる。署名鍵を持つ段階（YUN-101）では、取得物をハッシュで確かめる手順を足すかを決める（YUN-101 の完了の条件に書いた）。
 - **ビルドの入力：** AppImage の作成は、FUSE の無いランナーでも動くよう `APPIMAGE_EXTRACT_AND_RUN=1` を付ける。
@@ -356,7 +356,112 @@ Cask はダウンロードしたアプリに隔離属性（`com.apple.quarantine
 
 最初のリリースの前に、次も確かめる（初回だけ）：
 
-- [ ] リポジトリを公開した（YUN-109）。公開後に macOS・Windows の CI と配布用のビルドが走ることを確かめた（テスト計画書 2章）
+- [ ] リポジトリを公開した（8章の手順。YUN-109）。公開後に macOS・Windows の CI と配布用のビルドが走ることを確かめた（テスト計画書 2章）
 - [ ] 公式サイト（YUN-107）が `getyunagi.com` で見られ、HTTPS の証明書が有効になっている。`dig CAA getyunagi.com` で、証明書の発行を妨げる CAA 記録が無いことを確かめた（2章）
 - [ ] Cloudflare のアカウントに 2 要素認証がかかっている。公開用の API トークンは Pages の編集だけの権限で、GitHub Actions の secrets に置いてある（2章）
 - [ ] 取り下げの戻し方（2章）を、サイトの本番のデプロイを 2 つ以上作ったあと（最初のリリースの前に、試しの `latest.json` で 2 回デプロイしてよい）に 1 度試し、`latest.json` が前のデプロイの内容に戻り、公開用のワークフローを止める手順も確かめた
+
+## 8. リポジトリの公開（2026-11-06 決定。YUN-109）
+
+今のリポジトリ `misty-swan/yunagi` を、履歴ごとそのまま公開する（1章）。本体のライセンスは MIT と Apache-2.0 のデュアル（third-party-licenses.md 3章）。**公開への切り替え（Settings の Danger Zone で Public にする）は、オーナーだけが行う。** 履歴の書き換え（`git filter-repo`・force push）はしない。この章は、オーナーが上から順に実行できる手順である。画面の名前は、2026-11-06 時点の GitHub の画面（英語表示）で書いた。GitHub の画面は変わるので、見つからなければ、項目名で GitHub のドキュメントを探す。
+
+### 8.1 公開するもの・しないもの
+
+| 場所 | 扱い | 理由 |
+| --- | --- | --- |
+| `crates/`・`src/`・`src-tauri/`・`install/`・`scripts/`・`.github/`・直下の設定ファイル | 公開 | 本体のソース |
+| `LICENSE-MIT`・`LICENSE-APACHE`・`README.md`・`CONTRIBUTING.md`・`CODE_OF_CONDUCT.md`・`SECURITY.md` | 公開 | 公開向けの案内 |
+| `docs/design/`・`docs/release/`・`docs/user/`・`docs/operations/`・`docs/Requirements-Document.md`・`docs/README.md` | 公開 | 仕様の正本。秘密は無い（8.2 の点検で確かめた）。利用者ガイドと配布・セキュリティの手順は、公開が前提 |
+| `docs/legal/third-party-licenses.md` | 公開 | ライセンスの方針で、公開が前提 |
+| `docs/future/` | 公開 | 価格は「未決」と書いてあるだけで、数字も取引先も無い。有料機能は構想の段階のドラフト |
+| `CLAUDE.md` | 公開 | 作業の進め方（Linear の運用）だけで、秘密は無い。AI エージェントを使って開発していることを隠さない |
+| `prototype/`・`experiments/` | 公開 | 画面の見本と技術選定の記録。README に「本番のコードではない」と書いてある |
+| `docs/legal/privacy-policy.md`・`terms-of-service.md`・`tokushoho.md` | **公開しない**（8.3 で非公開のリポジトリへ移す） | 弁護士の確認前の叩き台で、〔 〕の仮置きと「公開時に削除」の注記を含む。確定版は YUN-106 で作り、公式サイトに載せる |
+| `.claude/`・`.env` など | もとから追跡していない | `.gitignore` に `.claude/settings.local.json` を入れてある。履歴にも無い（8.2） |
+
+### 8.2 公開前の点検の結果（2026-11-06）
+
+方法：履歴全体（全ブランチ。425 コミット）の差分（`git log -p --all`）と、PR 87 件の本文・コメント・レビューのテキストを、`rg` で検索した。専用の道具（`gitleaks`・`trufflehog`）は入れていない（8.4 の最終確認で、版を固定して一時フォルダに置いた道具で再検査してよい）。
+
+- 検索した形：`ghp_`・`github_pat_`・`gh[ousr]_`・`AKIA`・`sk-`・`xox[abp]-`・`AIza`・`lin_api_`・`cfut_`、`-----BEGIN … PRIVATE`、minisign の秘密鍵、メールアドレス、電話番号・郵便番号、`/home/<名前>/` などの端末のパス、`password`・`secret`・`bearer`・`authorization` などの語、`.env` や鍵の名前のファイルが履歴にあるか。
+- 結果：**鍵・トークン・パスワード・電話番号・住所は無かった**。`secret`・`password` を含む行は、試験用のダミーの文字列（`top-secret` など）と OS の API の名前だけだった。`.env`・鍵・`.claude/` のファイルは、履歴にも無い。
+- 見つかった個人の情報：①コミットの作者のメタデータに、オーナーの個人のメールアドレス（Gmail）が 87 コミット分入っている（GitHub が PR のマージで作ったマージコミット。ファイルの中身には無い）。②PR の本文に Linear の課題への URL（`linear.app/mistyworks/…`。課題の題名が読める）が約 8 種ある。どちらも秘密ではなく、オーナーは公開を了承した（2026-11-06）。履歴は書き換えない。
+- 今後のマージに個人のメールアドレスが入らないようにする設定は、8.4 の手順 2。
+- 見つからなかったもの：価格の数字、取引先の名前、契約の文書。
+
+### 8.3 `docs/legal` の 3 文書を非公開のリポジトリへ移す手順
+
+移し先は、オーナーが作る非公開のリポジトリ `misty-swan/yunagi-private`（`docs/legal/` の下）。**移し先ができてから**、次の順で行う（1 つの PR）。履歴には 3 文書が残る（8.1。叩き台で、秘密ではない）。
+
+1. 非公開のリポジトリに、3 文書をそのままコピーして、コミットする。
+2. 公開側で、3 文書を `git rm` する。
+3. 参照を直す。参照は次の 2 か所だけ（2026-11-06 に `rg` で確かめた。ほかの設計書・コード・試験は、3 文書のパスを書いていない）：`docs/README.md` の表の 3 行（`legal` の `terms-of-service.md`・`privacy-policy.md`・`tokushoho.md`）を、「非公開のリポジトリにある（確定版は YUN-106 で公式サイトに載せる）」という 1 行にまとめる。`docs/legal/third-party-licenses.md` 3章の「公開するものを一覧にして決める」の文を、決めた結果（8.1）への参照に直す。
+4. 参照が壊れないことを、試験が守る：`scripts/docs/public.test.ts` が、Markdown のリンクの相対パスがすべて実在することと、`docs/README.md` の案内の表の文書がすべて実在することを確かめる。移す PR で、3 つのパス（`legal/terms-of-service.md`・`legal/privacy-policy.md`・`legal/tokushoho.md`）を、同じ試験の `PRIVATE_MOVED` に入れる。入れると、表がそれらを指さないこと（手順 3 の直し）と、公開側にそれらが戻っていないことを確かめる。移すまでは `PRIVATE_MOVED` は空で、3 文書が実在するので通る。
+5. `pnpm check` を通す。
+
+法務文書の確定版を公式サイトに載せる課題（YUN-106）は、移し先の文書を元に進める。
+
+### 8.4 公開前の最終確認（オーナー）
+
+公開するコミット（main の先頭）で、次を済ませる。
+
+1. 秘密の再検査：8.2 の検索をもう一度行う（最後の確認から、コミットや PR が増えているため）。見つかったら公開を止める。鍵なら失効する。
+2. GitHub の個人の設定（アカウント全体）：https://github.com/settings/emails を開き、次の 2 つをオンにする。①**Keep my email addresses private**（Web 上の操作で作るコミット・マージに、個人のメールアドレスの代わりに `…@users.noreply.github.com` を使う）。②**Block command line pushes that expose my email**（個人のメールアドレスが入ったコミットの push を止める）。履歴の 87 コミットは変わらない（8.2）。手元の `git config user.email` も noreply のものにする。
+3. LICENSE と README：`LICENSE-MIT`・`LICENSE-APACHE` の著作権者が `misty-swan`、README の「ライセンス」の節がある（`scripts/docs/public.test.ts` が確かめる）。
+4. 8.3 の移動を済ませてある（`docs/legal` の 3 文書が公開側に無い）。
+5. 開発用 CI と配布用 CI の試運転を、公開するコミットで手動で通す（テスト計画書 6章。`gh workflow run CI --ref main`・`gh workflow run Release --ref main`。非公開の間は macOS・Windows の料金がかかる。無料枠が切れていれば、公開後の 8.6 の 7 で確かめる。できなければ、8.7 の 5 で代える）。
+6. リポジトリ全体の secrets（Settings → Secrets and variables → Actions → Repository secrets）が**空**であることを見る。Cloudflare のトークンや署名鍵は、`environment:` と手動の実行の制限を持つワークフロー（YUN-101・YUN-107）ができるまで、リポジトリ全体の secrets に置かない（2章）。
+7. ほかの人のアカウントや、外部のサービスの連携（Settings → Integrations）に、公開してはいけないものが無いことを見る。
+8. 開いている PR が無い、または 8.6 の 5（SHA 固定の必須化）の前に main へ追いつかせる予定がある。
+
+### 8.5 切り替え（オーナー）
+
+1. 8.4 がすべて済んでいることを確かめる。
+2. リポジトリの **Settings → General** を開き、いちばん下の **Danger Zone → Change repository visibility → Change to public** を押す。確認の画面でリポジトリ名を入力して進む。GitHub が、公開による影響（スター・ウォッチの扱いなど）を表示する。
+3. 公開すると取り消しにくい：非公開に戻せるが、一度公開した内容は、フォーク・キャッシュ・アーカイブ（Software Heritage など）に残りうる。戻しても、読まれた内容は消えない。
+4. すぐに 8.6 に進む。切り替えの直後は、設定が未完了のまま公開されている（ブランチ保護も SHA 固定の必須化も、まだ無い）。この間に外部の PR や Issue が来ても、リポジトリの書き込み権限は他人に無いので、main は書き換えられない。
+
+### 8.6 公開直後にやること（オーナー）
+
+Settings の画面は、すべてリポジトリ `misty-swan/yunagi` の Settings。1 から順に行う。
+
+1. **機能の整理**（Settings → General → Features）：**Wikis**・**Discussions**・**Projects** のチェックを外す（情報の置き場を増やさないため。窓口は Issues とメール）。**Issues** はオンのまま（利用者の不具合報告・要望の窓口。サポート手順書 1章。作業管理は Linear。CLAUDE.md）。**Sponsorships** はオフのまま。
+2. **説明とトピック**（リポジトリの最初の画面の右の **About** の歯車）：Description に `PC画面全体を「その日の仕事ノート1枚」として使う、エンジニア向けの日次業務整理アプリ`、Website に `https://getyunagi.com`（公式サイトの公開後。まだなら空でよい）、Topics に `tauri`・`svelte`・`rust`・`note-taking`・`productivity`・`mcp`・`cli` を入れる。**Releases**・**Packages** の表示はそのまま。
+3. **マージの設定**（Settings → General → Pull Requests）：**Allow merge commits** をオン（今までのマージの形）、**Allow squash merging**・**Allow rebase merging** はオフ、**Automatically delete head branches** をオンにする。
+4. **コードのセキュリティ**（Settings → Code security）：
+   - **Private vulnerability reporting** → **Enable**（SECURITY.md の窓口の 1 つ。報告は Security タブの Advisories に届く）。
+   - **Dependency graph**・**Dependabot alerts**・**Dependabot security updates** をオン（脆弱性のある依存を知らせる。Rust・JavaScript の更新の PR は 14 日の目安で別に更新する決まりなので、**Dependabot version updates** は action だけ：`.github/dependabot.yml` で動く。SECURITY.md 4.4）。
+   - **Secret Protection** の **Push protection** をオン（秘密を含む push を止める。公開リポジトリは無料）。**Secret scanning** もオン。
+5. **Actions の設定**（Settings → Actions → General）。上から：
+   - **Actions permissions** → **Allow OWNER, and select non-OWNER actions and reusable workflows** を選び、**Allow actions created by GitHub** をオン、**Allow specified actions and reusable workflows** の欄に、使っている GitHub 以外の action だけを書く：`Swatinem/rust-cache@*, pnpm/action-setup@*`（YUN-107 が足す `cloudflare/wrangler-action@*` などは、その課題で足す）。**Require actions to be pinned to a full-length commit SHA** をオンにする（YUN-98。3章「action の固定」）。オンにしてよいのは、固定の PR（YUN-43）がマージ済みで、開いている PR（Dependabot の PR を含む）が main に追いついているか閉じているとき（タグ指定のワークフローは実行されずに失敗するため）。失敗が出たら、その PR を main に追いつかせる（Dependabot の PR は `@dependabot rebase` とコメント）。
+   - **Fork pull request workflows from outside collaborators** → **Require approval for all external contributors**（外部の人の PR は、オーナーが中身を見て **Approve and run** を押すまで、ワークフローが動かない。悪意あるワークフローの実行を防ぐ）。
+   - **Workflow permissions** → **Read repository contents and packages permissions**（`GITHUB_TOKEN` の既定を読み取りのみにする。書き込みが要るジョブは、ワークフローの `permissions:` で個別に足す）。**Allow GitHub Actions to create and approve pull requests** はオフのまま。
+   - 公開リポジトリでは、フォークからの PR に secrets が渡されない（既定）。変更しない。
+6. **main のブランチ保護**（Settings → Rules → Rulesets → **New ruleset → New branch ruleset**）：
+   - Ruleset Name：`main`。Enforcement status：**Active**。Bypass list：空（オーナーも PR を通す。緊急のときは、このルールセットを一時的に Disabled にする）。
+   - Target branches：**Add target → Include default branch**。
+   - Rules：**Restrict deletions**・**Require a pull request before merging**（Required approvals は 0 のままでよい。一人運営で、自分の PR は自分で承認できないため。中身の確認は `/code-review` とオーナーのマージで行う）・**Require status checks to pass**（**Require branches to be up to date before merging** をオン。**Add checks** で `pnpm check (Linux)`・`cargo test (macOS)`・`cargo test (Windows)` を選ぶ。後ろの 2 つは、一度走ったあとでないと一覧に出ない。8.7 のあとで足す）・**Block force pushes** をオン。**Require linear history** はオフ（マージコミットを使っているため）。
+   - 配布用 CI（`Release`）の検査は、変更したファイルによってしか走らないので、必須にしない（走らないと永遠に待つため）。
+   - 保存したあと、Rulesets の一覧で `main` が **Active** になっていることを見る。
+7. **タグの保護**（Settings → Rules → Rulesets → **New ruleset → New tag ruleset**）：Ruleset Name：`release tags`。Enforcement：Active。Target tags：**Add target → Include by pattern** に `v*`。Rules：**Restrict updates**・**Restrict deletions**・**Block force pushes**（出した版のタグを動かせないようにする。タグの作成はオーナーだけが行う）。
+8. **環境（Environments）はまだ作らない**：リリースの署名と公式サイトの公開に使う Environment（ブランチ・タグの制限つき）は、YUN-101・YUN-107 がワークフローを作るときに作る（2章）。
+
+### 8.7 公開後の CI の確かめ方（オーナー）
+
+公開すると、標準のランナーは無料になり、macOS・Windows の CI が自動で動き出す（ワークフローは直さなくてよい。`ci.yml` の `rust-test` と `release.yml` の `build` の `if` が `private == false` を見る）。
+
+1. `gh workflow run CI --ref main` を実行し（または Actions 画面で CI → **Run workflow**）、`gh run list --workflow CI --limit 3` で結果を見る。**`pnpm check (Linux)`・`cargo test (macOS)`・`cargo test (Windows)` の 3 つがすべて成功する**ことを確かめる。macOS・Windows が走らない（skipped）なら、リポジトリが公開になっていない。
+2. PR を 1 つ作って（`README.md` の誤字を直すなど）、PR でも macOS・Windows が自動で走ることを確かめる。外部の人の PR では、承認するまで走らない（8.6 の 5）。
+3. 3 つが一度走ったら、8.6 の 6 のルールセットに戻って、`cargo test (macOS)`・`cargo test (Windows)` を必須のチェックに足す。
+4. 配布用 CI（`Release`）の試運転：`gh workflow run Release --ref main`。`検査（脆弱性・ライセンス・フォント）` と、`ビルド (…)` の 5 組（linux-x86_64・macos-arm64・macos-x86_64・windows-x86_64・windows-arm64）が成功することを確かめる。Linux の arm64 は、試運転に入っていない（8.8）。
+5. 無料枠が切れていて、公開の前に 8.4 の 5 を確かめられなかった場合は、ここ（1〜4）が、公開前の確認（テスト計画書 6章）の代わりになる。最初のタグを打つ前に済ませる。
+
+### 8.8 Linux の arm64 を試運転に加えるかの判断
+
+試運転（`pull_request`・`workflow_dispatch`）は、`scripts/release/matrix.ts` の `DRY_RUN_SKIPPED` で `linux-arm64` を除いている（3.2。arm のランナー `ubuntu-24.04-arm` は、公開リポジトリでないと使えなかったため）。公開後に、次の順で決める。
+
+1. 確かめるためのブランチを切る：`git switch -c yun-<番号>-arm64-dryrun`（課題は、この確認を追う Linear の課題）。`scripts/release/matrix.ts` の `DRY_RUN_SKIPPED` を `[]` にし、`scripts/release/package.test.ts` の「試運転に `linux-arm64` が入らない」という検査（2 か所）を、入る形に直す。
+2. push して、`gh workflow run Release --ref <そのブランチ>` を実行する（手動の実行は、ワークフローのファイルが main にあれば、ブランチを選べる）。
+3. 確かめること：`ビルド (linux-arm64)` が成功する。成果物 `dist-linux-arm64` に `Yunagi_<ver>_arm64.AppImage`・`yunagi-cli_<ver>_arm64.tar.gz` と、それぞれの `.sha256` がある。同じ実行を 2 回行い、2 回とも成功する（ランナーの混雑・初回だけの失敗を除くため）。
+4. 判断：2 回とも成功し、かつ 1 回の実行の時間が、ほかの組（Linux の x86_64）と同程度（目安として 2 倍以内）なら、試運転に加える（1 のブランチの変更を PR にする。3.2 の「除いたまま」の文と `DRY_RUN_SKIPPED` の説明を直す）。通らない、または時間がかかりすぎるなら、除いたままにして、理由を 3.2 に書く。タグの push は常に全 6 組を走らせるので、除いたままでも最初のタグで初めて見つかる、という失敗の危険は残る。そのときは、リリースの前に、手動で `linux-arm64` を含むブランチを走らせる（7章の初回の確認）。
+5. 実機（arm の Linux）での起動の確認は、別の手動の確認（テスト計画書 4.9）。ここでは、ビルドが通ることだけを見る。
