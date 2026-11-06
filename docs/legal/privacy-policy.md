@@ -40,6 +40,6 @@
 
 ## 7. 問い合わせ窓口
 
-〔運営者名〕・support@〔公式ドメイン〕
+〔運営者名〕・support@getyunagi.com
 
 制定日：〔YYYY年MM月DD日〕

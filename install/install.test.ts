@@ -298,13 +298,50 @@ describe("install.sh：判定と版", () => {
     expect(r.err).toContain("could not read the version");
   });
 
+  it("変数を設定しなくても、書いてある既定値の場所から版と配布物を取る", () => {
+    stockRelease("x86_64");
+    const latest = join(root, "latest.json");
+    writeFileSync(latest, JSON.stringify({ version: VERSION, notes: "", platforms: {} }, null, 2));
+    // 既定値の 2 行だけを偽の場所（file://）に差し替えた写しで動かす（本物のネットワークには出ない）
+    const copy = join(root, "install-copy.sh");
+    const original = readFileSync(SCRIPT, "utf8");
+    const patched = original
+      .replace(/^DEFAULT_BASE_URL=.*$/m, `DEFAULT_BASE_URL='file://${dist}'`)
+      .replace(/^DEFAULT_LATEST_URL=.*$/m, `DEFAULT_LATEST_URL='file://${latest}'`);
+    expect(patched).not.toBe(original);
+    writeFileSync(copy, patched);
+    const r = spawnSync("sh", [copy], {
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        HOME: home,
+        TMPDIR: root,
+        FAKE_UNAME_S: "Linux",
+        FAKE_UNAME_M: "x86_64",
+      },
+      encoding: "utf8",
+    });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(`Installing Yunagi ${VERSION}`);
+  });
+
   // 既定の配布元・latest.json の場所で動かすと本物のネットワークに出るので、動かさず、書いてある値だけを確かめる
   it("既定の配布元と latest.json の場所が、決まった本物の値で、仮の表記を含まない", () => {
+    // src/lib/support.ts（画面が案内する公式サイト・公開リポジトリ）の値を、文字列として読み取る
+    // （この試験は DOM の型の無い設定で検査されるので、support.ts を import しない）
+    const support = readFileSync(resolve(__dirname, "../src/lib/support.ts"), "utf8");
+    const SITE = support.match(/SITE = "([^"]+)"/)?.[1] ?? "";
+    const ISSUES_URL = support.match(/ISSUES_URL = "([^"]+)"/)?.[1] ?? "";
+    expect(SITE).toMatch(/^https:\/\//);
+    expect(ISSUES_URL).toMatch(/\/issues$/);
     for (const file of [SCRIPT, PS1]) {
       const text = readFileSync(file, "utf8");
       expect(text).toContain("'https://github.com/misty-swan/yunagi/releases/download'");
       expect(text).toContain("'https://getyunagi.com/latest.json'");
       expect(text).not.toMatch(/<(site|public-repository)>/);
+      // 画面が案内する公式サイト・公開リポジトリ（src/lib/support.ts）と同じ場所を指す
+      expect(text).toContain(`${SITE}/latest.json`);
+      expect(text).toContain(ISSUES_URL.replace(/\/issues$/, "/releases/download"));
     }
   });
 });
