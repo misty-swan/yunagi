@@ -62,7 +62,7 @@ $env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex
 
 手動で取得したファイルは、使う前に[配布物の確かめ方](/ja/verify/)で照合してください。
 
-- macOS：`.app.tar.gz` を展開し、`Yunagi.app` を好きな場所（たとえば `~/Applications`）に置きます。ブラウザで取ったときは、初回の起動が macOS の警告で止められることがあります。そのときは、ダウンロード時に付いた印（隔離属性）を `xattr -dr com.apple.quarantine <Yunagi.app のパス>` で外してから起動してください。
+- macOS：`.app.tar.gz` を展開し、`Yunagi.app` を好きな場所（たとえば `~/Applications`）に置きます。ブラウザで取ったときは、初回の起動が macOS の警告で止められることがあります。そのときは、ダウンロード時に付いた印（隔離属性）を `xattr -dr com.apple.quarantine ~/Applications/Yunagi.app` で外してから起動してください（置いた場所に合わせて、パスを読み替えます）。
 - Linux：AppImage に実行の権限を付け（`chmod +x`）、実行します。起動には FUSE 2 が要ります。
 - Windows：`-setup.exe` を実行します。
 

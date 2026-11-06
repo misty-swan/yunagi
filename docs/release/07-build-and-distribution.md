@@ -311,9 +311,9 @@ irm https://getyunagi.com/install.ps1 | iex
 
 **v1.0 では Homebrew（自分の tap も、公式の Cask も）を出さない**（2026-11-07 オーナー決定。YUN-8）。主な導入は `install.sh`・`install.ps1`（4.1・4.2）と手動のダウンロード（2章）である。利用者ガイド・公式サイトのダウンロードのページも、Homebrew を案内しない。
 
-理由：
+理由（1つ目の前半は確かな事実。Homebrew の方針の部分は、公式の発表での最終確認ができていない暫定の情報で、出すかを再検討するとき（下）に、最初に確かめ直す）：
 
-- 署名のない（アドホック署名の）アプリは、Gatekeeper に止められる。Homebrew は Gatekeeper を迂回するものを認めない方針で、`--no-quarantine` の廃止が進んでおり、Gatekeeper に通らない Cask は 2026-09-01 以降に段階的に非推奨になる（Homebrew/brew#20755、Homebrew/discussions#7050。公式の発表での最終確認はできていない。暫定の情報）。自分の tap の `postflight` で隔離属性（`com.apple.quarantine`）を外す方法も、将来効かなくなるおそれがある。
+- 署名のない（アドホック署名の）アプリは、Gatekeeper に止められる。**暫定の情報**：Homebrew は Gatekeeper を迂回するものを認めない方針で、`--no-quarantine` の廃止が進んでおり、Gatekeeper に通らない Cask は 2026-09-01 以降に段階的に非推奨になる（Homebrew/brew#20755、Homebrew/discussions#7050。公式の発表での最終確認はできていない。暫定の情報）。自分の tap の `postflight` で隔離属性（`com.apple.quarantine`）を外す方法も、将来効かなくなるおそれがある。
 - そのため、Cask の `postflight` で隔離属性を外せるかを Mac の実機で確かめる作業（YUN-8 の元の完了の条件）は、v1.0 では要らなくなった。
 - アプリ内の更新と Homebrew の記録のずれ（5章）も、出さなければ起きない。
 - tap 用の新しい公開リポジトリも要らない。
@@ -322,7 +322,9 @@ irm https://getyunagi.com/install.ps1 | iex
 
 `yunagi uninstall` の Homebrew の検出（4.4）は、将来 Cask を出したときのために、**消さずに残す**。Cask が無い v1.0 では、この検出に当たる Mac は無い（Caskroom に `yunagi` が無い）ので、動かない。
 
-以下は、**もし出すときの設計メモ**（将来用。v1.0 では使わない）。決めてあることを失わないよう残す。
+#### もし出すときの設計メモ（将来用。v1.0 では使わない・作らない）
+
+以下は、決めてあることを失わないよう残す。**現行の仕様ではない**：v1.0 に tap・Cask は無く、`brew install` の案内も、利用者ガイド・サイトには載せない。
 
 tap 内の Cask でアプリと CLI を配置する。アプリは Cask の既定どおり `/Applications/Yunagi.app` に置き、CLI は Cask の `binary` で Homebrew の bin にリンクする。導入は `brew install <tap名>/yunagi`（`<tap名>` は未定）。
 
@@ -345,7 +347,9 @@ zap delete: [
 
 Cask はダウンロードしたアプリに隔離属性を付けるため、アドホック署名のままでは初回起動が Gatekeeper に止められる。Cask の `postflight` で隔離属性を外す方法は、上の理由で将来効かなくなるおそれがあり、Mac の実機で確かめていない。署名と公証を取ってから出すのが前提である。
 
-**手動で取ったときの隔離属性**：ブラウザで `.app.tar.gz` を取って展開すると、`Yunagi.app` に隔離属性が付き、アドホック署名のままでは初回起動が止められることがある（`curl` で取ったファイルには付かない見込み。インストールスクリプトはこちら。実機の確認は 08 の 4.9）。公式サイトのダウンロードのページの手動の節に、`xattr -dr com.apple.quarantine <Yunagi.app のパス>` で外す手順を載せる（サポート・障害対応手順の 4.1 と同じ）。
+#### 手動で取ったときの隔離属性（v1.0 の仕様）
+
+ブラウザで `.app.tar.gz` を取って展開すると、`Yunagi.app` に隔離属性が付き、アドホック署名のままでは初回起動が止められることがある（`curl` で取ったファイルには付かない見込み。インストールスクリプトはこちら。実機の確認は 08 の 4.9）。公式サイトのダウンロードのページの手動の節に、`xattr -dr com.apple.quarantine ~/Applications/Yunagi.app` で外す手順を載せる（置いた場所に合わせて読み替える。貼ると構文エラーになる `<…>` の書き方は、利用者向けの文では使わない。サポート・障害対応手順の 4.1 と同じ）。
 
 ### 4.4 アンインストール
 
