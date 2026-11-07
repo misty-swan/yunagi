@@ -788,7 +788,13 @@ kbd {
   }
 
   .hero {
+    min-height: 0;
     background: none;
+  }
+
+  .hero-copy {
+    padding-top: 24px;
+    padding-bottom: 24px;
   }
 
   /* 背景を印刷しない設定でも読めるよう、ボタンは枠だけにする */
@@ -803,7 +809,8 @@ kbd {
     overflow: visible;
   }
 
-  a[href^="http"]::after {
+  .doc :is(p, li) a[href^="http"]::after,
+  .site-footer a[href^="http"]::after {
     content: " (" attr(href) ")";
     overflow-wrap: anywhere;
   }

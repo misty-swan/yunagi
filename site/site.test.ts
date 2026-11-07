@@ -549,18 +549,35 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
   });
 
   it("押す場所は高さ 44px 以上（ナビ・言語の切り替え・ボタン・文字だけのリンク・リンクの並び・フッター）", () => {
-    // 規則は『行頭から始まる選び方 { … }』を、画面の幅で変わらない最上位のものから探す。
+    // 画面の幅や印刷で変わる規則（@media などの中）は除いた、最上位の規則だけを読む。
+    // 選び方はコンマで分け、同じ選び方を持つ規則の中身を合わせて見る（書き方を変えても、規則の置き場所が変わっても通る）。
     // min-height は、行の中に並ぶ（inline）要素には効かないので、display も確かめる
-    const topLevel = css.replace(/@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
-    const rule = (sel: string): string => {
-      const escaped = sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\n/g, "\\n");
-      const m = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`).exec(topLevel);
-      expect(m, `${sel} の規則が無い`).not.toBeNull();
-      return (m as RegExpExecArray)[1];
-    };
-    for (const sel of [".logo", ".site-nav a", ".lang a,\n.lang span", ".button", ".actions a:not(.button)", ".links a", ".site-footer a"]) {
-      expect(rule(sel), `${sel}: min-height: 44px が無い`).toMatch(/min-height: 44px/);
-      expect(rule(sel), `${sel}: display: inline-flex が無い`).toMatch(/display: inline-flex/);
+    const rules: Array<{ selectors: string[]; body: string }> = [];
+    let depth = 0;
+    let head = "";
+    let body = "";
+    let atRule = false;
+    for (const ch of css.replace(/\/\*[\s\S]*?\*\//g, "")) {
+      if (ch === "{") {
+        if (depth === 0) atRule = head.trim().startsWith("@");
+        depth++;
+        if (depth === 1) continue;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          if (!atRule) rules.push({ selectors: head.split(",").map((s) => s.trim().replace(/\s+/g, " ")), body });
+          head = "";
+          body = "";
+          continue;
+        }
+      }
+      if (depth === 0) head += ch;
+      else body += ch;
+    }
+    const declarations = (sel: string): string => rules.filter((r) => r.selectors.includes(sel)).map((r) => r.body).join("\n");
+    for (const sel of [".logo", ".site-nav a", ".lang a", ".lang span", ".button", ".actions a:not(.button)", ".links a", ".site-footer a"]) {
+      expect(declarations(sel), `${sel}: min-height: 44px が無い`).toMatch(/min-height: 44px/);
+      expect(declarations(sel), `${sel}: display: inline-flex が無い`).toMatch(/display: inline-flex/);
     }
   });
 
@@ -569,7 +586,7 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     for (const f of files) {
       for (const [i, line] of readFileSync(f, "utf8").split("\n").entries()) {
         // 「FUSE 2 が要ります」のような製品の版の数字は、助数詞が続かないので当たらない
-        expect(line, `${relative(ROOT, f)}:${i + 1}`).not.toMatch(/[0-9] (行|件|つ|か所|営業日|章|世代|時間|桁|字|枚|日)(?![a-zA-Z])/);
+        expect(line, `${relative(ROOT, f)}:${i + 1}`).not.toMatch(/[0-9] (行|件|つ|か所|営業日|章|世代|時間|桁|字|枚|日|回|個|分|秒|年|月|名|点|種類|人|冊|本)(?![a-zA-Z])/);
       }
     }
   });
@@ -591,7 +608,8 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     expect(block).toMatch(/\.skip,\s*\.site-nav,\s*\.hero-scene \{\s*display: none;/);
     expect(block).toMatch(/\.button \{[^}]*background: none/);
     expect(block).toMatch(/pre \{[^}]*white-space: pre-wrap/);
-    expect(block).toMatch(/a\[href\^="http"\]::after \{[^}]*content: " \(" attr\(href\) "\)"/);
+    expect(block).toMatch(/\.doc :is\(p, li\) a\[href\^="http"\]::after,\s*\.site-footer a\[href\^="http"\]::after \{[^}]*content: " \(" attr\(href\) "\)"/);
+    expect(block).toMatch(/\.hero \{[^}]*min-height: 0/);
   });
 
   it("ロゴの色は、アプリのロゴ（src/shell/Logo.svelte）と同じ", () => {
