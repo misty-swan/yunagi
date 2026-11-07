@@ -43,7 +43,8 @@
   --on-accent: var(--surface);
 }
 
-@media (prefers-color-scheme: dark) {
+/* 印刷は、背景を印刷しない設定が多く、明るい文字が紙で見えなくなるので、ダークは画面だけに当てる */
+@media screen and (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1320;
     --side: #0b0f19;
@@ -90,6 +91,20 @@ body {
   font-family: Inter, "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans CJK JP", sans-serif;
   font-size: 15px;
   line-height: 1.65;
+  /* 長い URL・ハッシュ・パスで横にはみ出さない（コードの囲みは、囲みの中で横に動かせる） */
+  overflow-wrap: break-word;
+}
+
+/* 短い見出しは、行の長さをそろえて折り返す（対応していない環境では、ふつうの折り返し） */
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+/* 日本語の見出しは、文節の切れ目で折り返す（対応していない環境では、ふつうの折り返し） */
+:lang(ja) :is(h1, h2, h3) {
+  word-break: auto-phrase;
 }
 
 a {
@@ -124,16 +139,23 @@ a:hover {
   top: 12px;
 }
 
+/* 左右の余白は、承認した見本（案 A）に合わせる：狭い画面 16px、広い画面 64px（中身の幅は 1152px） */
 .wrap {
   width: 100%;
-  max-width: 1152px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 0 16px;
 }
 
 @media (min-width: 720px) {
   .wrap {
-    padding: 0 48px;
+    padding: 0 32px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .wrap {
+    padding: 0 64px;
   }
 }
 
@@ -142,20 +164,29 @@ a:hover {
   border-bottom: 1px solid var(--rule);
 }
 
+/* 押す場所は高さ 44px 以上にし、余白は押す場所の内側で取る */
 .site-header .wrap {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px 32px;
-  padding-top: 20px;
-  padding-bottom: 20px;
+  gap: 4px 32px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+@media (min-width: 720px) {
+  .site-header .wrap {
+    padding-top: 16px;
+    padding-bottom: 16px;
+  }
 }
 
 .logo {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  min-height: 44px;
   color: var(--text);
   text-decoration: none;
 }
@@ -176,14 +207,22 @@ a:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 20px;
+  gap: 0 16px;
   font-size: 13px;
 }
 
+@media (min-width: 720px) {
+  .site-nav {
+    column-gap: 24px;
+  }
+}
+
 .site-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   color: var(--text-muted);
   text-decoration: none;
-  padding: 6px 0;
 }
 
 .site-nav a:hover,
@@ -194,17 +233,19 @@ a:hover {
 
 .lang {
   display: inline-flex;
-  gap: 4px;
-  padding: 2px;
   border: 1px solid var(--rule);
   border-radius: 8px;
   font-size: 12px;
 }
 
+/* 言語の切り替えも、押す場所は高さ 44px 以上 */
 .lang a,
 .lang span {
-  padding: 2px 10px;
-  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 7px;
 }
 
 .lang a {
@@ -257,11 +298,18 @@ a:hover {
   max-width: 600px;
 }
 
+/* 幅 360px でも、日本語の見出しの 1 行（約 10 字）が折り返さない大きさから始める */
 .hero-copy h1 {
   margin: 0;
-  font-size: 32px;
+  font-size: 28px;
   line-height: 1.3;
   font-weight: 300;
+}
+
+@media (min-width: 560px) {
+  .hero-copy h1 {
+    font-size: 32px;
+  }
 }
 
 .hero-copy p {
@@ -277,12 +325,21 @@ a:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 20px;
+  gap: 0 20px;
   margin-top: 4px;
 }
 
+/* 文字だけのリンクも、押す場所は高さ 44px 以上 */
+.actions a:not(.button) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
 .button {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: 12px 28px;
   border-radius: 8px;
   background: var(--accent-strong);
@@ -383,15 +440,21 @@ a:hover {
 
 @media (min-width: 880px) {
   .section {
-    padding: 80px 0;
+    padding: 96px 0;
   }
 }
 
 .section h2 {
   margin: 8px 0 0;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 300;
   line-height: 1.4;
+}
+
+@media (min-width: 880px) {
+  .section h2 {
+    font-size: 28px;
+  }
 }
 
 .section-lead {
@@ -457,11 +520,18 @@ a:hover {
 .links {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 28px;
-  margin: 24px 0 0;
+  gap: 0 28px;
+  margin: 16px 0 0;
   padding: 0;
   list-style: none;
   font-size: 13px;
+}
+
+/* リンクの並びは、1 つ 1 つの押す場所を高さ 44px 以上にする */
+.links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
 }
 
 .facts {
@@ -578,6 +648,25 @@ pre code {
   margin: 12px 0;
 }
 
+/* 1 行の長さ：日本語は約 42 字、英語は約 68 字まで。直下の段落とリストだけ
+   （目次・注記・入れ子のリスト、表とコードの囲みは、囲みの幅いっぱい） */
+.doc > p,
+.doc > ul,
+.doc > ol {
+  max-width: 42em;
+}
+
+.doc:lang(en) > p,
+.doc:lang(en) > ul,
+.doc:lang(en) > ol {
+  max-width: 68ch;
+}
+
+/* 文の中のコードやパスは、狭い画面では途中で折り返す（表の中は、表を横に動かす） */
+.doc :is(p, li) code {
+  overflow-wrap: anywhere;
+}
+
 .doc li {
   margin: 4px 0;
 }
@@ -676,12 +765,53 @@ kbd {
 .site-footer ul {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 24px;
+  gap: 0 24px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* フッターのリンクも、押す場所は高さ 44px 以上 */
 .site-footer a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   color: var(--text-muted);
+}
+
+/* 印刷：景色とナビは出さず、リンク先を文の後ろに添える。コードの囲みは折り返して全部出す */
+@media print {
+  .skip,
+  .site-nav,
+  .hero-scene {
+    display: none;
+  }
+
+  .hero {
+    min-height: 0;
+    background: none;
+  }
+
+  .hero-copy {
+    padding-top: 24px;
+    padding-bottom: 24px;
+  }
+
+  /* 背景を印刷しない設定でも読めるよう、ボタンは枠だけにする */
+  .button {
+    background: none;
+    color: var(--text);
+    border: 1px solid var(--ring);
+  }
+
+  pre {
+    white-space: pre-wrap;
+    overflow: visible;
+  }
+
+  .doc :is(p, li) a[href^="http"]::after,
+  .site-footer a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    overflow-wrap: anywhere;
+  }
 }

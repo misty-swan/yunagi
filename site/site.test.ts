@@ -144,6 +144,13 @@ describe("各ページの HTML", () => {
   });
 
   it("リンク切れが無い（内部のリンクは出力の中のファイルと見出しの id に着く）", () => {
+    // 見出しの id は、行き先のページごとに 1 回だけ読む（リンクのたびに読み直すと、全体を並列に流したとき 5 秒を超えた）
+    const idsOf = new Map<string, Set<string>>();
+    const ids = (file: string) => {
+      let found = idsOf.get(file);
+      if (!found) idsOf.set(file, (found = new Set([...dom(file).querySelectorAll("[id]")].map((e) => e.id))));
+      return found;
+    };
     for (const dir of dirs) {
       for (const file of htmlFiles(dir)) {
         const rel = relative(tmp, file);
@@ -161,8 +168,7 @@ describe("各ページの HTML", () => {
           }
           if (frag) {
             expect(target.endsWith(".html"), `${rel}: ${href}`).toBe(true);
-            const ids = new Set([...dom(target).querySelectorAll("[id]")].map((e) => e.id));
-            expect(ids.has(decodeURIComponent(frag)), `${rel}: ${href} の見出しが無い`).toBe(true);
+            expect(ids(target).has(decodeURIComponent(frag)), `${rel}: ${href} の見出しが無い`).toBe(true);
           }
         }
       }
@@ -463,7 +469,9 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     return new Map([...block.matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1], norm(m[2])]));
   };
   const lightBlock = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
-  const darkStart = css.indexOf("@media (prefers-color-scheme: dark)");
+  // ダークは画面だけに当てる（印刷で明るい文字が紙で見えなくなるのを防ぐ）
+  const darkStart = css.indexOf("@media screen and (prefers-color-scheme: dark)");
+  if (darkStart < 0) throw new Error("ダークのトークンの規則が見つからない");
   const darkBlock = css.slice(css.indexOf(":root {", darkStart), css.indexOf("}", css.indexOf(":root {", darkStart)));
   const light = tokens(lightBlock);
   const dark = tokens(darkBlock);
@@ -539,6 +547,70 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
       expect(m[1].startsWith("/assets/") || m[1].startsWith("#"), m[1]).toBe(true);
     }
     expect(css).not.toMatch(/@import|https?:\/\//);
+  });
+
+  it("押す場所は高さ 44px 以上（ナビ・言語の切り替え・ボタン・文字だけのリンク・リンクの並び・フッター）", () => {
+    // 画面の幅や印刷で変わる規則（@media などの中）は除いた、最上位の規則だけを読む。
+    // 選び方はコンマで分け、同じ選び方を持つ規則の中身を合わせて見る（書き方を変えても、規則の置き場所が変わっても通る）。
+    // min-height は、行の中に並ぶ（inline）要素には効かないので、display も確かめる
+    const rules: Array<{ selectors: string[]; body: string }> = [];
+    let depth = 0;
+    let head = "";
+    let body = "";
+    let atRule = false;
+    for (const ch of css.replace(/\/\*[\s\S]*?\*\//g, "")) {
+      if (ch === "{") {
+        if (depth === 0) atRule = head.trim().startsWith("@");
+        depth++;
+        if (depth === 1) continue;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          if (!atRule) rules.push({ selectors: head.split(",").map((s) => s.trim().replace(/\s+/g, " ")), body });
+          head = "";
+          body = "";
+          continue;
+        }
+      }
+      if (depth === 0) head += ch;
+      else body += ch;
+    }
+    const declarations = (sel: string): string => rules.filter((r) => r.selectors.includes(sel)).map((r) => r.body).join("\n");
+    for (const sel of [".logo", ".site-nav a", ".lang a", ".lang span", ".button", ".actions a:not(.button)", ".links a", ".site-footer a"]) {
+      expect(declarations(sel), `${sel}: min-height: 44px が無い`).toMatch(/min-height: 44px/);
+      expect(declarations(sel), `${sel}: display: inline-flex が無い`).toMatch(/display: inline-flex/);
+    }
+  });
+
+  it("日本語の本文の数字と助数詞の間に空白が無い（サイトの本文・文言とガイド）", () => {
+    const files = [...walk(join(ROOT, "site", "content", "ja")), join(ROOT, "site", "lib", "text.ts"), join(ROOT, "site", "lib", "pages.ts"), join(ROOT, "docs", "user", "ja", "guide.md")];
+    for (const f of files) {
+      for (const [i, line] of readFileSync(f, "utf8").split("\n").entries()) {
+        // 「FUSE 2 が要ります」のような製品の版の数字は、助数詞が続かないので当たらない
+        expect(line, `${relative(ROOT, f)}:${i + 1}`).not.toMatch(/[0-9] (行|件|つ|か所|営業日|章|世代|時間|桁|字|枚|日|回|個|分|秒|年|月|名|点|種類|人|冊|本)(?![a-zA-Z])/);
+      }
+    }
+  });
+
+  it("日本語のページの英字のラベルには lang=\"en\" が付き、英語のページには付かない", () => {
+    const ja = dom(join(plainDir, "ja", "index.html"));
+    const en = dom(join(plainDir, "en", "index.html"));
+    const labels = (d: Document) => [...d.querySelectorAll("p.eyebrow")];
+    expect(labels(ja).length).toBeGreaterThan(0);
+    for (const e of labels(ja)) expect(e.getAttribute("lang"), e.textContent ?? "").toBe("en");
+    for (const e of labels(en)) expect(e.hasAttribute("lang"), e.textContent ?? "").toBe(false);
+  });
+
+  it("印刷用の規則がある（景色とナビを出さない）", () => {
+    const start = css.indexOf("@media print {");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // 印刷の規則は、入れ子の波括弧が 1 段の @media なので、行頭の『}』で終わる
+    const block = css.slice(start, css.indexOf("\n}\n", start));
+    expect(block).toMatch(/\.skip,\s*\.site-nav,\s*\.hero-scene \{\s*display: none;/);
+    expect(block).toMatch(/\.button \{[^}]*background: none/);
+    expect(block).toMatch(/pre \{[^}]*white-space: pre-wrap/);
+    expect(block).toMatch(/\.doc :is\(p, li\) a\[href\^="http"\]::after,\s*\.site-footer a\[href\^="http"\]::after \{[^}]*content: " \(" attr\(href\) "\)"/);
+    expect(block).toMatch(/\.hero \{[^}]*min-height: 0/);
   });
 
   it("ロゴの色は、アプリのロゴ（src/shell/Logo.svelte）と同じ", () => {
