@@ -105,14 +105,14 @@ describe("日英の構成がそろっている", () => {
     expect(keys(GUIDES.en)).toEqual(keys(GUIDES.ja));
   });
 
-  it("「要確認」の但し書きが、日英で同じ数だけ残っている（公開前に消す。docs/release/07-build-and-distribution.md 4.3・5章）", () => {
-    const count = (t: string, s: string) => t.split(s).length - 1;
-    expect(count(GUIDES.en, "to be confirmed")).toBe(count(GUIDES.ja, "要確認"));
+  it("「要確認」の但し書きと、公開前に決まる仮の表記（<tap> など）が残っていない（ガイドはサイトにそのまま載る）", () => {
+    expect(GUIDES.ja).not.toContain("要確認");
+    expect(GUIDES.en).not.toMatch(/to be confirmed/i);
+    for (const t of [GUIDES.ja, GUIDES.en]) expect(t).not.toMatch(/<tap(名)?>/);
   });
 
-  it("公開前に決まる仮の表記（tap の名前）が、日英で同じ数だけ残っている", () => {
-    const count = (t: string, s: string) => t.split(s).length - 1;
-    expect(count(GUIDES.en, "<tap>")).toBe(count(GUIDES.ja, "<tap名>"));
+  it("Homebrew を案内していない（v1.0 では出さない。docs/release/07-build-and-distribution.md 4.3）", () => {
+    for (const t of [GUIDES.ja, GUIDES.en]) expect(t).not.toMatch(/homebrew|brew (install|uninstall)/i);
   });
 
   it("公式サイトの仮の表記は残っておらず、導入コマンドは本物の公式サイト（getyunagi.com）を指す", () => {

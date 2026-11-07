@@ -532,7 +532,7 @@ macOS で想定する場所（サンドボックスに入れない通常のア�
 - 場所は環境変数から求める（Linux は `XDG_DATA_HOME`・`HOME`、Windows は `LOCALAPPDATA`、macOS は `HOME`。6章の既定ディレクトリと同じ決まり。試験は一時フォルダの値に差し替えて行える）。求められないときは、その場所を飛ばさずエラーにする。Tauri の `dirs`（7.0.0）の求め方との違い：Linux は同じ（`XDG_DATA_HOME` が絶対パスならそれ、空・相対パスなら `~/.local/share`。`dirs/src/lin.rs`・`dirs-sys` の `is_absolute_path`）。Windows の `dirs` は環境変数でなく Known Folder（`FOLDERID_LocalAppData`）から求めるので、`LOCALAPPDATA` を書き換えて動かしたときだけ、Tauri が実際に書いた場所とずれる（ふだんは一致する。環境変数を使うのは試験で差し替えるためで、利用者に `LOCALAPPDATA` を変える使い方は想定しない）。
 - アプリが動いている間は、`yunagi.lock`（4章）が取れないので、何も消さずに止まり、アプリ（と、エージェントが起動した MCP サーバー。直接モードで一時的にロックを持つ）を終了するよう知らせる（WebView がファイルを使っている間に消すと、一部だけ消えて残るため）。ロックの取り方と、消す順番（Windows で動いている `yunagi.exe` と、ロックファイルのある既定ディレクトリを消すための順）は、ビルド・配布手順書 4.4。
 - 消せなかったものがあっても、ほかは消し続け、最後に消したものと消せなかったものを一覧にして、終了コードを 0 以外にする。
-- 保存先を変えたまま Homebrew の Cask の `zap` で消すときは、Cask が `config.json` を読めないので、変えた先は消えない（ビルド・配布手順書 4.3）。利用者ガイドの「アンインストール」に書く。
+- Homebrew の Cask（v1.0 では出さない。ビルド・配布手順書 4.3）を将来出すときは、保存先を変えたまま Cask の `zap` で消すと、Cask が `config.json` を読めないので、変えた先は消えない。そのときに利用者ガイドの「アンインストール」に書く。
 
 実装は `crates/cli/src/uninstall/`（YUN-99。コマンドの決まりは CLI・MCP 仕様書 3.1）。識別子はコアの定数 `APP_IDENTIFIER`（`tauri.conf.json` の `identifier` と同じことを試験で固定する）、既定ディレクトリと Linux・Windows の WebView の場所の親は、コアの `local_data_root_for` 1 つから導く（4 通りの試験はコアの `data_dir.rs`）。
 

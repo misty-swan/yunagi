@@ -14,18 +14,6 @@ In this guide, **Mod** means the ⌘ key on macOS and the Ctrl key on Windows an
 curl -fsSL https://getyunagi.com/install.sh | sh
 ```
 
-On macOS you can also use Homebrew:
-
-```sh
-brew install <tap>/yunagi
-```
-
-If you installed with Homebrew, macOS may block Yunagi on first launch. In that case, remove the download flag (the quarantine attribute) and launch it again (to be confirmed: this step becomes unnecessary if Homebrew removes the flag automatically):
-
-```sh
-xattr -dr com.apple.quarantine /Applications/Yunagi.app
-```
-
 #### Windows (PowerShell)
 
 ```powershell
@@ -40,7 +28,7 @@ If you prefer to read the script first, open the URL, review it, and run the sav
 
 The install script installs Yunagi for the signed-in user only (no administrator rights needed).
 
-- macOS: `~/Applications/Yunagi.app` (`/Applications/Yunagi.app` if you installed with Homebrew). The `yunagi` command is linked at `~/.local/bin/yunagi`.
+- macOS: `~/Applications/Yunagi.app`. The `yunagi` command is linked at `~/.local/bin/yunagi`.
 - Linux: `~/.local/opt/yunagi/` (the AppImage and the command). The command is linked at `~/.local/bin/yunagi`, and Yunagi is added to your application list.
 - Windows: `%LOCALAPPDATA%\Programs\Yunagi`. Yunagi is added to the Start menu, and its `bin` folder is added to your user `PATH`.
 
@@ -54,7 +42,6 @@ If `~/.local/bin` is not in your `PATH`, the install script shows how to add it.
 - When an update changes the data format, Yunagi makes a backup before the new version first opens your data. If converting the data fails, it goes back to the backup automatically without changing your data, and shows how to reinstall the previous version.
 - To stop the checks, turn off "Check for updates automatically" in the General section of Settings. When it is off, Yunagi does not make this connection at all.
 - On Linux, the tar.gz and .deb packages do not update themselves from within the app. To update, install the new version the same way (the AppImage updates automatically).
-- The steps for updating a Homebrew install will be decided and written here before release (to be confirmed).
 
 To install a specific version (for example, to go back to an older one), run the install script with the environment variable `YUNAGI_VERSION` set to that version.
 
@@ -208,5 +195,3 @@ The data location folder itself is not removed, because it may hold other files.
 The command lists what it will remove and asks `[y/N]` before it removes anything, so run it in a terminal yourself (it does not run from a script or an AI agent's shell). When it ends, it lists what it removed and anything it could not remove, with the reason (delete those by hand), and exits with a non-zero code in that case. On Windows, the last part of the cleanup (the installed folder and, with `--purge`, the data folder) runs in the background right after the command ends. If something is still there a little later, delete it by hand.
 
 If Yunagi was not installed by the install script (for example, placed by hand, a development build, or a tar.gz), the command shows the location it found and stops without removing anything. It also stops without removing anything if the settings file (`config.json`) is damaged, because the data location is then unknown.
-
-If you installed with Homebrew, `yunagi uninstall` removes nothing and shows the Homebrew command instead: `brew uninstall --cask yunagi` removes the app only, and `brew uninstall --cask --zap yunagi` also removes your data. If you changed the data location in Settings, `--zap` does not remove the data there, so delete it by hand.
