@@ -674,6 +674,21 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
       expect(scene.getAttribute("aria-hidden")).toBe("true");
       expect(scene.querySelector("h1,p")).toBeNull();
       expect(hero.querySelector(".hero-sky h1")).not.toBeNull();
+      // 景色の縦横比（CSS の aspect-ratio）は viewBox と同じ。狭い画面（幅 360px、高さは最低 200px）で左右を切り取っても、
+      // 太陽とその光の道が見える範囲に入る（xMidYMax slice：中央を残して切る）
+      const [vbX, vbY, vbWidth, vbHeight] = (scene.getAttribute("viewBox") ?? "").split(" ").map(Number);
+      expect([vbX, vbY]).toEqual([0, 0]);
+      const ratio = /\.hero-scene \{[^}]*aspect-ratio:\s*(\d+)\s*\/\s*(\d+);/.exec(css);
+      expect(ratio, ".hero-scene の aspect-ratio").not.toBeNull();
+      expect([Number(ratio?.[1]), Number(ratio?.[2])]).toEqual([vbWidth, vbHeight]);
+      const minHeight = Number(/\.hero-scene \{[^}]*min-height:\s*(\d+)px;/.exec(css)?.[1]);
+      const scale = Math.max(360 / vbWidth, minHeight / vbHeight);
+      const visible = [vbWidth / 2 - 360 / scale / 2, vbWidth / 2 + 360 / scale / 2];
+      const sun = scene.querySelector("circle.scene-sun") as Element;
+      const sunX = Number(sun.getAttribute("cx"));
+      const sunR = Number(sun.getAttribute("r"));
+      expect(sunX - sunR, "狭い画面で太陽の左が切れる").toBeGreaterThanOrEqual(visible[0]);
+      expect(sunX + sunR, "狭い画面で太陽の右が切れる").toBeLessThanOrEqual(visible[1]);
       // 動くのは波の線だけ。線は左右の端より、CSS の @keyframes が動く幅（translateX の絶対値の最大）を超えて外まで伸びている
       const drift = Math.max(...[...css.matchAll(/translateX\((-?\d+(?:\.\d+)?)px\)/g)].map((m) => Math.abs(Number(m[1]))));
       expect(drift, "@keyframes の translateX が読めない").toBeGreaterThan(0);
