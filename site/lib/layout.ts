@@ -26,25 +26,40 @@ const LOGO_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 </g>
 </svg>`;
 
-/** ヒーローの景色（凪メーターと同じ空と海。動きなし）。色は CSS のトークン */
-export const SCENE_SVG = `<svg class="hero-scene" viewBox="0 0 1280 460" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+/** 景色の大きさ（viewBox）と水平線・太陽の位置。文字は景色の上に載せない（コピーは景色の上の空に置く） */
+const SCENE = { w: 1280, h: 320, horizon: 190, sunX: 760 } as const;
+/** 波が横に動く幅（site.css の @keyframes の 12px の 2 倍）より外まで、線を左右に伸ばす（端の切れ目を見せない） */
+const WAVE_OVERSHOOT = 160;
+
+/** 波の線：半周期 half の山と谷を、左右に WAVE_OVERSHOOT ずつ余分に伸ばして並べる */
+function wavePath(y: number, half: number, bend: number): string {
+  const from = -WAVE_OVERSHOOT;
+  const count = Math.ceil((SCENE.w + WAVE_OVERSHOOT * 2) / half);
+  return `M${from} ${y}q${half / 2} ${-bend} ${half} 0${`t${half} 0`.repeat(count - 1)}`;
+}
+
+/**
+ * ヒーローの景色（凪メーターと同じ空・太陽・光の道・海・波）。色は CSS のトークン。
+ * 波の線だけが動く（site.css の wave-drift。prefers-reduced-motion では止まる）。
+ */
+export const SCENE_SVG = `<svg class="hero-scene" viewBox="0 0 ${SCENE.w} ${SCENE.h}" preserveAspectRatio="xMidYMax slice" aria-hidden="true" focusable="false">
 <defs>
-<linearGradient id="scene-sky" x1="0" y1="0" x2="0" y2="1"><stop class="sky-top" offset="0"/><stop class="sky-bottom" offset="1"/></linearGradient>
+<linearGradient id="scene-sky" x1="0" y1="0" x2="0" y2="1"><stop class="sky-top" offset="0"/><stop class="sky-bottom" offset="${(SCENE.horizon / SCENE.h).toFixed(3)}"/><stop class="sky-bottom" offset="1"/></linearGradient>
 <radialGradient id="scene-glow"><stop class="glow-stop" offset="0"/><stop class="glow-end" offset="1"/></radialGradient>
 </defs>
-<rect class="scene-sky" width="1280" height="460"/>
-<circle class="scene-glow" cx="900" cy="268" r="210"/>
-<circle class="scene-halo" cx="900" cy="268" r="92"/>
-<circle class="scene-sun" cx="900" cy="268" r="46"/>
-<rect class="scene-sea" y="268" width="1280" height="192"/>
-<rect class="scene-horizon" y="267" width="1280" height="1.5"/>
-<rect class="scene-path" x="870" y="272" width="60" height="3" opacity="0.8"/>
-<rect class="scene-path" x="880" y="284" width="40" height="3" opacity="0.6"/>
-<rect class="scene-path" x="888" y="296" width="24" height="3" opacity="0.45"/>
-<rect class="scene-path" x="893" y="308" width="14" height="3" opacity="0.3"/>
-<path class="scene-wave" opacity="0.5" d="M0 340q40-8 80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0t80 0"/>
-<path class="scene-wave" opacity="0.4" d="M0 380q60-10 120 0t120 0t120 0t120 0t120 0t120 0t120 0t120 0t120 0t120 0t120 0"/>
-<path class="scene-wave" opacity="0.3" d="M0 424q80-12 160 0t160 0t160 0t160 0t160 0t160 0t160 0t160 0"/>
+<rect class="scene-sky" width="${SCENE.w}" height="${SCENE.h}"/>
+<circle class="scene-glow" cx="${SCENE.sunX}" cy="${SCENE.horizon}" r="140"/>
+<circle class="scene-halo" cx="${SCENE.sunX}" cy="${SCENE.horizon}" r="88"/>
+<circle class="scene-sun" cx="${SCENE.sunX}" cy="${SCENE.horizon}" r="44"/>
+<rect class="scene-sea" y="${SCENE.horizon}" width="${SCENE.w}" height="${SCENE.h - SCENE.horizon}"/>
+<rect class="scene-horizon" y="${SCENE.horizon - 1}" width="${SCENE.w}" height="1.5"/>
+<rect class="scene-path" x="${SCENE.sunX - 30}" y="${SCENE.horizon + 4}" width="60" height="3" opacity="0.8"/>
+<rect class="scene-path" x="${SCENE.sunX - 20}" y="${SCENE.horizon + 16}" width="40" height="3" opacity="0.6"/>
+<rect class="scene-path" x="${SCENE.sunX - 12}" y="${SCENE.horizon + 28}" width="24" height="3" opacity="0.45"/>
+<rect class="scene-path" x="${SCENE.sunX - 7}" y="${SCENE.horizon + 40}" width="14" height="3" opacity="0.3"/>
+<path class="scene-wave wave-1" opacity="0.5" d="${wavePath(252, 80, 8)}"/>
+<path class="scene-wave wave-2" opacity="0.4" d="${wavePath(280, 120, 10)}"/>
+<path class="scene-wave wave-3" opacity="0.3" d="${wavePath(306, 160, 12)}"/>
 </svg>`;
 
 /** どのページの <head> にも入れる共通の部分（色の方式・アイコン・CSS）。トップの移動ページと 404 も同じものを使う */

@@ -476,20 +476,34 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
   const light = tokens(lightBlock);
   const dark = tokens(darkBlock);
 
+  /** 表の行（`| \`--名前\` | ライト | ダーク | …`）から、トークンの値を読む */
+  const readTable = (table: string) => {
+    const out = { light: new Map<string, string>(), dark: new Map<string, string>() };
+    for (const r of table.matchAll(/^\| `--([a-z0-9-]+)`(?: \/ `--([a-z0-9-]+)`)? \| ([^|]+) \| ([^|]+) \|/gm)) {
+      if (!r[3].includes("#") && !r[3].includes("rgba")) continue;
+      const split = (v: string) => v.split(" / ").map((x) => tokens(`--x: ${x};`).get("x"));
+      const [l, d] = [split(r[3]), split(r[4])];
+      [r[1], r[2]].filter(Boolean).forEach((n, i) => {
+        out.light.set(n, l[i] ?? "");
+        out.dark.set(n, d[i] ?? "");
+      });
+    }
+    return out;
+  };
   const table = guide.slice(guide.indexOf("## 3. 色"), guide.indexOf("## 4. 文字"));
-  const expected = { light: new Map<string, string>(), dark: new Map<string, string>() };
-  for (const r of table.matchAll(/^\| `--([a-z0-9-]+)`(?: \/ `--([a-z0-9-]+)`)? \| ([^|]+) \| ([^|]+) \|/gm)) {
-    if (!r[3].includes("#") && !r[3].includes("rgba")) continue;
-    const split = (v: string) => v.split(" / ").map((x) => tokens(`--x: ${x};`).get("x"));
-    const [l, d] = [split(r[3]), split(r[4])];
-    [r[1], r[2]].filter(Boolean).forEach((n, i) => {
-      expected.light.set(n, l[i] ?? "");
-      expected.dark.set(n, d[i] ?? "");
-    });
-  }
+  const siteTable = guide.slice(guide.indexOf("## 10. 公式サイト"), guide.indexOf("## 11. フォーム部品"));
+  const appTokens = readTable(table);
+  const siteTokens = readTable(siteTable);
+  const expected = {
+    light: new Map([...appTokens.light, ...siteTokens.light]),
+    dark: new Map([...appTokens.dark, ...siteTokens.dark]),
+  };
 
-  it("ライト・ダークの値が、デザインガイド 3章の表と同じ（独自の色を足していない）", () => {
-    expect(expected.light.size).toBe(26);
+  it("ライト・ダークの値が、デザインガイド 3章の表と 10章のサイト専用トークンの表と同じ（表にない色を足していない）", () => {
+    expect(appTokens.light.size).toBe(26);
+    expect([...siteTokens.light.keys()]).toEqual(["site-sky-1", "site-sky-2", "site-sky-3"]);
+    // 3章と同じ名前を 10章で上書きしていない
+    for (const k of siteTokens.light.keys()) expect(appTokens.light.has(k), k).toBe(false);
     const own = (m: Map<string, string>) => new Map([...m].filter(([k]) => k !== "on-accent"));
     expect(own(light)).toEqual(expected.light);
     expect(own(dark)).toEqual(expected.dark);
@@ -521,9 +535,10 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     return (x + 0.05) / (y + 0.05);
   };
 
-  it("文字のコントラスト：本文 7:1、補助・強調 4.5:1 以上（背景・サイド・面と、ヒーローの空に対して）", () => {
+  it("文字のコントラスト：本文 7:1、補助・強調 4.5:1 以上（背景・サイド・面と、文字を載せるヒーローの空の 2 段に対して）", () => {
     for (const [name, t] of [["ライト", light], ["ダーク", dark]] as const) {
-      const bgs = ["bg", "side", "surface", "sky-1", "sky-2"].map((k) => t.get(k) as string);
+      // 文字を載せる空は --site-sky-1・--site-sky-2。--site-sky-3 は水平線の近くで、文字を載せない（下の構造の試験）
+      const bgs = ["bg", "side", "surface", "site-sky-1", "site-sky-2"].map((k) => t.get(k) as string);
       for (const bg of bgs) {
         expect(ratio(t.get("text") as string, bg), `${name} text/${bg}`).toBeGreaterThanOrEqual(7);
         expect(ratio(t.get("text-muted") as string, bg), `${name} muted/${bg}`).toBeGreaterThanOrEqual(4.5);
@@ -541,8 +556,32 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     }
   });
 
-  it("動き（アニメーション・トランジション）が無く、外部の読み込みが無い", () => {
-    expect(css).not.toMatch(/\banimation\b|\btransition\b|@keyframes/);
+  it("動きは波の線だけ（transform だけ・動きを減らす設定で止まる）で、トランジションが無く、外部の読み込みが無い", () => {
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(bare).not.toMatch(/\btransition\b/);
+    // @keyframes は 1 つで、中身は transform だけ（レイアウトを動かさない）
+    const frames = [...bare.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)];
+    expect(frames.map((m) => m[1])).toEqual(["wave-drift"]);
+    const framesBody = bare.slice(frames[0].index, bare.indexOf("\n}\n", frames[0].index));
+    expect([...framesBody.matchAll(/^\s+([a-z-]+):/gm)].map((m) => m[1]).sort()).toEqual(["transform", "transform"]);
+    expect(framesBody).toMatch(/translateX\(/);
+    // animation 系の宣言は、@media (prefers-reduced-motion: no-preference) の中の波（.scene-wave・.wave-N）だけにある
+    const mediaBlocks = (query: string) =>
+      [...bare.matchAll(new RegExp(`@media \\(prefers-reduced-motion: ${query}\\) \\{`, "g"))].map((m) =>
+        bare.slice(m.index, bare.indexOf("\n}\n", m.index)),
+      );
+    const [noPref] = mediaBlocks("no-preference");
+    expect(mediaBlocks("no-preference")).toHaveLength(1);
+    expect(noPref).toMatch(/\.scene-wave \{[^}]*animation: wave-drift 12s ease-in-out infinite alternate;/);
+    for (const m of noPref.matchAll(/^\s*([^{}\n]+) \{/gm)) {
+      if (m[1].startsWith("@media")) continue;
+      expect(m[1], "動きを付ける選び方").toMatch(/^\.(scene-wave|wave-\d)$/);
+    }
+    const outside = bare.replace(noPref, "").replace(framesBody, "");
+    // 動きを減らす設定では止める。それ以外の所に animation の宣言は無い（止める宣言 none だけ）
+    const [reduce] = mediaBlocks("reduce");
+    expect(reduce).toMatch(/\.scene-wave \{\s*animation: none;/);
+    for (const m of outside.matchAll(/\banimation[a-z-]*:\s*([^;]+);/g)) expect(m[1].trim(), "動きの宣言").toBe("none");
     for (const m of css.matchAll(/url\(\s*["']?([^)"']+)["']?\s*\)/g)) {
       expect(m[1].startsWith("/assets/") || m[1].startsWith("#"), m[1]).toBe(true);
     }
@@ -610,7 +649,35 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     expect(block).toMatch(/\.button \{[^}]*background: none/);
     expect(block).toMatch(/pre \{[^}]*white-space: pre-wrap/);
     expect(block).toMatch(/\.doc :is\(p, li\) a\[href\^="http"\]::after,\s*\.site-footer a\[href\^="http"\]::after \{[^}]*content: " \(" attr\(href\) "\)"/);
-    expect(block).toMatch(/\.hero \{[^}]*min-height: 0/);
+    expect(block).toMatch(/\.hero,\s*\.hero-sky \{[^}]*background: none/);
+  });
+
+  it("ヒーロー：文字は景色（太陽・海・波）に重ならず、波の線は動く幅より外まで描いてある", () => {
+    for (const lang of LANGS) {
+      const doc = dom(join(plainDir, lang, "index.html"));
+      const hero = doc.querySelector("section.hero") as Element;
+      const scene = hero.querySelector("svg.hero-scene") as Element;
+      // 景色は文字の入れ物（.hero-sky）の外にある兄弟で、中に文字（text・title）を持たない
+      expect(scene.parentElement).toBe(hero);
+      expect(scene.previousElementSibling?.classList.contains("hero-sky")).toBe(true);
+      expect(scene.querySelector("text,title,desc,a,foreignObject")).toBeNull();
+      expect(scene.getAttribute("aria-hidden")).toBe("true");
+      expect(scene.querySelector("h1,p")).toBeNull();
+      expect(hero.querySelector(".hero-sky h1")).not.toBeNull();
+      // 動くのは波の線だけ。線は左右の端より 12px の往復の幅を超えて外まで伸びている
+      const waves = [...scene.querySelectorAll("path.scene-wave")];
+      expect(waves).toHaveLength(3);
+      const vbW = Number((scene.getAttribute("viewBox") ?? "").split(" ")[2]);
+      for (const w of waves) {
+        const d = w.getAttribute("d") ?? "";
+        const start = Number(/^M(-?\d+(?:\.\d+)?) /.exec(d)?.[1]);
+        // M x y q cx cy dx 0 t dx 0 ...：横の送りの合計が終点
+        const steps = [...d.matchAll(/(?:q-?\d+(?:\.\d+)? -?\d+(?:\.\d+)? |t)(\d+(?:\.\d+)?) 0/g)].map((m) => Number(m[1]));
+        const end = start + steps.reduce((a, b) => a + b, 0);
+        expect(start, d.slice(0, 20)).toBeLessThanOrEqual(-12);
+        expect(end, d.slice(0, 20)).toBeGreaterThanOrEqual(vbW + 12);
+      }
+    }
   });
 
   it("ロゴの色は、アプリのロゴ（src/shell/Logo.svelte）と同じ", () => {

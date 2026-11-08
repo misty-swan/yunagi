@@ -127,8 +127,9 @@ function home(lang: Lang, latest: Latest | null): string {
       return `<li><strong>${text}</strong><span>${esc(f.text)}</span></li>`;
     })
     .join("\n");
+  // 文字は景色（太陽・海・波）の上に載せない：コピーは上の空（.hero-sky）に置き、景色はその下の帯にする
   return `<section class="hero">
-${SCENE_SVG}
+<div class="hero-sky">
 <div class="wrap">
 <div class="hero-copy">
 ${eyebrow(t.eyebrow)}
@@ -141,6 +142,8 @@ ${eyebrow(t.eyebrow)}
 <p class="hero-note">${esc(t.note)}</p>
 </div>
 </div>
+</div>
+${SCENE_SVG}
 </section>
 <section class="section" id="features">
 <div class="wrap">

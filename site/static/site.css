@@ -1,7 +1,10 @@
-/* 公式サイトの見た目。色はアプリのデザインガイド（docs/design/06-design-guide.md）3章のトークンだけを使う。
-   値は正本（ガイド）と同じでなければならない（site/site.test.ts が確かめる）。独自の色は足さない。
+/* 公式サイトの見た目。色はアプリのデザインガイド（docs/design/06-design-guide.md）3章のトークンと、
+   10章のサイト専用トークン（--site-sky-1〜3。空の夕焼け）だけを使う。
+   値は正本（ガイド）と同じでなければならない（site/site.test.ts が確かめる）。表にない色は足さない。
    文字に使ってよい色は --text・--text-muted・--accent-strong だけ。--accent と景色のトークンは面と装飾に使う。
-   動きは付けない（デザインガイド 2章）。外部の読み込みは無い（フォントも同じサイトのファイル）。 */
+   文字は --site-sky-1・--site-sky-2 の上にだけ載せる（--site-sky-3 は水平線の近くの景色で、文字を載せない）。
+   動きは、ヒーローの波（.scene-wave）だけ（デザインガイド 10章。2章の原則の例外）。
+   外部の読み込みは無い（フォントも同じサイトのファイル）。 */
 
 @font-face {
   font-family: "Inter";
@@ -28,7 +31,11 @@
   --agent: #6a53ae;
   --sea: #285f77;
   --sky-1: #f5dcc8;
-  --sky-2: #f1e8ee;
+  --sky-2: #f1e8ee; /* --sky-1・--sky-2 はアプリの凪メーターの空。サイトでは使わない（3章の表と同じ値を保つために置く） */
+  /* サイト専用の空（夕焼けの 3 段。上から 1・2・3）。1・2 は文字の背景になるので淡く、3 は文字を載せない */
+  --site-sky-1: #f6ecf0;
+  --site-sky-2: #f8e0cf;
+  --site-sky-3: #f2b98f;
   --sun-core: #ffe2c2;
   --sun-glow: rgba(236, 150, 86, 0.32);
   --sun-halo: rgba(224, 144, 78, 0.18);
@@ -62,6 +69,9 @@
     --sea: #8ec3d8;
     --sky-1: #2a2440;
     --sky-2: #1a1b30;
+    --site-sky-1: #151a33;
+    --site-sky-2: #231f3a;
+    --site-sky-3: #4a3248;
     --sun-core: #ffd9ae;
     --sun-glow: rgba(240, 165, 98, 0.28);
     --sun-halo: rgba(240, 165, 98, 0.16);
@@ -274,41 +284,47 @@ a:hover {
   color: var(--text-muted);
 }
 
-/* ヒーロー：空と海の景色（凪メーターと同じ。動きなし） */
+/* ヒーロー：夕焼けの空の上にコピー、その下に景色（凪メーターと同じ空・太陽・光の道・海・波）の帯。
+   文字は景色に重ねない（太陽・海・動く波の上に文字を置かない）。空の上の段（.hero-sky）は --site-sky-1 から
+   --site-sky-2 へ、景色の帯は --site-sky-2 から --site-sky-3 へ続けて、つなぎ目を作らない */
 .hero {
-  position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--rule);
-  background: linear-gradient(var(--sky-1), var(--sky-2));
+  background: var(--site-sky-2);
 }
 
+.hero-sky {
+  background: linear-gradient(var(--site-sky-1), var(--site-sky-2));
+}
+
+/* 景色の帯：横幅いっぱい。高さは幅に比例させ（viewBox と同じ比）、狭い画面では最低 200px にして横を切り取る */
 .hero-scene {
   display: block;
   width: 100%;
-  height: 220px;
+  aspect-ratio: 1280 / 320;
+  min-height: 200px;
 }
 
 .hero-copy {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding-top: 48px;
-  padding-bottom: 40px;
-  max-width: 600px;
+  padding-top: 56px;
+  padding-bottom: 48px;
+  max-width: 720px;
 }
 
 /* 幅 360px でも、日本語の見出しの 1 行（約 10 字）が折り返さない大きさから始める */
 .hero-copy h1 {
   margin: 0;
   font-size: 28px;
-  line-height: 1.3;
+  line-height: 1.25;
   font-weight: 300;
 }
 
 @media (min-width: 560px) {
   .hero-copy h1 {
-    font-size: 32px;
+    font-size: 40px;
   }
 }
 
@@ -360,33 +376,29 @@ a:hover {
 }
 
 @media (min-width: 880px) {
-  .hero {
-    min-height: 460px;
-  }
-
-  .hero-scene {
-    position: absolute;
-    inset: 0;
-    height: 100%;
-  }
-
   .hero-copy {
-    padding-top: 96px;
-    padding-bottom: 112px;
+    gap: 24px;
+    padding-top: 120px;
+    padding-bottom: 72px;
   }
 
   .hero-copy h1 {
-    font-size: 44px;
+    font-size: 56px;
+  }
+
+  .hero-copy > p:not(.eyebrow):not(.hero-note) {
+    font-size: 16px;
+    max-width: 560px;
   }
 }
 
 /* 景色の図形（色はトークン。属性ではなくクラスで当てるので CSP の style-src を絞れる） */
 .sky-top {
-  stop-color: var(--sky-1);
+  stop-color: var(--site-sky-2);
 }
 
 .sky-bottom {
-  stop-color: var(--sky-2);
+  stop-color: var(--site-sky-3);
 }
 
 .glow-stop {
@@ -432,28 +444,62 @@ a:hover {
   stroke-width: 1.2;
 }
 
+/* 動き：ヒーローの波の線だけ（デザインガイド 10章。2章の原則の例外）。transform だけを動かすので、
+   レイアウトは動かない。波の線は左右に動く幅より長く描いてある（layout.ts）。往復（alternate）と緩やかな
+   加減速で、周期の切れ目に飛ばない。動きを減らす設定の人と、この設定を知らない環境には、動きを付けない */
+@keyframes wave-drift {
+  from {
+    transform: translateX(-12px);
+  }
+
+  to {
+    transform: translateX(12px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .scene-wave {
+    animation: wave-drift 12s ease-in-out infinite alternate;
+  }
+
+  .wave-2 {
+    animation-duration: 16s;
+    animation-direction: alternate-reverse;
+  }
+
+  .wave-3 {
+    animation-duration: 20s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-wave {
+    animation: none;
+  }
+}
+
 /* 本文の区画 */
 .section {
-  padding: 56px 0;
+  padding: 72px 0;
   border-bottom: 1px solid var(--rule);
 }
 
 @media (min-width: 880px) {
   .section {
-    padding: 96px 0;
+    padding: 120px 0;
   }
 }
 
 .section h2 {
   margin: 8px 0 0;
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 300;
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 @media (min-width: 880px) {
   .section h2 {
-    font-size: 28px;
+    font-size: 32px;
   }
 }
 
@@ -787,8 +833,8 @@ kbd {
     display: none;
   }
 
-  .hero {
-    min-height: 0;
+  .hero,
+  .hero-sky {
     background: none;
   }
 
