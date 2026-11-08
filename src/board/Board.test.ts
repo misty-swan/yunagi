@@ -961,6 +961,137 @@ test("Vim モードの振り返り欄：ノーマルモードの Tab・Shift+Tab
   await until(() => refView().state.doc.toString().includes("## 良かったこと"));
 });
 
+test("Vim モードの整理モードのリスト：]] / [[ で次・前の領域へ移り（端は回る）、1打目が続きでなければ捨てる", async () => {
+  prefs.vimMode = true;
+  await start({
+    reflection: "abc",
+    boards: {
+      [TODAY]: {
+        ...emptyBoard(TODAY),
+        todos: [bi(item(A, "一", { sortKey: "a0" })), bi(item(B, "二", { sortKey: "a1" }))],
+        blockers: [bi(item(C, "詰まり", { kind: "blocker" }))],
+        reflectionRev: 1,
+      },
+    },
+  });
+  const active = () => document.activeElement as HTMLElement;
+  const todo = () => $$(".r-todo .item");
+  todo()[1].focus();
+  // 1打目だけでは移らない
+  expect(vimKey(active(), "]").defaultPrevented).toBe(true);
+  expect(active()).toBe(todo()[1]);
+  // ]]：TODO → 障害（その項目を選ぶ、ノーマルモード）
+  vimKey(active(), "]");
+  await until(() => $$(".r-blk .item")[0].contains(document.activeElement));
+  expect($$(".r-todo [contenteditable], .r-blk [contenteditable]").length).toBe(0);
+  // [[：障害 → TODO（最後に選んでいた項目＝2つ目。Tab と同じ）
+  vimKey(active(), "[");
+  vimKey(active(), "[");
+  await until(() => todo()[1].contains(document.activeElement));
+  // 端：TODO で [[ は振り返りへ回る。そこで ]] は TODO へ回る
+  vimKey(active(), "[");
+  vimKey(active(), "[");
+  await until(() => $(".ref-ed .cm-content") === document.activeElement);
+  expect(refBadge()).toBe("NORMAL");
+  // 1打目の後に別のキーなら捨てる（] j ] では移らない）
+  todo()[0].focus();
+  vimKey(active(), "]");
+  vimKey(active(), "j");
+  await until(() => active() === todo()[1]);
+  vimKey(active(), "]");
+  expect(active()).toBe(todo()[1]);
+  // 押し続けた繰り返し（repeat）は2打目に数えない
+  // （直前の `]` が1打目として残っている。繰り返しの `]` では移らない）
+  vimKey(active(), "]", { repeat: true });
+  expect(active()).toBe(todo()[1]);
+  vimKey(active(), "j");
+  // 違う向きの括弧（] [）でも移らない
+  vimKey(active(), "[");
+  expect(active()).toBe(todo()[1]);
+  // 別の項目へ移ったら捨てる（] の後にクリック相当で別の行へ → ] 1 回では移らない）
+  vimKey(active(), "]");
+  todo()[0].focus();
+  vimKey(active(), "]");
+  expect(active()).toBe(todo()[0]);
+  // Tab は別名として残る
+  vimKey(active(), "Tab");
+  await until(() => $$(".r-blk .item")[0].contains(document.activeElement));
+});
+
+test("Vim モードの整理モード：行が無い領域でも ]] / [[ で領域を移り、挿入モードの ] は文字として入る", async () => {
+  prefs.vimMode = true;
+  await start({
+    reflection: "abc",
+    boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))], reflectionRev: 1 } },
+  });
+  const row = $$(".r-todo .item")[0];
+  row.focus();
+  // TODO → 障害（行が無いので領域そのもの）
+  vimKey(row, "]");
+  vimKey(row, "]");
+  await until(() => document.activeElement?.closest(".r-blk") !== null && document.activeElement?.classList.contains("region") === true);
+  const region = document.activeElement as HTMLElement;
+  // 障害（空）から ]] で振り返りへ、[[ で TODO へ戻る
+  vimKey(region, "]");
+  vimKey(region, "]");
+  await until(() => $(".ref-ed .cm-content") === document.activeElement);
+  $(".ref-ed .cm-content")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  // 挿入モードでは ] は領域を移らず、文字になる
+  row.focus();
+  vimKey(row, "i");
+  await until(() => document.activeElement?.getAttribute("contenteditable") === "true");
+  const ed = document.activeElement as HTMLElement;
+  ed.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true, cancelable: true }));
+  flushSync();
+  expect(document.activeElement).toBe(ed);
+});
+
+test("Vim モードの振り返り欄：ノーマルモードの ]] / [[ で領域を移り、Vim が文字を待つ間（f] など）と挿入モードでは移らない", async () => {
+  prefs.vimMode = true;
+  await start({
+    reflection: "a]b",
+    boards: { [TODAY]: { ...emptyBoard(TODAY), todos: [bi(item(A, "一"))], reflectionRev: 1 } },
+  });
+  await until(() => refBadge() === "NORMAL");
+  const content = $(".ref-ed .cm-content")!;
+  content.focus();
+  const key = (k: string) => {
+    const e = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true });
+    document.activeElement!.dispatchEvent(e);
+    flushSync();
+    return e;
+  };
+  // 1打目は受けるだけ（Vim へは渡さない）。2打目で次の領域（振り返り → TODO）へ
+  expect(key("]").defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(content);
+  key("]");
+  await until(() => $$(".r-todo .item")[0].contains(document.activeElement));
+  // [[：前の領域（TODO → 振り返り）
+  $$(".r-todo .item")[0].focus();
+  vimKey(document.activeElement as HTMLElement, "[");
+  vimKey(document.activeElement as HTMLElement, "[");
+  await until(() => $(".ref-ed .cm-content") === document.activeElement);
+  // 1打目の後に別のキーなら捨てる
+  key("]");
+  key("x");
+  expect(refView().state.doc.toString()).not.toBe("a]b");
+  key("]");
+  expect(document.activeElement).toBe(content);
+  // f] は Vim の入力（] を探す）。領域は移らない
+  vimKeys(refView(), "0");
+  vimKeys(refView(), "f");
+  // （ガードが無ければ、1打目と2打目の `]]` として領域を移ってしまう）
+  key("]");
+  key("]");
+  expect(document.activeElement).toBe(content);
+  vimKeys(refView(), "<Esc>");
+  // 挿入モードの ] は領域を移らない
+  vimKeys(refView(), "i");
+  key("]");
+  key("]");
+  expect(document.activeElement).toBe(content);
+});
+
 test("整理モードのリストから振り返り欄へ Tab で移ったとき、Vim のキーで操作できる", async () => {
   prefs.vimMode = true;
   await start({

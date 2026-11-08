@@ -214,7 +214,7 @@ const ja: SettingsMessages = {
     },
     vim: "Vim モード",
     vimNote:
-      "ノートと振り返りのエディタ、整理モードの一覧を Vim のキーで操作します。Mod を使う標準のショートカットは、そのまま使えます。",
+      "ノートと振り返りのエディタ、整理モードの一覧を Vim のキーで操作します。Mod を使う標準のショートカットは、そのまま使えます。整理モードでは、]] / [[ で次・前の領域へ移ります。キーの一覧は、利用者ガイドの「Vimモード」の章にあります。",
     vimAltNote:
       "Windows・Linux では Ctrl+[ が Vim の Esc と重なるため、前日・翌日の移動（ふりかえりでは週の移動）の初期割当を Alt+[ / Alt+] にします。",
     vimImeRestore: "挿入モードで入力状態を戻す",
@@ -381,7 +381,7 @@ const en: SettingsMessages = {
     },
     vim: "Vim mode",
     vimNote:
-      "Operate the Note and Reflection editors and the Board lists with Vim keys. The standard Mod shortcuts keep working.",
+      "Operate the Note and Reflection editors and the Board lists with Vim keys. The standard Mod shortcuts keep working. In Board mode, ]] / [[ jump to the next / previous region. See the Vim mode chapter of the User Guide for all keys.",
     vimAltNote:
       "On Windows and Linux, Ctrl+[ overlaps Vim's Esc, so the default for previous / next day (and week in Archive) becomes Alt+[ / Alt+].",
     vimImeRestore: "Restore input state in Insert mode",

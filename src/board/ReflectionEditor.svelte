@@ -7,7 +7,7 @@
   // - 設定の Vim モードが有効なら、エディタを Vim のキーで操作する（src/lib/editor_vim.ts。操作仕様書 4.2）。
   //   `<Space>t` `<Space>b` `<Space>h` は何もしない（ノートだけの操作）。ノーマルモードの Tab・Shift+Tab は、
   //   整理モードのリストと同じく領域を移る。現在のモードは右下に小さく出す。
-  import { RangeSetBuilder } from "@codemirror/state";
+  import { Prec, RangeSetBuilder } from "@codemirror/state";
   import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
   import { onMount, untrack } from "svelte";
   import type { SaveStatus } from "../lib/autosave.svelte";
@@ -15,7 +15,7 @@
   import { selectMatch, TextDocEditor } from "../lib/doc_editor";
   import { t } from "../lib/i18n";
   import { boardActionOf } from "../lib/board_keys";
-  import { vimModeOf, type VimMode } from "../lib/editor_vim";
+  import { vimIdle, vimModeOf, type VimMode } from "../lib/editor_vim";
   import { isMacPlatform } from "../lib/keys";
   import { blank } from "../lib/note";
   import { prefs } from "../lib/prefs.svelte";
@@ -54,6 +54,8 @@
   let host = $state<HTMLElement | null>(null);
   /** Vim の現在のモード（Vim が無効なら `null`）。 */
   let vimMode = $state<VimMode | null>(null);
+  /** ノーマルモードの、続きのキーを待っている `]`・`[`（`]]`・`[[` の1打目。操作仕様書 4.3）。 */
+  let regionPending: "]" | "[" | null = null;
 
   const headingLine = Decoration.line({ class: "cm-ref-h" });
   const headingMark = Decoration.mark({ class: "cm-md" });
@@ -110,23 +112,51 @@
       // テンプレートを入れるキーは、設定で変えた割当に従う（CodeMirror のキーに固定で結ばない）
       extensions: [
         headingPlugin,
-        EditorView.domEventHandlers({
-          keydown: (e, v) => {
-            // Vim のノーマルモードの Tab・Shift+Tab は領域の移動（整理モードのリストと同じ）
-            if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey && vimModeOf(v) === "normal") {
-              onRegion(e.shiftKey ? -1 : 1);
-              return true;
-            }
-            if (boardActionOf(e, isMacPlatform()) !== "template") return false;
-            e.preventDefault();
-            return insertTemplate(v);
-          },
-        }),
+        // Vim の拡張（Prec.high）より先に受ける：Vim は `]]` `[[` を自分の移動に使うため
+        Prec.highest(
+          EditorView.domEventHandlers({
+            blur: () => {
+              regionPending = null;
+              return false;
+            },
+            // マウスでカーソルを動かしたら、続きのキー待ちは捨てる
+            mousedown: () => {
+              regionPending = null;
+              return false;
+            },
+            keydown: (e, v) => {
+              // Vim のノーマルモードの Tab・Shift+Tab と `]]`・`[[` は領域の移動（整理モードのリストと同じ）。
+              // `]` `[` の1打目は続きのキー待ち（Vim は受けない）。2打目が違えば捨てて、そのキーを通常どおり扱う
+              const pending = regionPending;
+              if (!["Shift", "Control", "Alt", "Meta", "AltGraph"].includes(e.key)) regionPending = null;
+              if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.isComposing && e.keyCode !== 229 && vimModeOf(v) === "normal") {
+                if (e.key === "Tab") {
+                  onRegion(e.shiftKey ? -1 : 1);
+                  return true;
+                }
+                // Vim が回数・オペレータ・文字（`f]` `r]` など）を待っている間は、Vim の入力なので奪わない
+                if ((e.key === "]" || e.key === "[") && vimIdle(v)) {
+                  e.preventDefault();
+                  // 押し続けたときの繰り返しは、2打目に数えない
+                  if (pending === e.key && !e.repeat) onRegion(e.key === "]" ? 1 : -1);
+                  else regionPending = e.key;
+                  return true;
+                }
+              }
+              if (boardActionOf(e, isMacPlatform()) !== "template") return false;
+              e.preventDefault();
+              return insertTemplate(v);
+            },
+          }),
+        ),
       ],
       keys: [],
     }),
     label: () => t().reflectionLabel,
-    onVimMode: (m) => (vimMode = m),
+    onVimMode: (m) => {
+      vimMode = m;
+      regionPending = null;
+    },
     onLoaded: (d) => (loaded = d),
   });
 

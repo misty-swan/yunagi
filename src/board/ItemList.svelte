@@ -118,6 +118,22 @@
 
   function onRegionKey(e: KeyboardEvent) {
     if (e.target !== region || e.isComposing || e.keyCode === 229) return;
+    // Vim のノーマルモード：行が無い領域でも、行のあるときと同じに領域を移る（Tab・`]]`・`[[`。操作仕様書 4.3）
+    if (prefs.vimMode && !model.insert && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const pending = model.vimPending;
+      if (!["Shift", "Control", "Alt", "Meta", "AltGraph"].includes(e.key)) model.vimPending = null;
+      if (e.key === "Tab") {
+        e.preventDefault();
+        onRegion(kind, e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === "]" || e.key === "[") {
+        e.preventDefault();
+        if (pending === e.key && !e.repeat) onRegion(kind, e.key === "]" ? 1 : -1);
+        else model.vimPending = e.key;
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.altKey && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       add();
@@ -136,6 +152,8 @@
   tabindex="-1"
   aria-labelledby={headingId}
   onkeydown={onRegionKey}
+  onfocus={() => (model.vimPending = null)}
+  onblur={() => (model.vimPending = null)}
 >
   <div class="rh">
     <h2 class="label" id={headingId}>{kind === "todo" ? m.labels.region.todo : m.labels.region.blockers}</h2>

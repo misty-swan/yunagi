@@ -44,7 +44,7 @@
     onRemoving: (key: string, dir: -1 | 1) => void;
     /** 領域の先頭（-1）・末尾（+1）の行へ移る（Vim の gg・G）。 */
     onEdge: (dir: -1 | 1) => void;
-    /** 前（-1）・次（+1）の領域へ移る（Vim の Shift+Tab・Tab）。 */
+    /** 前（-1）・次（+1）の領域へ移る（Vim の `[[`・`]]`、Shift+Tab・Tab）。 */
     onRegion: (dir: -1 | 1) => void;
     onOpenCarried: (to: CarriedTo) => void;
     /** 「← NOTE」：送り元のノートの行へ移る。 */
@@ -136,7 +136,7 @@
    * ノーマルモードのキー。操作に当たれば `true`。続きのキーを待つ `g`・`d` は `model.vimPending` に持つ
    * （続きでないキーが来たら捨てる）。Mod・Alt との組み合わせはここで扱わない（標準のショートカット）。
    */
-  function onVimKey(e: KeyboardEvent, pending: "g" | "d" | null): boolean {
+  function onVimKey(e: KeyboardEvent, pending: "g" | "d" | "]" | "[" | null): boolean {
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     switch (e.key) {
       case "j":
@@ -185,6 +185,13 @@
         return true;
       case "Tab":
         onRegion(e.shiftKey ? -1 : 1);
+        return true;
+      case "]":
+      case "[":
+        // Vim の「次・前のセクションへ」。2打目で領域を移る（1打目は続きのキー待ち）
+        // 押し続けたときの繰り返しは、2打目に数えない
+        if (pending === e.key && !e.repeat) onRegion(e.key === "]" ? 1 : -1);
+        else model.vimPending = e.key;
         return true;
     }
     return false;

@@ -124,6 +124,36 @@ export function vimModeOf(v: EditorView): VimMode | null {
   return s.insertMode ? "insert" : s.visualMode ? "visual" : "normal";
 }
 
+/**
+ * ノーマルモードで、Vim が続きのキーを何も待っていないか（回数・レジスタ・オペレータ・`f` `t` `r` などの
+ * 文字待ちがない）。待っている間の `]` は Vim の入力（`f]`・`r]`・`d]` など）なので、領域の移動
+ * （`]]` `[[`。4.3）に使わない。
+ */
+export function vimIdle(v: EditorView): boolean {
+  const cm = getCM(v);
+  const s = cm === null ? undefined : (cm as unknown as { state?: { vim?: { insertMode: boolean; visualMode: boolean; inputState?: InputLike } } }).state?.vim;
+  if (s === undefined || s.insertMode || s.visualMode) return false;
+  const i = s.inputState;
+  if (i === undefined) return true;
+  return (
+    (i.keyBuffer?.length ?? 0) === 0 &&
+    (i.prefixRepeat?.length ?? 0) === 0 &&
+    (i.motionRepeat?.length ?? 0) === 0 &&
+    !i.operator &&
+    !i.motion &&
+    !i.registerName
+  );
+}
+
+interface InputLike {
+  keyBuffer: string[];
+  prefixRepeat: string[];
+  motionRepeat: string[];
+  operator?: string | null;
+  motion?: string | null;
+  registerName?: string;
+}
+
 /** モードの変化を知らせる先。 */
 export const onVimMode = Facet.define<(mode: VimMode) => void, readonly ((mode: VimMode) => void)[]>({
   combine: (all) => all,
