@@ -549,7 +549,7 @@
   }
 
   .panel :global(.btn:active:not(:disabled)) {
-    background: var(--sel);
+    background: color-mix(in srgb, var(--accent-strong) 22%, transparent);
     border-color: var(--accent-strong);
   }
 

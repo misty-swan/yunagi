@@ -2,7 +2,6 @@
 // 色はトークン経由だけ、動きは付けない、標準の見た目のままの部品を画面に残さない。
 import { expect, test } from "vitest";
 import forms from "./forms.css?raw";
-import base from "./base.css?raw";
 import tokens from "./tokens.css?raw";
 
 const screens = import.meta.glob("../**/*.svelte", { query: "?raw", import: "default", eager: true }) as Record<
@@ -21,8 +20,9 @@ test("色はトークン（var(--…)）と transparent だけで、直接の色
   );
 });
 
-test("使う変数は、tokens.css か base.css にある", () => {
-  const defined = new Set([...(tokens + base).matchAll(/--([a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+test("使う変数は、tokens.css か、base.css の寸法（--u・--fs-small）にある", () => {
+  // base.css は読み込まない（@font-face の url() をテストで処理させないため）。使ってよい寸法の変数だけ書く
+  const defined = new Set([...tokens.matchAll(/--([a-z0-9-]+)\s*:/g)].map((m) => m[1]).concat(["u", "fs-small"]));
   const used = new Set([...css.matchAll(/var\(--([a-z0-9-]+)/g)].map((m) => m[1]));
   expect(used.size).toBeGreaterThan(0);
   for (const name of used) expect(defined.has(name), `--${name}`).toBe(true);

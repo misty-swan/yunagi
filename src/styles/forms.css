@@ -106,7 +106,7 @@
 
 .fc-check:active:not(:disabled):not(:checked),
 .fc-radio:active:not(:disabled):not(:checked) {
-  background: var(--sel);
+  background: color-mix(in srgb, var(--accent-strong) 22%, transparent);
 }
 
 .fc-check:focus-visible,
@@ -221,11 +221,11 @@
 }
 
 .fc-range:active:not(:disabled)::-webkit-slider-thumb {
-  box-shadow: 0 0 0 calc(5 * var(--u)) var(--sel), 0 0 0 1px var(--accent-strong);
+  box-shadow: 0 0 0 calc(5 * var(--u)) color-mix(in srgb, var(--accent-strong) 22%, transparent), 0 0 0 1px var(--accent-strong);
 }
 
 .fc-range:active:not(:disabled)::-moz-range-thumb {
-  box-shadow: 0 0 0 calc(5 * var(--u)) var(--sel), 0 0 0 1px var(--accent-strong);
+  box-shadow: 0 0 0 calc(5 * var(--u)) color-mix(in srgb, var(--accent-strong) 22%, transparent), 0 0 0 1px var(--accent-strong);
 }
 
 .fc-wide {
@@ -235,6 +235,7 @@
 /* Windows の強制カラー（ハイコントラスト）：システムの色に置き換えると、塗り・印・点が消えて選択の有無が分からなくなる。
    トークンの色のまま描く（トークンの色は 3:1 以上を確保している。06 11章） */
 @media (forced-colors: active) {
+  .fc-field,
   .fc-check,
   .fc-radio,
   .fc-range {
