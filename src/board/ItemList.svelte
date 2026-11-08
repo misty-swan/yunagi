@@ -152,6 +152,7 @@
   tabindex="-1"
   aria-labelledby={headingId}
   onkeydown={onRegionKey}
+  onfocus={() => (model.vimPending = null)}
 >
   <div class="rh">
     <h2 class="label" id={headingId}>{kind === "todo" ? m.labels.region.todo : m.labels.region.blockers}</h2>

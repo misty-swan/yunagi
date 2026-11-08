@@ -114,34 +114,39 @@
         headingPlugin,
         // Vim の拡張（Prec.high）より先に受ける：Vim は `]]` `[[` を自分の移動に使うため
         Prec.highest(
-        EditorView.domEventHandlers({
-          blur: () => {
-            regionPending = null;
-            return false;
-          },
-          keydown: (e, v) => {
-            // Vim のノーマルモードの Tab・Shift+Tab と `]]`・`[[` は領域の移動（整理モードのリストと同じ）。
-            // `]` `[` の1打目は続きのキー待ち（Vim は受けない）。2打目が違えば捨てて、そのキーを通常どおり扱う
-            const pending = regionPending;
-            if (!["Shift", "Control", "Alt", "Meta", "AltGraph"].includes(e.key)) regionPending = null;
-            if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.isComposing && e.keyCode !== 229 && vimModeOf(v) === "normal") {
-              if (e.key === "Tab") {
-                onRegion(e.shiftKey ? -1 : 1);
-                return true;
+          EditorView.domEventHandlers({
+            blur: () => {
+              regionPending = null;
+              return false;
+            },
+            // マウスでカーソルを動かしたら、続きのキー待ちは捨てる
+            mousedown: () => {
+              regionPending = null;
+              return false;
+            },
+            keydown: (e, v) => {
+              // Vim のノーマルモードの Tab・Shift+Tab と `]]`・`[[` は領域の移動（整理モードのリストと同じ）。
+              // `]` `[` の1打目は続きのキー待ち（Vim は受けない）。2打目が違えば捨てて、そのキーを通常どおり扱う
+              const pending = regionPending;
+              if (!["Shift", "Control", "Alt", "Meta", "AltGraph"].includes(e.key)) regionPending = null;
+              if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.isComposing && e.keyCode !== 229 && vimModeOf(v) === "normal") {
+                if (e.key === "Tab") {
+                  onRegion(e.shiftKey ? -1 : 1);
+                  return true;
+                }
+                // Vim が回数・オペレータ・文字（`f]` `r]` など）を待っている間は、Vim の入力なので奪わない
+                if ((e.key === "]" || e.key === "[") && vimIdle(v)) {
+                  e.preventDefault();
+                  if (pending === e.key) onRegion(e.key === "]" ? 1 : -1);
+                  else regionPending = e.key;
+                  return true;
+                }
               }
-              // Vim が回数・オペレータ・文字（`f]` `r]` など）を待っている間は、Vim の入力なので奪わない
-              if ((e.key === "]" || e.key === "[") && vimIdle(v)) {
-                e.preventDefault();
-                if (pending === e.key) onRegion(e.key === "]" ? 1 : -1);
-                else regionPending = e.key;
-                return true;
-              }
-            }
-            if (boardActionOf(e, isMacPlatform()) !== "template") return false;
-            e.preventDefault();
-            return insertTemplate(v);
-          },
-        }),
+              if (boardActionOf(e, isMacPlatform()) !== "template") return false;
+              e.preventDefault();
+              return insertTemplate(v);
+            },
+          }),
         ),
       ],
       keys: [],

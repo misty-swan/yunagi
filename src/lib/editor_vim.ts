@@ -136,9 +136,9 @@ export function vimIdle(v: EditorView): boolean {
   const i = s.inputState;
   if (i === undefined) return true;
   return (
-    i.keyBuffer.length === 0 &&
-    i.prefixRepeat.length === 0 &&
-    i.motionRepeat.length === 0 &&
+    (i.keyBuffer?.length ?? 0) === 0 &&
+    (i.prefixRepeat?.length ?? 0) === 0 &&
+    (i.motionRepeat?.length ?? 0) === 0 &&
     !i.operator &&
     !i.motion &&
     !i.registerName
