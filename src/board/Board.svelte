@@ -272,7 +272,7 @@
     />
     <section class="region r-ref" data-region="reflection" aria-label={m.reflectionLabel}>
       <div class="rh"><h2 class="label">{m.labels.region.reflection}</h2></div>
-      <div class="scroll">
+      <div class="scroll ref-scroll">
         <ReflectionEditor
           date={model.date}
           {save}
@@ -369,5 +369,11 @@
     overflow: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--rule) transparent;
+  }
+
+  /* 振り返りのフォーカスの線（ReflectionEditor）が、スクロールの枠で切れないよう、項目の一覧（ItemList の .scroll）と同じ余白を取る */
+  .ref-scroll {
+    margin-left: calc(-14 * var(--u));
+    padding-left: calc(14 * var(--u));
   }
 </style>

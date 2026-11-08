@@ -878,7 +878,11 @@ test("振り返りのフォーカスの表示：エディタにフォーカス�
   const rule = style.match(/\.ref-ed:focus-within\s*\{([^}]*)\}/)?.[1] ?? "";
   expect(rule).toMatch(/box-shadow:\s*inset 2px 0 0 var\(--accent-strong\)/);
   expect(rule).not.toMatch(/--sel/); // 選択範囲も --sel なので、面に敷くと選択が見えない
-  expect(style).not.toMatch(/\b(transition|animation)\b/); // 動きは付けない（デザインガイド 2章）
+  expect(rule).not.toMatch(/\b(transition|animation)\b/); // 動きは付けない（デザインガイド 2章）
+  // 線を置く左の余白が、スクロールの枠で切れない：枠（.ref-scroll）が項目の一覧と同じ余白を取っている
+  expect($(".scroll.ref-scroll .ref-ed")).not.toBeNull();
+  const boardSource = (await import("./Board.svelte?raw")).default;
+  expect(boardSource).toMatch(/\.ref-scroll\s*\{[^}]*margin-left:\s*calc\(-14 \* var\(--u\)\);[^}]*padding-left:\s*calc\(14 \* var\(--u\)\)/);
 });
 
 test("振り返りを入力してすぐ別の日へ移っても、前の日には入力した本文を保存する", async () => {
