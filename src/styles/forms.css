@@ -1,0 +1,244 @@
+/*
+  フォーム部品（選択欄・時刻/日付/数値の入力欄・チェックボックス・ラジオ・スライダー）の共通の見た目
+  （docs/design/06-design-guide.md 11章）。色は tokens.css の変数だけを使う。動きは付けない（06 2章）。
+
+  - 素の要素には当てず、class を付けた部品だけに効かせる（検索パレットの入力欄や、持ち越しの丸いチェックのように、
+    独自の見た目を持つ部品に漏れないようにするため）
+  - 状態：通常・ホバー・フォーカス・押下・無効・選択済み。フォーカスは base.css の `:focus-visible` と同じ 2px の
+    `--accent-strong`（base.css は角丸を 4px に固定するので、ここで部品の角丸を書き直す）
+  - 境界は `--ring`（部品の境界の基準 3:1。06 3章）、ホバーとチェックの塗りは `--accent-strong`
+*/
+
+/* 入力欄・選択欄の共通 */
+.fc-field {
+  font: inherit;
+  font-size: var(--fs-small);
+  line-height: 1.4;
+  color: var(--text);
+  padding: calc(5 * var(--u)) calc(8 * var(--u));
+  background-color: var(--field);
+  border: 1px solid var(--ring);
+  border-radius: calc(8 * var(--u));
+  accent-color: var(--accent-strong);
+}
+
+.fc-field:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+}
+
+.fc-field:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+  border-color: var(--accent-strong);
+  border-radius: calc(8 * var(--u));
+}
+
+.fc-field:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 選択欄：矢印は 2 つの三角（グラデーション）で描く。外部の画像は使わない */
+.fc-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: calc(28 * var(--u));
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 15 * var(--u)) calc(50% + 1 * var(--u)),
+    calc(100% - 10 * var(--u)) calc(50% + 1 * var(--u));
+  background-size: calc(5 * var(--u)) calc(5 * var(--u));
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+.fc-select:disabled {
+  cursor: default;
+}
+
+/* 一覧の部分は OS が描く場合がある。描くときに効く色だけ合わせる */
+.fc-select option {
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+.fc-time,
+.fc-date {
+  min-width: calc(110 * var(--u));
+}
+
+.fc-time::-webkit-calendar-picker-indicator,
+.fc-date::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+
+.fc-number {
+  width: calc(80 * var(--u));
+}
+
+/* チェックボックス・ラジオの共通（16px。06 6章のチェック欄と同じ大きさ） */
+.fc-check,
+.fc-radio {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  margin: 0;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  border: 1.3px solid var(--ring);
+  background: transparent;
+  cursor: pointer;
+}
+
+.fc-check {
+  border-radius: calc(4 * var(--u));
+}
+
+.fc-radio {
+  border-radius: 50%;
+}
+
+.fc-check:hover:not(:disabled),
+.fc-radio:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+}
+
+.fc-check:active:not(:disabled):not(:checked),
+.fc-radio:active:not(:disabled):not(:checked) {
+  background: color-mix(in srgb, var(--accent-strong) 22%, transparent);
+}
+
+.fc-check:focus-visible,
+.fc-radio:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.fc-check:focus-visible {
+  border-radius: calc(4 * var(--u));
+}
+
+.fc-radio:focus-visible {
+  border-radius: 50%;
+}
+
+.fc-check:disabled,
+.fc-radio:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 選択済み：塗りは --accent-strong、印は --surface（白抜き。ライト・ダークとも 3:1 以上。06 11章） */
+.fc-check:checked {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.fc-check:checked::after {
+  content: "";
+  position: absolute;
+  left: 33%;
+  top: 18%;
+  width: 26%;
+  height: 46%;
+  border: solid var(--surface);
+  border-width: 0 calc(1.8 * var(--u)) calc(1.8 * var(--u)) 0;
+  transform: rotate(45deg);
+}
+
+.fc-radio:checked {
+  border-color: var(--accent-strong);
+}
+
+.fc-radio:checked::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
+  margin: calc(-4 * var(--u)) 0 0 calc(-4 * var(--u));
+  border-radius: 50%;
+  background: var(--accent-strong);
+}
+
+/* スライダー：溝は --ring、つまみは --accent-strong（囲みは --surface） */
+.fc-range {
+  appearance: none;
+  -webkit-appearance: none;
+  width: calc(180 * var(--u));
+  height: calc(18 * var(--u));
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.fc-range:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fc-range:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+  border-radius: calc(4 * var(--u));
+}
+
+.fc-range::-webkit-slider-runnable-track {
+  height: calc(4 * var(--u));
+  border-radius: calc(2 * var(--u));
+  background: var(--ring);
+}
+
+.fc-range::-moz-range-track {
+  height: calc(4 * var(--u));
+  border-radius: calc(2 * var(--u));
+  background: var(--ring);
+}
+
+.fc-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  box-sizing: border-box;
+  margin-top: calc(-6 * var(--u));
+  border: calc(2 * var(--u)) solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+}
+
+.fc-range::-moz-range-thumb {
+  box-sizing: border-box;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  border: calc(2 * var(--u)) solid var(--surface);
+  border-radius: 50%;
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+}
+
+.fc-range:active:not(:disabled)::-webkit-slider-thumb {
+  box-shadow: 0 0 0 calc(5 * var(--u)) color-mix(in srgb, var(--accent-strong) 22%, transparent), 0 0 0 1px var(--accent-strong);
+}
+
+.fc-range:active:not(:disabled)::-moz-range-thumb {
+  box-shadow: 0 0 0 calc(5 * var(--u)) color-mix(in srgb, var(--accent-strong) 22%, transparent), 0 0 0 1px var(--accent-strong);
+}
+
+.fc-wide {
+  width: 100%;
+}
+
+/* Windows の強制カラー（ハイコントラスト）：システムの色に置き換えると、塗り・印・点が消えて選択の有無が分からなくなる。
+   トークンの色のまま描く（トークンの色は 3:1 以上を確保している。06 11章） */
+@media (forced-colors: active) {
+  .fc-field,
+  .fc-check,
+  .fc-radio,
+  .fc-range {
+    forced-color-adjust: none;
+  }
+}

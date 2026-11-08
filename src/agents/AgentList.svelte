@@ -90,6 +90,7 @@
               {@const locked = row.name === UNKNOWN_AGENT && scope !== "read"}
               <label class="scope" class:locked title={locked ? a.unknownReadOnly : undefined}>
                 <input
+                  class="fc-check"
                   type="checkbox"
                   data-scope={scope}
                   checked={row.scopes.includes(scope)}

@@ -159,7 +159,7 @@
         <legend>{m.backupsLabel}</legend>
         {#each actions.backups as b (b.path)}
           <label class="backup">
-            <input type="radio" name="startup-backup" value={b.path} bind:group={selected} disabled={busy} />
+            <input class="fc-radio" type="radio" name="startup-backup" value={b.path} bind:group={selected} disabled={busy} />
             <span class="kind">{kindLabel(b)}</span>
             <span class="time">{createdAt(b.createdAt)}</span>
           </label>
@@ -235,7 +235,7 @@
         <form class="choose" onsubmit={onChoose}>
           <label>
             <span class="path-label">{m.chooseLabel}</span>
-            <input type="text" bind:value={dir} spellcheck="false" autocomplete="off" disabled={busy} />
+            <input class="fc-field fc-wide" type="text" bind:value={dir} spellcheck="false" autocomplete="off" disabled={busy} />
           </label>
           <button type="button" class="btn ghost" disabled={busy} onclick={() => void pick()}>{m.pickFolder}</button>
           <button type="submit" class="btn" disabled={busy || dir.trim() === ""}>
@@ -450,16 +450,6 @@
     display: flex;
     flex-direction: column;
     gap: calc(4 * var(--u));
-  }
-
-  .choose input {
-    font: inherit;
-    font-size: var(--fs-small);
-    color: var(--text);
-    padding: calc(6 * var(--u)) calc(10 * var(--u));
-    background: var(--field);
-    border: 1px solid var(--rule);
-    border-radius: calc(8 * var(--u));
   }
 
   .backups {

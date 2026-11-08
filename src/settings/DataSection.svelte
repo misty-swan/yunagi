@@ -143,11 +143,11 @@
     <div class="control">
       <label class="inline">
         <span>{d.exportFrom}</span>
-        <input type="date" bind:value={data.exportFrom} disabled={busy} />
+        <input class="fc-field fc-date" type="date" bind:value={data.exportFrom} disabled={busy} />
       </label>
       <label class="inline">
         <span>{d.exportTo}</span>
-        <input type="date" bind:value={data.exportTo} disabled={busy} />
+        <input class="fc-field fc-date" type="date" bind:value={data.exportTo} disabled={busy} />
       </label>
     </div>
   </div>

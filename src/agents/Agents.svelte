@@ -244,6 +244,7 @@
             <label class="filter">
               {h.filterLabel}
               <select
+                class="fc-field fc-select"
                 data-filter="client"
                 value={screen.client ?? ""}
                 onchange={(e) => screen.setClient(e.currentTarget.value === "" ? null : e.currentTarget.value)}
@@ -256,6 +257,7 @@
             </label>
             <label class="filter">
               <input
+                class="fc-check"
                 type="checkbox"
                 data-filter="unseen"
                 checked={screen.unseenOnly}
@@ -416,16 +418,6 @@
 
   .mark-all {
     margin-left: auto;
-  }
-
-  select {
-    font: inherit;
-    font-size: var(--fs-small);
-    color: var(--text);
-    padding: calc(4 * var(--u)) calc(8 * var(--u));
-    background: var(--field);
-    border: 1px solid var(--rule);
-    border-radius: calc(8 * var(--u));
   }
 
   .muted {
