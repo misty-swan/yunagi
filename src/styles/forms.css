@@ -202,6 +202,7 @@
   -webkit-appearance: none;
   width: calc(16 * var(--u));
   height: calc(16 * var(--u));
+  box-sizing: border-box;
   margin-top: calc(-6 * var(--u));
   border: calc(2 * var(--u)) solid var(--surface);
   border-radius: 50%;
@@ -225,4 +226,18 @@
 
 .fc-range:active:not(:disabled)::-moz-range-thumb {
   box-shadow: 0 0 0 calc(5 * var(--u)) var(--sel), 0 0 0 1px var(--accent-strong);
+}
+
+.fc-wide {
+  width: 100%;
+}
+
+/* Windows の強制カラー（ハイコントラスト）：システムの色に置き換えると、塗り・印・点が消えて選択の有無が分からなくなる。
+   トークンの色のまま描く（トークンの色は 3:1 以上を確保している。06 11章） */
+@media (forced-colors: active) {
+  .fc-check,
+  .fc-radio,
+  .fc-range {
+    forced-color-adjust: none;
+  }
 }

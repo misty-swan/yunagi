@@ -48,16 +48,16 @@ test("標準の選択欄・チェックボックス・ラジオ・スライダ�
     [/<input\b[^>]*type="checkbox"/, "fc-check"],
     [/<input\b[^>]*type="radio"/, "fc-radio"],
     [/<input\b[^>]*type="range"/, "fc-range"],
-    [/<input\b[^>]*type="(date|time|number)"/, "fc-field"],
+    [/type="(date|time|number|text)"/, "fc-field"],
   ];
-  // 独自の見た目を持つ部品（持ち越しの丸いチェック）は対象外
-  const own = /class="cbox"/;
+  // 独自の見た目を持つ部品は対象外：持ち越しの丸いチェック、検索パレットの入力欄
+  const exempt = [/class="cbox"/, /role="combobox"/];
   let seen = 0;
   for (const [file, src] of Object.entries(screens)) {
-    for (const [re, cls] of rules) {
-      for (const m of src.matchAll(new RegExp(re.source, "g"))) {
-        const tag = src.slice(m.index, src.indexOf(">", m.index));
-        if (own.test(tag)) continue;
+    for (const tag of tags(src, "input").concat(tags(src, "select"))) {
+      if (exempt.some((re) => re.test(tag))) continue;
+      for (const [re, cls] of rules) {
+        if (!re.test(tag)) continue;
         seen++;
         expect(tag, `${file}: ${cls}`).toContain(cls);
       }
@@ -65,3 +65,24 @@ test("標準の選択欄・チェックボックス・ラジオ・スライダ�
   }
   expect(seen).toBeGreaterThan(10);
 });
+
+/** 開始タグの全体（`=>` や `{…}` の中の `>` で切れないよう、波括弧と引用符を数えて閉じの `>` を探す）。 */
+function tags(src: string, name: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(new RegExp(`<${name}(?=[\\s>])`, "g"))) {
+    let depth = 0;
+    let quote = "";
+    let i = m.index;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === quote) quote = "";
+      } else if (c === '"' && depth === 0) quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0 && src[i - 1] !== "=") break;
+    }
+    out.push(src.slice(m.index, i + 1));
+  }
+  return out;
+}

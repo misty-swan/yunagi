@@ -235,7 +235,7 @@
         <form class="choose" onsubmit={onChoose}>
           <label>
             <span class="path-label">{m.chooseLabel}</span>
-            <input class="fc-field" type="text" bind:value={dir} spellcheck="false" autocomplete="off" disabled={busy} />
+            <input class="fc-field fc-wide" type="text" bind:value={dir} spellcheck="false" autocomplete="off" disabled={busy} />
           </label>
           <button type="button" class="btn ghost" disabled={busy} onclick={() => void pick()}>{m.pickFolder}</button>
           <button type="submit" class="btn" disabled={busy || dir.trim() === ""}>
