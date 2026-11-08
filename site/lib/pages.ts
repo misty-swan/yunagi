@@ -83,12 +83,12 @@ function verifyKey(lang: Lang, key: string | null): string {
   if (key === null) {
     return `<div class="notice"><p>${
       ja
-        ? "配布用の公開鍵は、最初のリリースの前に、ここに掲載します。掲載するまでは、署名の確認はできません。"
+        ? "配布用の公開鍵は最初のリリースの前にここに掲載します。掲載するまでは、署名の確認はできません。"
         : "The public key for downloads will be published here before the first release. Until then, signatures cannot be checked."
     }</p></div>`;
   }
   const text = ja
-    ? `公開鍵のファイルは <a href="/yunagi-release.pub">yunagi-release.pub</a> です。同じ内容を、リポジトリの <a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a> でも見られます。2か所が同じであることも確かめてください。`
+    ? `公開鍵のファイルは <a href="/yunagi-release.pub">yunagi-release.pub</a> です。同じ内容をリポジトリの<a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a> でも見られます。2か所が同じであることも確かめてください。`
     : `The public key file is <a href="/yunagi-release.pub">yunagi-release.pub</a>. The same content is in the repository at <a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a>. Check that the two copies match.`;
   return `<p>${text}</p>\n<pre tabindex="0"><code>${esc(key.trimEnd())}</code></pre>`;
 }

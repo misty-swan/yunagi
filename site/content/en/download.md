@@ -66,7 +66,10 @@ Check a file you downloaded by hand with [Verify a download](/en/verify/) before
 - Linux: make the AppImage executable (`chmod +x`) and run it. It needs FUSE 2 to start.
 - Windows: run the `-setup.exe`.
 
-The install script sets up the `yunagi` command link and the `PATH`. If you install by hand, set them up yourself.
+The install script sets up the `yunagi` command as follows, depending on the OS. If you install by hand, set it up yourself.
+
+- macOS and Linux: it creates a link in `~/.local/bin`. If `~/.local/bin` is not in your `PATH`, it shows how to add it.
+- Windows: it adds the `bin` folder that holds `yunagi.exe` to your user `PATH` if it is not there yet.
 
 ## 5. Uninstall
 
