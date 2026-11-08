@@ -30,8 +30,7 @@
   --done: #66616e;
   --agent: #6a53ae;
   --sea: #285f77;
-  --sky-1: #f5dcc8;
-  --sky-2: #f1e8ee; /* --sky-1・--sky-2 はアプリの凪メーターの空。サイトでは使わない（3章の表と同じ値を保つために置く） */
+  /* 3章の --sky-1・--sky-2（アプリの凪メーターの空）は、サイトでは使わないので置かない（下の --site-sky-1〜3 を使う） */
   /* サイト専用の空（夕焼けの 3 段。上から 1・2・3）。1・2 は文字の背景になるので淡く、3 は文字を載せない */
   --site-sky-1: #f6ecf0;
   --site-sky-2: #f8e0cf;
@@ -67,8 +66,6 @@
     --done: #8d93aa;
     --agent: #b9a8f4;
     --sea: #8ec3d8;
-    --sky-1: #2a2440;
-    --sky-2: #1a1b30;
     --site-sky-1: #151a33;
     --site-sky-2: #231f3a;
     --site-sky-3: #4a3248;
@@ -472,6 +469,7 @@ a:hover {
   }
 }
 
+/* 上の no-preference の外に動きを足してしまったときにも、動きを減らす設定では止まるようにする（意図して置いている） */
 @media (prefers-reduced-motion: reduce) {
   .scene-wave {
     animation: none;

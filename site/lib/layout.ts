@@ -28,7 +28,8 @@ const LOGO_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 
 /** 景色の大きさ（viewBox）と水平線・太陽の位置。文字は景色の上に載せない（コピーは景色の上の空に置く） */
 const SCENE = { w: 1280, h: 320, horizon: 190, sunX: 760 } as const;
-/** 波が横に動く幅（site.css の @keyframes の 12px の 2 倍）より外まで、線を左右に伸ばす（端の切れ目を見せない） */
+/** 波の線を左右に伸ばす長さ。site.css の @keyframes wave-drift が動く幅（今は 12px）より十分に長くする
+ *  （端の切れ目を見せない）。動く幅を超えていることは、site/site.test.ts が CSS から読んで確かめる */
 const WAVE_OVERSHOOT = 160;
 
 /** 波の線：半周期 half の山と谷を、左右に WAVE_OVERSHOOT ずつ余分に伸ばして並べる */
