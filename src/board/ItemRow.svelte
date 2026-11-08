@@ -189,7 +189,8 @@
       case "]":
       case "[":
         // Vim の「次・前のセクションへ」。2打目で領域を移る（1打目は続きのキー待ち）
-        if (pending === e.key) onRegion(e.key === "]" ? 1 : -1);
+        // 押し続けたときの繰り返しは、2打目に数えない
+        if (pending === e.key && !e.repeat) onRegion(e.key === "]" ? 1 : -1);
         else model.vimPending = e.key;
         return true;
     }

@@ -137,7 +137,8 @@
                 // Vim が回数・オペレータ・文字（`f]` `r]` など）を待っている間は、Vim の入力なので奪わない
                 if ((e.key === "]" || e.key === "[") && vimIdle(v)) {
                   e.preventDefault();
-                  if (pending === e.key) onRegion(e.key === "]" ? 1 : -1);
+                  // 押し続けたときの繰り返しは、2打目に数えない
+                  if (pending === e.key && !e.repeat) onRegion(e.key === "]" ? 1 : -1);
                   else regionPending = e.key;
                   return true;
                 }

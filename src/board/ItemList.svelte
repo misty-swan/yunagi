@@ -129,7 +129,7 @@
       }
       if (e.key === "]" || e.key === "[") {
         e.preventDefault();
-        if (pending === e.key) onRegion(kind, e.key === "]" ? 1 : -1);
+        if (pending === e.key && !e.repeat) onRegion(kind, e.key === "]" ? 1 : -1);
         else model.vimPending = e.key;
         return;
       }
@@ -153,6 +153,7 @@
   aria-labelledby={headingId}
   onkeydown={onRegionKey}
   onfocus={() => (model.vimPending = null)}
+  onblur={() => (model.vimPending = null)}
 >
   <div class="rh">
     <h2 class="label" id={headingId}>{kind === "todo" ? m.labels.region.todo : m.labels.region.blockers}</h2>

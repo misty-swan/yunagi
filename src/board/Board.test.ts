@@ -1000,6 +1000,11 @@ test("Vim モードの整理モードのリスト：]] / [[ で次・前の領�
   await until(() => active() === todo()[1]);
   vimKey(active(), "]");
   expect(active()).toBe(todo()[1]);
+  // 押し続けた繰り返し（repeat）は2打目に数えない
+  // （直前の `]` が1打目として残っている。繰り返しの `]` では移らない）
+  vimKey(active(), "]", { repeat: true });
+  expect(active()).toBe(todo()[1]);
+  vimKey(active(), "j");
   // 違う向きの括弧（] [）でも移らない
   vimKey(active(), "[");
   expect(active()).toBe(todo()[1]);
