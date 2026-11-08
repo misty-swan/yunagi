@@ -183,8 +183,8 @@ export class BoardModel {
    * ノーマルモードでは、行を選ぶだけ（本文は入力欄にしない）。Vim モードでない間は使わない。
    */
   insert = $state(false);
-  /** ノーマルモードの、続きのキーを待っているキー（`g`・`d`）。 */
-  vimPending: "g" | "d" | null = null;
+  /** ノーマルモードの、続きのキーを待っているキー（`g`・`d`・`]`・`[`）。 */
+  vimPending: "g" | "d" | "]" | "[" | null = null;
 
   constructor(deps: BoardDeps) {
     this.#deps = deps;
