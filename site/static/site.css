@@ -442,30 +442,34 @@ a:hover {
 }
 
 /* 動き：ヒーローの波の線だけ（デザインガイド 10章。2章の原則の例外）。transform だけを動かすので、
-   レイアウトは動かない。波の線は左右に動く幅より長く描いてある（layout.ts）。往復（alternate）と緩やかな
-   加減速で、周期の切れ目に飛ばない。動きを減らす設定の人と、この設定を知らない環境には、動きを付けない */
+   レイアウトは動かない。波の線は左右に動く幅より長く描いてある（layout.ts）。
+   ページを開いたときに、元の位置から 12px 動いて戻る往復を数回だけ行い、5 秒以内に止まる（WCAG 2.2.2：
+   5 秒を超えて自動で動き続けない。止まったあとの位置は動く前と同じなので、止まるときに飛ばない）。
+   動きを減らす設定の人と、この設定を知らない環境には、動きを付けない */
 @keyframes wave-drift {
-  from {
-    transform: translateX(-12px);
+  0%,
+  100% {
+    transform: translateX(0);
   }
 
-  to {
+  50% {
     transform: translateX(12px);
   }
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .scene-wave {
-    animation: wave-drift 12s ease-in-out infinite alternate;
+    animation: wave-drift 2.5s ease-in-out 2;
   }
 
   .wave-2 {
-    animation-duration: 16s;
-    animation-direction: alternate-reverse;
+    animation-duration: 5s;
+    animation-iteration-count: 1;
   }
 
   .wave-3 {
-    animation-duration: 20s;
+    animation-duration: 4s;
+    animation-iteration-count: 1;
   }
 }
 

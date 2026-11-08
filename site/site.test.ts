@@ -581,7 +581,22 @@ describe("色と文字（デザインガイド 3章・4章）", () => {
     const [noPref] = mediaBlocks("no-preference");
     expect(mediaBlocks("no-preference")).toHaveLength(1);
     expect(noPref).toContain("wave-drift");
-    expect(noPref).toMatch(/\.scene-wave \{[^}]*animation: wave-drift 12s ease-in-out infinite alternate;/);
+    // 動きは数回で止まる：回数は有限（infinite が無い）で、(1 回の長さ × 回数) が 5 秒以内（WCAG 2.2.2：5 秒を超えて自動で動き続けない）。
+    // 最後のキーフレームは最初と同じ位置なので、止まるときに飛ばない
+    expect(bare).not.toMatch(/\binfinite\b/);
+    const base = /\.scene-wave \{[^}]*animation: wave-drift ([\d.]+)s ease-in-out (\d+);/.exec(noPref);
+    expect(base, "基本の animation の宣言").not.toBeNull();
+    const totals = ["wave-1", "wave-2", "wave-3"].map((cls) => {
+      const own = new RegExp(`\\.${cls} \\{([^}]*)\\}`).exec(noPref)?.[1] ?? "";
+      const dur = Number(/animation-duration:\s*([\d.]+)s;/.exec(own)?.[1] ?? base?.[1]);
+      const count = Number(/animation-iteration-count:\s*(\d+);/.exec(own)?.[1] ?? base?.[2]);
+      expect(Number.isFinite(dur) && Number.isInteger(count) && count >= 1, `${cls}: 長さと回数`).toBe(true);
+      return { cls, total: dur * count };
+    });
+    for (const { cls, total } of totals) expect(total, `${cls}: 動きの合計の長さ（秒）`).toBeLessThanOrEqual(5);
+    const frameStops = framesBody.match(/(\d+)%/g) ?? [];
+    expect(frameStops.sort()).toEqual(["0%", "100%", "50%"].sort());
+    expect(framesBody).toMatch(/0%,\s*100% \{\s*transform: translateX\(0\);/);
     for (const m of noPref.matchAll(/^\s*([^{}\n]+) \{/gm)) {
       if (m[1].startsWith("@media")) continue;
       expect(m[1], "動きを付ける選び方").toMatch(/^\.(scene-wave|wave-\d)$/);
