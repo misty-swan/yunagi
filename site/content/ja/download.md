@@ -69,7 +69,7 @@ $env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex
 コマンド `yunagi` の設定は、OS ごとにインストールスクリプトが次のように行います。手動で入れた場合は、自分で設定してください。
 
 - macOS と Linux：`~/.local/bin` にリンクを作ります。`~/.local/bin` が `PATH` に入っていないときは、追記の方法を案内します。
-- Windows：`yunagi.exe` のある `bin` フォルダを、ユーザーの `PATH` に追加します。
+- Windows：`yunagi.exe` のある `bin` フォルダが `PATH` にまだ入っていなければ、ユーザーの `PATH` に追加します。
 
 ## 5. アンインストール
 

@@ -69,7 +69,7 @@ Check a file you downloaded by hand with [Verify a download](/en/verify/) before
 The install script sets up the `yunagi` command as follows, depending on the OS. If you install by hand, set it up yourself.
 
 - macOS and Linux: it creates a link in `~/.local/bin`. If `~/.local/bin` is not in your `PATH`, it shows how to add it.
-- Windows: it adds the `bin` folder that holds `yunagi.exe` to your user `PATH`.
+- Windows: it adds the `bin` folder that holds `yunagi.exe` to your user `PATH` if it is not there yet.
 
 ## 5. Uninstall
 
