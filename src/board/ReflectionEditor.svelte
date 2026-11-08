@@ -242,8 +242,15 @@
     /* 項目の行（ItemRow）と同じ並び：左端の線は、本文の左の余白に置く */
     margin-left: calc(-14 * var(--u));
     padding-left: calc(14 * var(--u));
-    border-radius: 0 var(--radius) var(--radius) 0;
     cursor: text;
+  }
+
+  /* Windows の強制カラー（ハイコントラスト）は box-shadow を消すので、線がなくならないよう、トークンの色のまま描く
+     （フォーム部品と同じ方針。06 11章） */
+  @media (forced-colors: active) {
+    .ref-ed {
+      forced-color-adjust: none;
+    }
   }
 
   /* フォーカスがあるとき：項目の行と同じ左端の 2px の線（06 6章）。Vim の有無によらない。
