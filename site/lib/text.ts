@@ -155,7 +155,7 @@ export const HOME: Record<Lang, Home> = {
         {
           label: "NOTE",
           title: "書いたまま、整理できるノート",
-          text: "ノートモードは Vim のキー操作と日本語入力に対応しています。書いた行は、そのまま TODO や障害に送れます。",
+          text: "ノートモードは Vim のキー操作と日本語入力に対応しています。書いた行はそのまま TODO や障害に送れます。",
         },
         {
           label: "AGENTS",
@@ -171,7 +171,7 @@ export const HOME: Record<Lang, Home> = {
       lead: "有料の開発者登録（Apple の署名、Windows のコード署名）は使いません。かわりに、配布物の署名と SHA-256 を公開し、確かめる手順を載せています。",
       mac: "macOS・Linux",
       windows: "Windows（PowerShell）",
-      before: "最初のリリースの前です。コマンドは、最初のリリースを公開してから動きます。",
+      before: "最初のリリースの前です。コマンドは最初のリリースを公開してから動きます。",
       latest: (v) => `最新版：${v}`,
       links: [
         { label: "スクリプトの中身を読んでから実行する手順", href: "download/#2-スクリプトの中身を読んでから実行する" },
@@ -193,7 +193,7 @@ export const HOME: Record<Lang, Home> = {
         },
         {
           title: "データは手元に置く",
-          text: "ノートは自分の PC のファイルです。外部への通信は、更新の確認（設定で無効にできます）と、自分で有効にした機能だけです。",
+          text: "ノートは自分の PC のファイルです。外部への通信は更新の確認（設定で無効にできます）と、自分で有効にした機能だけです。",
         },
         {
           title: "脆弱性の報告",

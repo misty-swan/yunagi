@@ -66,7 +66,7 @@ $env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex
 - Linux：AppImage に実行の権限を付け（`chmod +x`）、実行します。起動には FUSE 2 が要ります。
 - Windows：`-setup.exe` を実行します。
 
-コマンド `yunagi` のリンクや `PATH` の設定は、インストールスクリプトが行います。手動で入れた場合は、自分で設定してください。
+コマンド `yunagi` のリンクは、インストールスクリプトが作ります。`PATH` は、Windows ではインストールスクリプトが追加します。macOS と Linux では、`~/.local/bin` が `PATH` に入っていないときに、追記の方法が案内されます。手動で入れた場合は、自分で設定してください。
 
 ## 5. アンインストール
 

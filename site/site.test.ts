@@ -422,7 +422,7 @@ describe("配布用の公開鍵", () => {
     const out = join(tmp, "nokey-out");
     build({ root, outDir: out });
     expect(existsSync(join(out, "yunagi-release.pub"))).toBe(false);
-    expect(readFileSync(join(out, "ja", "verify", "index.html"), "utf8")).toContain("最初のリリースの前に、ここに掲載します");
+    expect(readFileSync(join(out, "ja", "verify", "index.html"), "utf8")).toContain("最初のリリースの前にここに掲載します");
     expect(readFileSync(join(out, "en", "verify", "index.html"), "utf8")).toContain("will be published here before the first release");
   });
 

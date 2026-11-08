@@ -22,7 +22,7 @@ irm https://getyunagi.com/install.ps1 | iex
 
 #### Installing safely
 
-If you prefer to read the script first, open the URL, review it, and run the saved file. The install script automatically verifies each download against its published SHA-256 hash. If you download a package manually, verify it with `SHA256SUMS` and its minisign signature `SHA256SUMS.sig` from the official site; the steps are on the site's install page.
+If you prefer to read the script first, open the URL, review it, and run the saved file. The install script automatically verifies each download against its published SHA-256 hash. If you download a package manually, verify it with `SHA256SUMS` and its minisign signature `SHA256SUMS.sig` from the official site; the steps are on the site's "Verify a download" page.
 
 #### Where it goes
 
