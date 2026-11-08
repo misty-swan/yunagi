@@ -239,7 +239,24 @@
     display: flex;
     flex-direction: column;
     min-height: calc(3 * var(--row-h));
+    /* 項目の行（ItemRow）と同じ並び：左端の線は、本文の左の余白に置く */
+    margin-left: calc(-14 * var(--u));
+    padding-left: calc(14 * var(--u));
     cursor: text;
+  }
+
+  /* Windows の強制カラー（ハイコントラスト）は box-shadow を消すので、線がなくならないよう、トークンの色のまま描く
+     （フォーム部品と同じ方針。06 11章） */
+  @media (forced-colors: active) {
+    .ref-ed {
+      forced-color-adjust: none;
+    }
+  }
+
+  /* フォーカスがあるとき：項目の行と同じ左端の 2px の線（06 6章）。Vim の有無によらない。
+     面（--sel）は敷かない：選択範囲も --sel なので、重なると選択が見えなくなる */
+  .ref-ed:focus-within {
+    box-shadow: inset 2px 0 0 var(--accent-strong);
   }
 
   .ref-ed :global(.cm-editor) {
@@ -249,6 +266,7 @@
     font: inherit;
   }
 
+  /* CodeMirror 既定の枠は消す。代わりの表示は上の .ref-ed:focus-within */
   .ref-ed :global(.cm-editor.cm-focused) {
     outline: none;
   }
