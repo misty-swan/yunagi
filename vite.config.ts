@@ -40,7 +40,7 @@ export default defineConfig({
     // scripts/release/ は配布用 CI が使うスクリプトの試験（配布手順書 3章）、
     // site/ は公式サイトのビルドと出力の検査（配布手順書 2章「公式サイトの作り方」）
     include: ["src/**/*.test.ts", "install/**/*.test.ts", "scripts/**/*.test.ts", "site/**/*.test.ts"],
-    // テストでは CSS を空にするが、色のトークンは中身を確かめる（src/styles/tokens.test.ts）
-    css: { include: [/src\/styles\/tokens\.css/] },
+    // テストでは CSS を空にするが、色のトークンとフォーム部品は中身を確かめる（src/styles/tokens.test.ts・forms.test.ts）
+    css: { include: [/src\/styles\/(tokens|base|forms)\.css/] },
   },
 });

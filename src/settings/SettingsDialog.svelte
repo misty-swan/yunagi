@@ -239,17 +239,17 @@
           {@const g = s.general}
           <h3 class="label">{labels.general}</h3>
           {#snippet dayBoundary()}
-            <input id="set-day-boundary" type="time" value={prefs.dayBoundary} onchange={(e) => saveTime(e, "dayBoundary")} />
+            <input id="set-day-boundary" class="fc-field fc-time" type="time" value={prefs.dayBoundary} onchange={(e) => saveTime(e, "dayBoundary")} />
           {/snippet}
           {@render row(g.dayBoundary, "set-day-boundary", dayBoundary, g.dayBoundaryNote)}
           {#snippet meter()}
             <label class="inline">
               <span>{g.meterStart}</span>
-              <input id="set-meter-start" type="time" value={prefs.meterStart} onchange={(e) => saveTime(e, "meterStart")} />
+              <input id="set-meter-start" class="fc-field fc-time" type="time" value={prefs.meterStart} onchange={(e) => saveTime(e, "meterStart")} />
             </label>
             <label class="inline">
               <span>{g.meterEnd}</span>
-              <input id="set-meter-end" type="time" value={prefs.meterEnd} onchange={(e) => saveTime(e, "meterEnd")} />
+              <input id="set-meter-end" class="fc-field fc-time" type="time" value={prefs.meterEnd} onchange={(e) => saveTime(e, "meterEnd")} />
             </label>
           {/snippet}
           <div class="row" role="group" aria-labelledby="set-meter-name">
@@ -258,7 +258,7 @@
             <p class="note">{g.meterNote}</p>
           </div>
           {#snippet language()}
-            <select id="set-lang" value={prefs.lang} onchange={(e) => void store.save({ locale: e.currentTarget.value as "ja" | "en" })}>
+            <select id="set-lang" class="fc-field fc-select" value={prefs.lang} onchange={(e) => void store.save({ locale: e.currentTarget.value as "ja" | "en" })}>
               <option value="ja">{g.languageOptions.ja}</option>
               <option value="en">{g.languageOptions.en}</option>
             </select>
@@ -267,6 +267,7 @@
           {#snippet update()}
             <input
               id="set-update"
+              class="fc-check"
               type="checkbox"
               checked={prefs.updateCheck}
               onchange={(e) => void store.save({ updateCheck: e.currentTarget.checked })}
@@ -277,7 +278,7 @@
           {@const d = s.display}
           <h3 class="label">{labels.display}</h3>
           {#snippet theme()}
-            <select id="set-theme" value={prefs.theme} onchange={(e) => void store.save({ theme: e.currentTarget.value as Theme })}>
+            <select id="set-theme" class="fc-field fc-select" value={prefs.theme} onchange={(e) => void store.save({ theme: e.currentTarget.value as Theme })}>
               {#each ["system", "light", "dark"] as const as v (v)}
                 <option value={v}>{d.themeOptions[v]}</option>
               {/each}
@@ -287,6 +288,7 @@
           {#snippet fontSize()}
             <input
               id="set-font-size"
+              class="fc-range"
               type="range"
               min={FONT_SIZE_MIN}
               max={FONT_SIZE_MAX}
@@ -299,7 +301,7 @@
           {/snippet}
           {@render row(d.fontSize, "set-font-size", fontSize)}
           {#snippet noteFont()}
-            <select id="set-note-font" value={prefs.noteFont} onchange={(e) => void store.save({ noteFont: e.currentTarget.value as NoteFont })}>
+            <select id="set-note-font" class="fc-field fc-select" value={prefs.noteFont} onchange={(e) => void store.save({ noteFont: e.currentTarget.value as NoteFont })}>
               {#each ["body", "mono"] as const as v (v)}
                 <option value={v}>{d.noteFontOptions[v]}</option>
               {/each}
@@ -307,7 +309,7 @@
           {/snippet}
           {@render row(d.noteFont, "set-note-font", noteFont)}
           {#snippet layout()}
-            <select id="set-layout" value={prefs.layout} onchange={(e) => void store.save({ layout: e.currentTarget.value as Layout })}>
+            <select id="set-layout" class="fc-field fc-select" value={prefs.layout} onchange={(e) => void store.save({ layout: e.currentTarget.value as Layout })}>
               {#each ["A", "B", "C"] as const as v (v)}
                 <option value={v}>{d.layoutOptions[v]}</option>
               {/each}
@@ -318,12 +320,13 @@
           {@const o = s.operation}
           <h3 class="label">{labels.operation}</h3>
           {#snippet threshold()}
-            <input id="set-threshold" type="number" min="1" step="1" value={prefs.reviewThreshold} onchange={saveThreshold} />
+            <input id="set-threshold" class="fc-field fc-number" type="number" min="1" step="1" value={prefs.reviewThreshold} onchange={saveThreshold} />
           {/snippet}
           {@render row(o.reviewThreshold, "set-threshold", threshold, o.reviewThresholdNote)}
           {#snippet vim()}
             <input
               id="set-vim"
+              class="fc-check"
               type="checkbox"
               checked={prefs.vimMode}
               onchange={(e) => void store.save({ vimMode: e.currentTarget.checked })}
@@ -335,6 +338,7 @@
             {#snippet imeRestore()}
               <input
                 id="set-vim-ime-restore"
+                class="fc-check"
                 type="checkbox"
                 checked={prefs.vimImeRestore}
                 onchange={(e) => void store.save({ vimImeRestore: e.currentTarget.checked })}
@@ -522,23 +526,7 @@
     color: var(--text-muted);
   }
 
-  .panel :global(select),
-  .panel :global(input[type="time"]),
-  .panel :global(input[type="number"]),
-  .panel :global(input[type="date"]) {
-    font: inherit;
-    font-size: var(--fs-small);
-    color: var(--text);
-    padding: calc(5 * var(--u)) calc(8 * var(--u));
-    background: var(--field);
-    border: 1px solid var(--rule);
-    border-radius: calc(8 * var(--u));
-  }
-
-  .panel :global(input[type="number"]) {
-    width: calc(80 * var(--u));
-  }
-
+  /* 選択欄・入力欄・チェックボックス・スライダーの見た目は src/styles/forms.css（06 11章） */
   output {
     font-size: var(--fs-small);
     color: var(--text-muted);
@@ -551,13 +539,22 @@
     color: var(--text);
     padding: calc(6 * var(--u)) calc(14 * var(--u));
     background: var(--field);
-    border: 1px solid var(--rule);
+    border: 1px solid var(--ring);
     border-radius: calc(8 * var(--u));
     cursor: pointer;
   }
 
   .panel :global(.btn:hover:not(:disabled)) {
     border-color: var(--accent-strong);
+  }
+
+  .panel :global(.btn:active:not(:disabled)) {
+    background: var(--sel);
+    border-color: var(--accent-strong);
+  }
+
+  .panel :global(.btn:focus-visible) {
+    border-radius: calc(8 * var(--u));
   }
 
   .panel :global(.btn:disabled) {
