@@ -353,6 +353,6 @@ S-05 ─エージェント区分▶ S-06 ─Esc▶ S-05
 試作品はブラウザで動くため、次の点は試作品では確認できない。本番の構成（Tauri と各 OS の WebView）で確認する（テスト計画書 4章）。
 
 - 日本語入力（IME）の確定 Enter などの判定（本番の macOS・Linux は WebKit 系で、ブラウザと挙動が異なる）
-- OS 全体で効くショートカット（Mod+Shift+D）
+- OS 全体で効くショートカット（Mod+Alt+Y。Windows・Linux は Alt+Shift+Y）
 - 起動時間・入力応答などの性能基準
 - ブラウザ自体のショートカット（Mod+K、Mod+T、Mod+J など）と衝突するキー操作（試作品では Mod+\\ と Mod+Shift+L の代わりに Alt+\\、Alt+Shift+L を使う）

@@ -139,6 +139,21 @@ describe("コードと食い違っていない", () => {
     }
   });
 
+  // Windows・Linux だけ初期割当が違う操作（`pcInitial`）は、表のかっこ書きに出る
+  const pcInitials = [...keymap.matchAll(/pcInitial: ("[^"]+")/g)].map((m) => JSON.parse(m[1]) as string);
+
+  it("Windows・Linux だけ違う初期割当が、ガイドの表の同じ行に書いてある", () => {
+    expect(pcInitials.length).toBeGreaterThan(0);
+    for (const text of [GUIDES.ja, GUIDES.en]) {
+      for (const k of pcInitials) {
+        expect(
+          tableRows(text).some((cols) => cols[1].includes(k)),
+          k,
+        ).toBe(true);
+      }
+    }
+  });
+
   // `yunagi --help` の本文（args.rs の `USAGE`）
   const usageMatch = /pub const USAGE: &str = "\\\n([\s\S]*?)";\n/.exec(read("crates/cli/src/args.rs"));
   if (usageMatch === null) throw new Error("crates/cli/src/args.rs の USAGE が読めません（書き方を変えたなら、この試験の読み方も直す）");

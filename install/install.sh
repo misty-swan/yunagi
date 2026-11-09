@@ -275,7 +275,7 @@ wayland_note() {
     cmd="$HOME/.local/bin/yunagi show"
   fi
   say ''
-  say 'On Wayland the shortcut Mod+Shift+D may not work. If it does not, assign the command'
+  say 'On Wayland the shortcut Alt+Shift+Y may not work. If it does not, assign the command'
   say "  $cmd"
   say "to a key of your choice in your desktop environment's keyboard settings:"
   say '  GNOME:  Settings > Keyboard > Keyboard Shortcuts > Custom Shortcuts'

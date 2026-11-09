@@ -269,6 +269,25 @@ mod tests {
         );
     }
 
+    /// 初期割当（keymap.ts の `bringToFront`）：macOS は ⌘⌥Y（`Mod+Alt+Y`）、Windows・Linux は
+    /// `Alt+Shift+Y`（Ctrl+Alt は AltGr と重なるため使わない。操作仕様書 1章）。
+    #[test]
+    fn parse_maps_the_default_bindings() {
+        assert_eq!(
+            parse("Mod+Alt+Y", true).unwrap(),
+            Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyY)
+        );
+        assert_eq!(
+            parse("Alt+Shift+Y", false).unwrap(),
+            Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyY)
+        );
+        // macOS でない環境の Mod+Alt+Y は Ctrl+Alt+Y になる（画面側は alt_gr として断るキー）
+        assert_eq!(
+            parse("Mod+Alt+Y", false).unwrap(),
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyY)
+        );
+    }
+
     #[test]
     fn parse_rejects_what_the_screen_does_not_assign() {
         for bad in [

@@ -92,7 +92,7 @@ Vim モードで挿入モードを抜けたとき IME を英数入力に切り�
 
 ### 3.5 OS 全体のショートカットの方式（2026-11-04 決定）
 
-アプリが前面になくても、割当のキー（初期割当は Mod+Shift+D）で Yunagi の窓を前面に出す（操作仕様書 1章「OS 全体の操作」）。OS への登録は OS の機能なので、デスクトップアプリ（`src-tauri/src/global_shortcut.rs`）に置く。コア（`yunagi-core`）には入れない。
+アプリが前面になくても、割当のキー（初期割当は macOS が Mod+Alt+Y、Windows・Linux が Alt+Shift+Y）で Yunagi の窓を前面に出す（操作仕様書 1章「OS 全体の操作」）。OS への登録は OS の機能なので、デスクトップアプリ（`src-tauri/src/global_shortcut.rs`）に置く。コア（`yunagi-core`）には入れない。
 
 - **部品**：Tauri のプラグイン `tauri-plugin-global-shortcut` の 2.4.1（直下の `Cargo.toml` で `=` で固定。3.x は alpha なので使わない）。内部は `global-hotkey` で、Windows は `RegisterHotKey`、macOS は `RegisterEventHotKey`、Linux の X11 は `XGrabKey` を使う。
 - **登録は Rust 側だけで行う**。プラグインの画面側のパッケージ（`@tauri-apps/plugin-global-shortcut`）は入れず、`capabilities/default.json` に `global-shortcut:*` も窓の操作の権限も足さない。画面には、割当を渡す Tauri コマンド `set_global_shortcut(binding)` 1つだけを見せる。画面から任意のキーを OS に登録したり、窓を操作したりできないようにするため。窓を前面に出す処理（最小化を解く・表示・フォーカス）も Rust 側に閉じる。押したときだけ働かせる（プラグインは離したときにも処理を呼ぶ）。

@@ -11,7 +11,7 @@ This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) f
 - Autosave and automatic backups
 - Full-text search
 - Vim mode
-- Bring Yunagi to the front from any app with a shortcut (Mod+Shift+D by default; it may not work on Wayland)
+- Bring Yunagi to the front from any app with a shortcut (⌘⌥Y on macOS and Alt+Shift+Y on Windows and Linux by default; it may not work on Wayland)
 - The command `yunagi show [--note]` brings Yunagi to the front (it starts it if it is not running; you can call it from your keyboard settings when the shortcut does not work on Wayland)
 - AI agent integration through the CLI and an MCP server
 - Copy selected TODOs as a request, with the original section of the note and the unresolved blockers attached (Mod+Shift+A; also available as `yunagi handoff export` in the CLI and `export_handoff` in MCP)

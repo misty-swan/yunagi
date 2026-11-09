@@ -453,7 +453,7 @@ describe("install.sh：Wayland の案内（Linux だけ）", () => {
     const settings = readFileSync(resolve(__dirname, "../src/lib/i18n_settings.ts"), "utf8");
     expect(settings).toContain("assign the command yunagi show to a key of your choice");
     expect(settings).toContain("Wayland では、このショートカットが効かないことがあります");
-    expect(out).toContain("On Wayland the shortcut Mod+Shift+D may not work.");
+    expect(out).toContain("On Wayland the shortcut Alt+Shift+Y may not work.");
     expect(out).toMatch(/assign the command\n {2}.*yunagi show\nto a key of your choice in your desktop environment's keyboard settings/);
   });
 

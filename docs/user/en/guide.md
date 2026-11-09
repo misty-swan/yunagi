@@ -55,7 +55,7 @@ $env:YUNAGI_VERSION="1.2.3"; irm https://getyunagi.com/install.ps1 | iex   # Win
 
 ## 2. First launch
 
-Open Yunagi from your applications. After that, press **Mod+Shift+D** (⌘⇧D on macOS, Ctrl+Shift+D on Windows and Linux) to bring it up from anywhere.
+Open Yunagi from your applications. After that, press **Mod+Alt+Y** (⌘⌥Y on macOS; on Windows and Linux it does not use Mod, but Alt+Shift+Y) to bring it up from anywhere.
 
 You can change this key in the Operation section of Settings, under Keyboard shortcuts (a letter or digit key combined with Mod or Alt). If another app is already using the key and it can't be registered with the OS, the reason appears under that row in Settings. Choose a different key.
 
@@ -83,7 +83,7 @@ On Linux with Wayland, this shortcut may not work (Settings says so too). If so,
 Yunagi has two modes. Board mode (shown as Board) lays out your TODOs, blockers, and reflection for sorting through. Note mode (Note) gives the whole screen to the day's notes. Press **Mod+J** to switch between them.
 
 1. **Morning**: The first time you open Yunagi on a new day, the TODOs left over from the last day you used it and the blockers that are still open appear on a "CARRY OVER" screen. Everything starts out checked, so uncheck what you won't continue today, then press "Carry over selected", "Carry over all", or "Don’t carry over". TODOs carried over three times or more (you can change the number in Settings) come with "Split" and "Drop" options, a good moment to rethink them. If you don't want to decide yet, press Esc to put it off (it shows once more the next time you bring Yunagi to the front, and you can always open it from "Open carry-over" in Mod+K). Once you confirm, Mod+Z can't undo it.
-2. **During the day**: In Board mode, work through your TODOs from the top. The order is the priority. Press Enter at the end of a line to add an item, Mod+Enter to mark it done, and Mod+Backspace to delete it (Mod+Z brings it back). Write down anything that's blocking you under "Blockers". Mod+1, Mod+2 and Mod+3 move between the TODO, Blockers and Reflection areas.
+2. **During the day**: In Board mode, work through your TODOs from the top. The order is the priority. Press Enter at the end of a line to add an item, Mod+Enter to mark it done, and Mod+Shift+Backspace to delete it (Mod+Z brings it back). Write down anything that's blocking you under "Blockers". Mod+1, Mod+2 and Mod+3 move between the TODO, Blockers and Reflection areas.
 3. **In meetings**: Press **Mod+J** to switch to Note mode and write freely. **Mod+Shift+H** inserts a timestamped heading such as "10:00 Standup".
 4. **After meetings**: On a line that became a task, press **Mod+Shift+T** to send it to TODOs. On a line that describes a problem, press **Mod+Shift+B** to send it to Blockers. Press **Mod+J** again to go back to Board mode.
 5. **End of day**: Write a short reflection: what went well, what got stuck, and your first move for tomorrow (**Mod+Shift+R** inserts the headings).
@@ -106,14 +106,14 @@ In the Display section of Settings you can choose the theme (match the OS, light
 
 | Action | Keys |
 | --- | --- |
-| Bring up Yunagi | Mod+Shift+D |
+| Bring up Yunagi | Mod+Alt+Y (Alt+Shift+Y on Windows and Linux) |
 | Note mode ⇄ Board mode | Mod+J |
 | Send line to TODOs / Blockers | Mod+Shift+T / Mod+Shift+B |
 | Insert a timestamped heading (Note) | Mod+Shift+H |
 | Insert the reflection headings | Mod+Shift+R |
 | Move between the TODO, Blockers and Reflection areas | Mod+1 / Mod+2 / Mod+3 |
 | Toggle done / resolved | Mod+Enter |
-| Delete an item | Mod+Backspace |
+| Delete an item | Mod+Shift+Backspace |
 | Copy the selected TODO as a request | Mod+Shift+A |
 | Reorder items | Alt+↑ / Alt+↓ |
 | Previous / next day / today | Mod+[ / Mod+] / Mod+T |
