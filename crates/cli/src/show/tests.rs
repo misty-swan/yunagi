@@ -97,3 +97,27 @@ fn the_environment_variable_wins_and_must_exist() {
         Some(Target::MacApp(app))
     );
 }
+
+#[test]
+fn the_display_hint_is_for_linux_without_any_display_connection() {
+    let some = Some(OsStr::new(":0"));
+    let empty = Some(OsStr::new(""));
+    // 両方無い（空は無いのと同じ）ときだけ
+    assert!(no_display("linux", None, None));
+    assert!(no_display("linux", empty, empty));
+    assert!(!no_display("linux", some, None));
+    assert!(!no_display("linux", None, some));
+    assert!(!no_display("linux", some, some));
+    // macOS・Windows には画面の接続先の考え方が無い
+    assert!(!no_display("macos", None, None));
+    assert!(!no_display("windows", None, None));
+    // 案内は、真のときだけ `message` に足す。ほかの文言は変えない
+    let plain = error::message(&launch_failed_message(false)).to_string();
+    assert!(!plain.contains("WAYLAND_DISPLAY"), "{plain}");
+    let hinted = error::message(&launch_failed_message(true)).to_string();
+    assert!(hinted.starts_with(&plain), "{hinted}");
+    assert!(
+        hinted.contains("Neither WAYLAND_DISPLAY nor DISPLAY"),
+        "{hinted}"
+    );
+}

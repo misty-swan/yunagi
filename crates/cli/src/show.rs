@@ -209,11 +209,38 @@ fn app_not_found() -> ErrorObject {
     )
 }
 
-fn launch_failed() -> ErrorObject {
-    error::api_error(
-        "launch_failed",
-        "Yunagi is not running, and starting it failed. Nothing was changed. Start Yunagi yourself.",
+/// 画面の接続先が環境に無いか。Linux だけの考え方で、`WAYLAND_DISPLAY` と `DISPLAY` の両方が
+/// 無い（空を含む）ときに真。`os` は OS（`std::env::consts::OS`）。macOS・Windows は常に偽。
+fn no_display(os: &str, wayland: Option<&OsStr>, x11: Option<&OsStr>) -> bool {
+    let unset = |v: Option<&OsStr>| v.is_none_or(|v| v.is_empty());
+    os == "linux" && unset(wayland) && unset(x11)
+}
+
+/// 今の環境で [`no_display`] を調べる。
+fn no_display_here() -> bool {
+    no_display(
+        std::env::consts::OS,
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+        std::env::var_os("DISPLAY").as_deref(),
     )
+}
+
+/// 画面の接続先が無いときは、原因として考えられることを 1 文足す（GTK は画面の接続先が無いと
+/// 初期化で異常終了し、終了状態だけでは原因が分からないため。05 3.3）。
+fn launch_failed() -> ErrorObject {
+    launch_failed_message(no_display_here())
+}
+
+fn launch_failed_message(no_display: bool) -> ErrorObject {
+    let mut message = String::from(
+        "Yunagi is not running, and starting it failed. Nothing was changed. Start Yunagi yourself.",
+    );
+    if no_display {
+        message.push_str(
+            " Neither WAYLAND_DISPLAY nor DISPLAY is set. Was this command run from a terminal that has no screen, such as an SSH session? If so, run it from a terminal on the desktop.",
+        );
+    }
+    error::api_error("launch_failed", message)
 }
 
 fn start_timeout(wait: Duration) -> ErrorObject {

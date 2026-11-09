@@ -2258,6 +2258,58 @@ fn show_no_app(w: &World) {
         "{:?}",
         started.elapsed()
     );
+    // 画面の接続先（Linux は WAYLAND_DISPLAY と DISPLAY）が両方無いときだけ、案内を足す。
+    // 他の失敗の文言は変えない
+    // 途中の assert が失敗しても、環境変数を元に戻す
+    struct RestoreDisplay([(&'static str, Option<std::ffi::OsString>); 2]);
+    impl Drop for RestoreDisplay {
+        fn drop(&mut self) {
+            for (k, v) in std::mem::take(&mut self.0) {
+                // SAFETY: 試験は 1 つのスレッドで順に走る
+                unsafe {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+    }
+    let restore = RestoreDisplay(["WAYLAND_DISPLAY", "DISPLAY"].map(|k| (k, std::env::var_os(k))));
+    let launch_failed_message = |display: Option<(&str, &str)>| {
+        for k in ["WAYLAND_DISPLAY", "DISPLAY"] {
+            // SAFETY: 試験は 1 つのスレッドで順に走る
+            unsafe { std::env::remove_var(k) };
+        }
+        if let Some((k, v)) = display {
+            // SAFETY: 同上（1 つのスレッドで順に走る）
+            unsafe { std::env::set_var(k, v) };
+        }
+        let crash = app_script(w, "crash-display", "exit 101");
+        let out = exec_show(
+            w,
+            &["--json", "show"],
+            Launch::Program(crash),
+            Duration::from_secs(5),
+        );
+        assert_eq!(out.code, 8, "{}", out.stderr);
+        assert_eq!(out.json()["error"]["reason"], "launch_failed");
+        out.json()["error"]["message"].as_str().unwrap().to_string()
+    };
+    let without = launch_failed_message(None);
+    let with_wayland = launch_failed_message(Some(("WAYLAND_DISPLAY", "wayland-0")));
+    let with_x11 = launch_failed_message(Some(("DISPLAY", ":0")));
+    // 後ろの場面が実機の環境に左右されないよう、ここで元に戻す
+    drop(restore);
+    assert_eq!(
+        without.contains("Neither WAYLAND_DISPLAY nor DISPLAY"),
+        cfg!(target_os = "linux"),
+        "{without}"
+    );
+    for message in [&with_wayland, &with_x11] {
+        assert!(!message.contains("WAYLAND_DISPLAY"), "{message}");
+        assert!(message.starts_with("Yunagi is not running, and starting it failed."));
+    }
     // 起動したが、待ち受けが開かない：期限で、起動はしたことが分かる
     let silent = app_script(w, "silent", "exec sleep 3");
     let started = Instant::now();
