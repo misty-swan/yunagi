@@ -1,6 +1,6 @@
 # Download and install
 
-Yunagi installs with one line in a terminal. It runs on macOS, Windows and Linux. You do not need administrator rights (it installs for the signed-in user only). The supported systems are listed under [System requirements](/en/requirements/).
+Yunagi installs with one line in a terminal. It runs on macOS, Windows and Linux. You do not need administrator rights (it installs for the signed-in user only). The supported systems are listed under [System requirements](/en/requirements/). The Intel Mac build (x86_64) is trial support until we test it on a real Intel Mac: we have not verified it and do not guarantee it works.
 
 ## 1. Install from a terminal
 

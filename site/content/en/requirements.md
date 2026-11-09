@@ -4,11 +4,11 @@
 
 | OS | Versions | Architectures |
 | --- | --- | --- |
-| macOS | The latest 3 releases (Apple Silicon). Intel Macs, up to the last macOS that supports them | arm64, x86_64 |
+| macOS | The latest 3 releases (Apple Silicon). Intel Macs, up to macOS 26 Tahoe (the last macOS that Apple supports on Intel Macs) | arm64, x86_64 |
 | Windows | 10, 11 | x86_64, arm64 |
 | Linux | Major distributions. The ones we test on are Ubuntu LTS (GNOME; Wayland and X11) and Fedora (KDE; Wayland) | x86_64, arm64 |
 
-A combination we could not test before a release is marked "trial support (not guaranteed to work)" in the download page and the release notes.
+A combination we could not test before a release is marked "trial support (not guaranteed to work)" in the download page and the release notes. **The Intel Mac build (x86_64) is trial support until we can test it on a real Intel Mac: we have not verified it and do not guarantee it works.** Yunagi does not start on macOS earlier than 13.3. The versions we target are those in the table above (Intel Macs are trial support, as noted above).
 
 ## Other notes
 
