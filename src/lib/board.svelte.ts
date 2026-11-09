@@ -680,7 +680,7 @@ export class BoardModel {
     }
   }
 
-  /** 行を消す（Mod+Backspace・空の行の Backspace）。取り消せる。 */
+  /** 行を消す（Mod+Shift+Backspace・空の行の Backspace）。取り消せる。 */
   remove(key: string) {
     const row = this.row(key);
     if (row === undefined) return;

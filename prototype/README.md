@@ -71,7 +71,7 @@ Yunagi の見た目と操作感を確かめるための、ブラウザで動く�
 | サイドバーを開く・閉じる（案D で追加） | Mod+\\ | Alt+\\ |
 | ふりかえり（Archive）を開く・閉じる（案D で追加） | Mod+Shift+L | Alt+Shift+L |
 | 取り消す／やり直す | Mod+Z ／ Mod+Shift+Z（Windows・Linux は Ctrl+Y も可） | — |
-| Yunagi を前面に呼び出す | Mod+Shift+D | 試作品では確認できません |
+| Yunagi を前面に呼び出す | Mod+Alt+Y（Windows・Linux は Alt+Shift+Y） | 試作品では確認できません |
 
 ### 整理モード（S-01）
 
@@ -81,7 +81,7 @@ Yunagi の見た目と操作感を確かめるための、ブラウザで動く�
 | 新しい項目を追加 | Enter（行末で） | — |
 | 完了・解消の切替 | Mod+Enter（行頭のチェック欄のクリックでも可） | — |
 | 項目の上下移動 | Alt+↑ / Alt+↓ | — |
-| 項目の削除 | Mod+Backspace | — |
+| 項目の削除 | Mod+Shift+Backspace（試作品のコードは旧い初期値の Mod+Backspace のまま。本番の初期値は操作仕様書 2章） | — |
 | 振り返りテンプレートの挿入 | Mod+Shift+R | Alt+Shift+R |
 | 選んだ TODO を依頼文として書き出す | Mod+Shift+A | Alt+Shift+A |
 
@@ -155,7 +155,7 @@ Windows・Linux では、Vimモード中の前日・翌日への移動は Alt+[ 
 03 画面設計書 11章のとおり、次の4点はブラウザで動く試作品では確かめられません。本番の構成（Tauri と各 OS の WebView）で確認します（テスト計画書 4章）。
 
 1. 日本語入力（IME）の確定 Enter などの判定。本番の macOS・Linux は WebKit 系で、ブラウザと挙動が異なります
-2. OS 全体で効くショートカット（Mod+Shift+D）
+2. OS 全体で効くショートカット（Mod+Alt+Y。Windows・Linux は Alt+Shift+Y）
 3. 起動時間・入力応答などの性能基準
 4. ブラウザ自体のショートカット（Mod+K、Mod+T、Mod+J など）と衝突するキー操作
 

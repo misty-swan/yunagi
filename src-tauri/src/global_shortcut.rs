@@ -63,6 +63,12 @@ pub fn parse(text: &str, mac: bool) -> Option<Shortcut> {
         }
         mods |= m;
     }
+    // Windows・Linux の Ctrl+Alt は、AltGr で文字を打つ配列の AltGr と重なる（keymap.ts の `alt_gr`）。
+    // 画面側で断っているが、設定ファイルの書き換えや、macOS で保存した設定を持ち込んだ場合に備えて、
+    // OS 全体には登録しない
+    if !mac && mods.contains(Modifiers::CONTROL) && mods.contains(Modifiers::ALT) {
+        return None;
+    }
     // Shift だけでは文字の入力と区別できない（keymap.ts の `no_modifier`）
     if !mods.intersects(Modifiers::SUPER | Modifiers::CONTROL | Modifiers::ALT) {
         return None;
@@ -267,6 +273,25 @@ mod tests {
             parse("Alt+7", false).unwrap(),
             Shortcut::new(Some(Modifiers::ALT), Code::Digit7)
         );
+    }
+
+    /// 初期割当（keymap.ts の `bringToFront`）：macOS は ⌘⌥Y（`Mod+Alt+Y`）、Windows・Linux は
+    /// `Alt+Shift+Y`（Ctrl+Alt は AltGr と重なるため使わない。操作仕様書 1章）。
+    #[test]
+    fn parse_maps_the_default_bindings() {
+        assert_eq!(
+            parse("Mod+Alt+Y", true).unwrap(),
+            Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyY)
+        );
+        assert_eq!(
+            parse("Alt+Shift+Y", false).unwrap(),
+            Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyY)
+        );
+        // macOS でない環境の Mod+Alt+Y は Ctrl+Alt+Y（AltGr と重なる）。画面側が断るキーなので、OS にも登録しない
+        assert!(parse("Mod+Alt+Y", false).is_none());
+        assert!(parse("Mod+Alt+Shift+Y", false).is_none());
+        // macOS の Mod+Alt（⌘⌥）は登録できる
+        assert!(parse("Mod+Alt+Shift+Y", true).is_some());
     }
 
     #[test]

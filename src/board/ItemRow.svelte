@@ -362,7 +362,8 @@
 
   /** 文字を打つキーか（Mod・Ctrl との組み合わせは除く。AltGr は Ctrl+Alt として届くので文字を打つ）。 */
   function isTyping(e: KeyboardEvent): boolean {
-    // Mod との組み合わせ（Mod+Backspace の削除など）は、呼ぶ前に操作として扱い終えている
+    // 割当のある組み合わせ（Mod+Shift+Backspace の削除など）は、呼ぶ前に操作として扱い終えている。割当の無い
+    // Mod+Backspace（文字の編集）はここに来て、変えられない行では文字の入力と同じに断る
     if (e.key === "Backspace" || e.key === "Delete") return true;
     if (e.key.length !== 1) return false;
     if (e.getModifierState?.("AltGraph") === true) return true;

@@ -9,7 +9,11 @@ test("一覧のキーを、macOS は ⌘、Windows・Linux は Ctrl で受ける
   expect(boardActionOf(key({ key: "Enter", ctrlKey: true }), false)).toBe("toggle");
   expect(boardActionOf(key({ key: "Enter", ctrlKey: true }), true)).toBeNull();
   expect(boardActionOf(key({ key: "Enter" }), true)).toBe("enter");
-  expect(boardActionOf(key({ key: "Backspace", ctrlKey: true }), false)).toBe("delete");
+  expect(boardActionOf(key({ key: "Backspace", ctrlKey: true, shiftKey: true }), false)).toBe("delete");
+  expect(boardActionOf(key({ key: "Backspace", metaKey: true, shiftKey: true }), true)).toBe("delete");
+  // 文字編集の Mod+Backspace（macOS は行頭まで削除、Windows は前の単語を削除）は削除にしない
+  expect(boardActionOf(key({ key: "Backspace", ctrlKey: true }), false)).toBeNull();
+  expect(boardActionOf(key({ key: "Backspace", metaKey: true }), true)).toBeNull();
   expect(boardActionOf(key({ key: "ArrowUp", altKey: true }), false)).toBe("moveUp");
   expect(boardActionOf(key({ key: "ArrowDown", altKey: true }), true)).toBe("moveDown");
   expect(boardActionOf(key({ code: "KeyZ", key: "z", metaKey: true }), true)).toBe("undo");

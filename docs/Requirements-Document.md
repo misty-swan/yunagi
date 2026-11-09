@@ -142,7 +142,7 @@ MVPで提供する範囲は次のとおりとする。MCP と CLI は同じ操�
 
 | 操作 | 初期割当（案） | 範囲 |
 | --- | --- | --- |
-| Yunagi を前面に呼び出す | Mod+Shift+D | OS全体 |
+| Yunagi を前面に呼び出す | Mod+Alt+Y（macOS の ⌘⌥Y。Windows・Linux は Mod を使わず Alt+Shift+Y） | OS全体 |
 | ノートモード ⇄ 整理モード | Mod+J | 共通 |
 | 現在行をTODOへ送る | Mod+Shift+T | ノート |
 | 現在行を障害へ送る | Mod+Shift+B | ノート |

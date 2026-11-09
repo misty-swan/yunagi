@@ -53,13 +53,18 @@ export type Scope = "global" | "common" | "board" | "note";
 interface ActionDef {
   id: ActionId;
   scope: Scope;
-  /** 初期割当（操作仕様書 2章）。 */
+  /** 初期割当（操作仕様書 2章）。`pcInitial` が無い操作は、どの OS もこれを使う。 */
   initial: string;
+  /**
+   * Windows・Linux だけの初期割当（macOS は `initial`）。OS 全体の操作が、Windows・Linux の Ctrl+Alt
+   * （AltGr と重なるため割り当てられない。`problemOf` の `alt_gr`）を使えないために分ける（操作仕様書 1章）。
+   */
+  pcInitial?: string;
 }
 
 /** 割当を変えられる操作と初期割当（設定画面に出す順）。 */
 export const ACTIONS: readonly ActionDef[] = [
-  { id: "bringToFront", scope: "global", initial: "Mod+Shift+D" },
+  { id: "bringToFront", scope: "global", initial: "Mod+Alt+Y", pcInitial: "Alt+Shift+Y" },
   { id: "toggleMode", scope: "common", initial: "Mod+J" },
   { id: "prevDay", scope: "common", initial: "Mod+[" },
   { id: "nextDay", scope: "common", initial: "Mod+]" },
@@ -74,7 +79,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: "toggle", scope: "board", initial: "Mod+Enter" },
   { id: "moveUp", scope: "board", initial: "Alt+ArrowUp" },
   { id: "moveDown", scope: "board", initial: "Alt+ArrowDown" },
-  { id: "delete", scope: "board", initial: "Mod+Backspace" },
+  { id: "delete", scope: "board", initial: "Mod+Shift+Backspace" },
   { id: "template", scope: "board", initial: "Mod+Shift+R" },
   { id: "handoff", scope: "board", initial: "Mod+Shift+A" },
   { id: "toTodo", scope: "note", initial: "Mod+Shift+T" },
@@ -103,7 +108,8 @@ const VIM_INITIAL: Partial<Record<ActionId, string>> = { prevDay: "Alt+[", nextD
 /** いまの Vim モードと OS での、操作の初期割当。 */
 export function initialBinding(id: ActionId, vim: boolean, mac: boolean): string {
   const vimOne = vim && !mac ? VIM_INITIAL[id] : undefined;
-  return vimOne ?? ACTIONS.find((a) => a.id === id)!.initial;
+  const def = ACTIONS.find((a) => a.id === id)!;
+  return vimOne ?? (mac ? undefined : def.pcInitial) ?? def.initial;
 }
 
 // ---- 割当の文字列 ----

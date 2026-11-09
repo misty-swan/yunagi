@@ -494,9 +494,9 @@ const registered = (core: Mock) => core.calls.filter((c) => c.cmd === "set_globa
 test("OS 全体のショートカット：設定を読んだら登録し、割当を変えるたびに登録し直す。初期値に戻すと初期割当で登録する", async () => {
   const core = await start();
   await until(() => registered(core).length === 1);
-  expect(registered(core)).toEqual(["Mod+Shift+D"]);
+  expect(registered(core)).toEqual(["Alt+Shift+Y"]);
   await open("operation");
-  expect(keyButton("bringToFront").textContent?.trim()).toBe("Ctrl+Shift+D");
+  expect(keyButton("bringToFront").textContent?.trim()).toBe("Alt+Shift+Y");
   // 登録できていれば、理由は出ない（Wayland でもない）
   expect($('[data-action="bringToFront"] .bad')).toBeNull();
 
@@ -504,13 +504,13 @@ test("OS 全体のショートカット：設定を読んだら登録し、割�
   flushSync();
   press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true }, keyButton("bringToFront"));
   await until(() => registered(core).length === 2);
-  expect(registered(core)).toEqual(["Mod+Shift+D", "Mod+Shift+E"]);
+  expect(registered(core)).toEqual(["Alt+Shift+Y", "Mod+Shift+E"]);
   expect(core.settings.shortcuts).toEqual({ bringToFront: "Mod+Shift+E" });
 
   // すべて初期値に戻すと、初期割当で登録し直す
   button("すべて初期値に戻す").click();
   await until(() => registered(core).length === 3);
-  expect(registered(core).at(-1)).toBe("Mod+Shift+D");
+  expect(registered(core).at(-1)).toBe("Alt+Shift+Y");
   expect(core.settings.shortcuts).toEqual({});
 });
 
@@ -531,11 +531,11 @@ test("OS 全体のショートカット：ほかの操作と同じキー・英�
   expect(text('[data-action="bringToFront"] .bad')).toContain("英字か数字");
   tryKey("bringToFront", { key: "Enter", code: "Enter", ctrlKey: true });
   expect(text('[data-action="bringToFront"] .bad')).toContain("英字か数字");
-  // 整理・ノートの操作も、OS 全体のキー（Mod+Shift+D）は使えない
-  tryKey("toTodo", { key: "D", code: "KeyD", ctrlKey: true, shiftKey: true });
+  // 整理・ノートの操作も、OS 全体のキー（Alt+Shift+Y）は使えない
+  tryKey("toTodo", { key: "Y", code: "KeyY", altKey: true, shiftKey: true });
   expect(text('[data-action="toTodo"] .bad')).toContain("「Yunagi を前面に呼び出す」");
   expect(core.count("save_settings")).toBe(0);
-  expect(registered(core)).toEqual(["Mod+Shift+D"]);
+  expect(registered(core)).toEqual(["Alt+Shift+Y"]);
 });
 
 test("OS 全体のショートカット：登録できなかった理由と、Wayland の案内を設定に出す。登録できなくても保存は断らない", async () => {
@@ -612,12 +612,12 @@ test("OS 全体のショートカット：保存に失敗して割当が元に�
   press({ key: "E", code: "KeyE", ctrlKey: true, shiftKey: true }, keyButton("bringToFront"));
   // 画面には新しい割当をすぐ当てて登録し、保存に失敗して戻ったら、元の割当で登録し直す
   await until(() => registered(core).length === 3);
-  expect(registered(core)).toEqual(["Mod+Shift+D", "Mod+Shift+E", "Mod+Shift+D"]);
+  expect(registered(core)).toEqual(["Alt+Shift+Y", "Mod+Shift+E", "Alt+Shift+Y"]);
   expect(core.settings.shortcuts).toEqual({});
 });
 
 test("OS 全体のショートカット：同じキーを使う操作に取られたときは登録を外す", async () => {
-  const core = await start({ shortcuts: { palette: "Mod+Shift+D" } });
+  const core = await start({ shortcuts: { palette: "Alt+Shift+Y" } });
   // 変えた割当が初期割当に勝ち、「前面に呼び出す」は使えなくなる
   await until(() => registered(core).length === 1);
   expect(registered(core)).toEqual([null]);
