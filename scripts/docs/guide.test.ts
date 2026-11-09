@@ -140,15 +140,17 @@ describe("コードと食い違っていない", () => {
   });
 
   // Windows・Linux だけ初期割当が違う操作（`pcInitial`）は、表のかっこ書きに出る
-  const pcInitials = [...keymap.matchAll(/pcInitial: ("[^"]+")/g)].map((m) => JSON.parse(m[1]) as string);
+  const pairs = [...keymap.matchAll(/initial: ("[^"]+"), pcInitial: ("[^"]+")/g)].map(
+    (m) => [JSON.parse(m[1]), JSON.parse(m[2])] as [string, string],
+  );
 
-  it("Windows・Linux だけ違う初期割当が、ガイドの表の同じ行に書いてある", () => {
-    expect(pcInitials.length).toBeGreaterThan(0);
+  it("Windows・Linux だけ違う初期割当が、ガイドの表の、macOS の初期割当と同じ行に書いてある", () => {
+    expect(pairs.length).toBeGreaterThan(0);
     for (const text of [GUIDES.ja, GUIDES.en]) {
-      for (const k of pcInitials) {
+      for (const [mac, pc] of pairs) {
         expect(
-          tableRows(text).some((cols) => cols[1].includes(k)),
-          k,
+          tableRows(text).some((cols) => cols[1].includes(mac) && cols[1].includes(pc)),
+          `${mac} / ${pc}`,
         ).toBe(true);
       }
     }

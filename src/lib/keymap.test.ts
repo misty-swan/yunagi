@@ -12,7 +12,6 @@ import {
   problemOf,
   resolveKeymap,
   withBinding,
-  type ActionId,
   type KeyLike,
 } from "./keymap";
 
@@ -87,17 +86,22 @@ test("OS 全体の初期割当は macOS が ⌘⌥Y、Windows・Linux が Alt+Sh
 test("すべての初期割当が、その OS・Vim モードで、自分の検査（割り当てられないキー）を通り、操作どうしで重ならない", () => {
   for (const mac of [false, true]) {
     for (const vim of [false, true]) {
-      const seen: { id: ActionId; scope: string; key: string }[] = [];
       for (const a of ACTIONS) {
         const s = initialBinding(a.id, vim, mac);
         const b = parseBinding(s);
         expect(b, `${a.id} ${s}`).not.toBeNull();
         expect(problemOf(b!, vim, mac, a.id), `${a.id} ${s} (mac=${mac}, vim=${vim})`).toBeNull();
-        seen.push({ id: a.id, scope: a.scope, key: s });
       }
       const map = resolveKeymap({}, vim, mac);
       for (const a of ACTIONS) expect(map.get(a.id), `${a.id} (mac=${mac}, vim=${vim})`).toMatchObject({ status: "ok", changed: false });
-      expect(new Set(seen.map((x) => x.key)).size).toBe(seen.length);
+      // 効く範囲が重なる 2 つの操作が、同じ初期割当を使わない（整理とノートは重ならないので、同じキーでよい）
+      const overlap = (x: string, y: string) => x === "global" || y === "global" || x === "common" || y === "common" || x === y;
+      for (const a of ACTIONS) {
+        for (const o of ACTIONS) {
+          if (a.id >= o.id || !overlap(a.scope, o.scope)) continue;
+          expect(initialBinding(a.id, vim, mac), `${a.id} と ${o.id} (mac=${mac}, vim=${vim})`).not.toBe(initialBinding(o.id, vim, mac));
+        }
+      }
     }
   }
 });
