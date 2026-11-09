@@ -2258,6 +2258,49 @@ fn show_no_app(w: &World) {
         "{:?}",
         started.elapsed()
     );
+    // 画面の接続先（Linux は WAYLAND_DISPLAY と DISPLAY）が両方無いときだけ、案内を足す。
+    // 他の失敗の文言は変えない
+    let saved = ["WAYLAND_DISPLAY", "DISPLAY"].map(|k| (k, std::env::var_os(k)));
+    let launch_failed_message = |display: Option<(&str, &str)>| {
+        for (k, _) in &saved {
+            // SAFETY: 試験は 1 つのスレッドで順に走る
+            unsafe { std::env::remove_var(k) };
+        }
+        if let Some((k, v)) = display {
+            unsafe { std::env::set_var(k, v) };
+        }
+        let crash = app_script(w, "crash-display", "exit 101");
+        let out = exec_show(
+            w,
+            &["--json", "show"],
+            Launch::Program(crash),
+            Duration::from_secs(5),
+        );
+        assert_eq!(out.code, 8, "{}", out.stderr);
+        assert_eq!(out.json()["error"]["reason"], "launch_failed");
+        out.json()["error"]["message"].as_str().unwrap().to_string()
+    };
+    let without = launch_failed_message(None);
+    let with_wayland = launch_failed_message(Some(("WAYLAND_DISPLAY", "wayland-0")));
+    let with_x11 = launch_failed_message(Some(("DISPLAY", ":0")));
+    for (k, v) in saved {
+        // SAFETY: 同上
+        unsafe {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
+    assert_eq!(
+        without.contains("WAYLAND_DISPLAY or DISPLAY"),
+        cfg!(target_os = "linux"),
+        "{without}"
+    );
+    for message in [&with_wayland, &with_x11] {
+        assert!(!message.contains("WAYLAND_DISPLAY"), "{message}");
+        assert!(message.starts_with("Yunagi is not running, and starting it failed."));
+    }
     // 起動したが、待ち受けが開かない：期限で、起動はしたことが分かる
     let silent = app_script(w, "silent", "exec sleep 3");
     let started = Instant::now();

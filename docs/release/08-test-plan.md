@@ -384,7 +384,7 @@ YUN-87 のうち、**画面を見る項目**を Linux の実機で、オーナ�
 
 **確認できた**
 
-- D-1 起動と窓：`yunagi show` で AppImage が起動し、窓が出た（4.15 の B-5 の `yunagi show`・C-9 の確認）。**画面の接続先（`WAYLAND_DISPLAY`）が無い端末から起動すると、GTK の初期化で panic し、`yunagi show` は「app exited with exit status 101」「launch_failed」と出す**。原因が分かりにくい。改善案：`launch_failed` の案内に、「画面の接続先（`WAYLAND_DISPLAY`・`DISPLAY`）が無い端末から起動していないか」を 1 行足す（MCP・CLI 仕様書 9章の未決事項に書いた）。
+- D-1 起動と窓：`yunagi show` で AppImage が起動し、窓が出た（4.15 の B-5 の `yunagi show`・C-9 の確認）。**画面の接続先（`WAYLAND_DISPLAY`）が無い端末から起動すると、GTK の初期化で panic し、`yunagi show` は「app exited with exit status 101」「launch_failed」と出す**。原因が分かりにくかった。**直した（YUN-122）**：Linux で `WAYLAND_DISPLAY` と `DISPLAY` の両方が無いとき、`launch_failed` の `message` に「画面の接続先が無い端末から起動していないか」の案内を足す（MCP・CLI 仕様書 3.3 の「画面の接続先が無いとき」。試験は `crates/cli/tests/cli/unix.rs` の `show_no_app` と `show::tests`）。実機での再確認は、公開前の取り直し（6章）で行う。
 - D-2 見た目：窓の表示、アイコン（4.10 の Linux の窓のアイコン。Hyprland のみ）、凪メーターの配色は、問題なかった。設定画面のフォーム部品は標準の見た目のままだったので、YUN-116（PR #99）で直した。
 - D-3 日本語入力（fcitx5）と Vim（4.2。操作仕様書 4.4）：挿入モードで日本語入力 → Esc で自動で英数に切り替わり、`i` で戻る。OK。日本語入力がオンのままのノーマルモードでは、fcitx5 がキーを先に受けて Vim のキーが効かなかった。**操作仕様書 4.4 の 2（英字・数字は物理キーから読み直す）との食い違いの可能性があり、未解決**：どのキーで試したかを記録していないため、英字・数字でも効かないかを確かめる（記号・Space は設計上も効かない）。ノーマルモードでは自動でオフになるので、通常の使い方では起きにくい。
 - D-4 Vim の領域移動（4.3）：ノーマルモードの Tab は動く。Vim 使いには不自然との指摘があり、YUN-117（PR #98）で `]]`／`[[` を追加した。OK。
