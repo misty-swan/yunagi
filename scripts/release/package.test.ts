@@ -142,6 +142,8 @@ test("ビルドの設定：CLI は macOS で Contents/MacOS/yunagi、Windows で
   const read = (f: string) => JSON.parse(readFileSync(`src-tauri/release/${f}`, "utf8"));
   expect(read("macos.json").bundle.macOS.files).toEqual({ "MacOS/yunagi": "cli-bin/yunagi" });
   expect(read("windows.json").bundle.resources).toEqual({ "cli-bin/yunagi.exe": "bin/yunagi.exe" });
+  // 最低の macOS は 13.3（vite.config.ts の build.target safari16.4 の WebKit が入る最初の版。07 3.2「対応する macOS」）
+  expect(read("macos.json").bundle.macOS.minimumSystemVersion).toBe("13.3");
   // 本体は Yunagi.exe（install.ps1・yunagi show が探す名前）。macOS は CLI の yunagi と大文字小文字だけの違いになるので変えない
   expect(read("windows.json").mainBinaryName).toBe("Yunagi");
   expect(read("macos.json").mainBinaryName).toBeUndefined();
@@ -153,6 +155,7 @@ test("ビルドの設定：CLI は macOS で Contents/MacOS/yunagi、Windows で
   // 普段の tauri.conf.json は配布用のビルドの設定を持たない（pnpm tauri dev と窓の無い試験に、無いファイルを要求させない）
   const conf = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
   expect(conf.bundle.active).toBe(false);
+  expect(conf.bundle.macOS?.minimumSystemVersion).toBeUndefined();
   expect(conf.bundle.resources).toBeUndefined();
   expect(conf.bundle.macOS).toBeUndefined();
 });

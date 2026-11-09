@@ -15,7 +15,7 @@
 
 | OS | アーキテクチャ | 配布物 | CLI の配置 |
 | --- | --- | --- | --- |
-| macOS | arm64、x86_64 | `Yunagi_<ver>_<arch>.app.tar.gz` | アプリに同梱した `yunagi` を `~/.local/bin` にリンク |
+| macOS | arm64、x86_64（Intel 版は実機で確かめるまで試験提供。3.2「対応する macOS」） | `Yunagi_<ver>_<arch>.app.tar.gz` | アプリに同梱した `yunagi` を `~/.local/bin` にリンク |
 | Linux | x86_64、arm64 | `Yunagi_<ver>_<arch>.AppImage`、`yunagi-cli_<ver>_<arch>.tar.gz`、`.tar.gz`、`.deb`（任意） | `~/.local/opt/yunagi/bin/yunagi` を `~/.local/bin/yunagi` からリンク |
 | Windows | x86_64、arm64 | `Yunagi_<ver>_<arch>-setup.exe`（NSIS、ユーザー単位インストール） | `%LOCALAPPDATA%\Programs\Yunagi\bin` を PATH に追加 |
 
@@ -220,6 +220,11 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 | windows-x86_64 | `windows-2025` | `x86_64-pc-windows-msvc` | `nsis` |
 | windows-arm64 | `windows-2025`（交差ビルド） | `aarch64-pc-windows-msvc` | `nsis` |
 
+- **対応する macOS**（2026-11-09 決定。YUN-9。要件定義書 8章・11章）：
+  - **Apple Silicon（arm64）**：直近3世代。2026-11 時点は macOS 27・26・15。世代が進むたびに、この章・要件定義書 8章・サイトの動作環境を合わせて見直す。
+  - **Intel Mac（x86_64）**：macOS 26 Tahoe まで。Intel Mac に入る版は 26 が最後で、27 の対応機種は Apple Silicon の Mac だけ。対象は「直近3世代のうち Intel Mac に入る版」（2026-11 時点は 26 と 15）。Intel 版は配布するが、Intel Mac の実機が無く確かめられていないので、**実機で確かめるまで「試験提供（動作未保証）」と書く**：サイトの動作環境（ja・en）、ダウンロードの案内、リリースノート。確かめたら（テスト計画書 4章の YUN-87 の Intel の項目）、書きぶりを改める。Intel 版の対象の終わりは決めない。26 が直近3世代から外れたとき、または Intel 版が保てなくなったとき（ビルドが通らない・実機の不具合を直せない）に見直す。
+  - **公式の裏付け（2026-11-09 に確認）**：①Apple の WWDC25「Platforms State of the Union」（https://developer.apple.com/videos/play/wwdc2025/102/）の文字起こしに「macOS Tahoe will be the final release for Intel Macs」とある。②macOS 26 Tahoe の対応機種表（https://support.apple.com/en-us/122867）には、Intel の Mac が一部の機種だけ載る（MacBook Pro 16 インチ 2019、MacBook Pro 13 インチ 2020 の Thunderbolt 3 ポート 4 つ、iMac（Retina 5K、27 インチ、2020）、Mac Pro 2019。表に Intel の表記は無く、年式と機種名で見分ける）。③macOS 27 の対応機種表（https://support.apple.com/en-us/127255）は、M シリーズなどの Apple Silicon の機種だけを載せる。④セキュリティ更新が Tahoe の公開から3年続くという話は報道（Six Colors、2025-06-09）だけが根拠で、公式の文言は確かめていないので、決めには使わない。
+  - **最低の macOS（`bundle.macOS.minimumSystemVersion`）は `13.3`**（`src-tauri/release/macos.json`。`tauri.conf.json` には入れない）。Tauri 2 の既定は 10.13 だが、画面の JavaScript は `vite.config.ts` の `build.target`（`safari16.4`）で作ってあり、Safari 16.4 の WebKit が入る最初の macOS が 13.3 のため。10.13 のままだと、古い macOS で起動しても WebView が動かず白い窓になる。13.3 にすれば、対象外の macOS では「この版の macOS では開けない」と出て止まる。対応する版（15・26・27）はどれも 13.3 以上で、Apple Silicon の最初の版（macOS 11）より高いが、macOS 11〜12 は直近3世代の外なので対象外のままにする。`yunagi`（CLI）は `cargo build --target` で別に作るので、Tauri の値ではなく rustc の既定（x86_64 は 10.12、arm64 は 11.0。`rustc --print deployment-target`）になる。CLI の下限のほうが低いだけで、食い違いは起きない。見直しの条件：`build.target` や依存を上げたとき、または対応する macOS の下限が変わったとき。
 - 手順：①Rust・pnpm・Node.js を入れる（版は `rust-toolchain.toml`・`package.json`・`.node-version` から読む。開発用 CI と同じ）。②`pnpm install --frozen-lockfile`。③`yunagi`（CLI）を `cargo build --release --locked -p yunagi-cli --target <target>` で作る。④`pnpm tauri build --ci --target <target> --bundles <bundles> --config src-tauri/release/common.json`（macOS・Windows は OS ごとの設定 `src-tauri/release/<os>.json` を重ねる）。⑤`scripts/release/package.ts` が配布物の名前と中身をそろえ、`.sha256` を添える（3.3）。⑥成果物（artifact `dist-<名前>`。14 日残す）として保存する。
 - **配布用のビルドの設定は `tauri.conf.json` に入れず、`src-tauri/release/` の設定を `--config` で重ねる。** `tauri.conf.json` の `bundle.active` は `false` のままにする：`bundle.resources`・`bundle.macOS.files` の元のファイル（`THIRD_PARTY_LICENSES.md`・`cli-bin/yunagi`）は CI が置くもので、普段の `cargo test`・`pnpm tauri dev` にその有無を要求させないため。試験（`scripts/release/package.test.ts`）が、`tauri.conf.json` に配布用の設定が入らないことを確かめる。
 - **Linux の arm64 だけ、arm のランナーが要る**（webkit2gtk の交差ビルドは難しいため）。`ubuntu-24.04-arm` は公開リポジトリでないと使えない（2026-11-05 時点）。リポジトリは 2026-11-06 に公開になり（1章。YUN-109）、公開後の 8.8 の確認で、このランナーでのビルドが通ることを確かめた。**リポジトリを非公開に戻すと**、`ubuntu-24.04-arm` が使えなくなり、手動の試運転とタグの push では `linux-arm64` が落ちる（PR の自動の試運転は `build` ジョブの `if` で止まる）。そのときは、`DRY_RUN_SKIPPED` に `linux-arm64` を入れて試運転から除き、`package.test.ts` の「試運転に `linux-arm64` が入る」検査（2 か所）を戻す。タグの push は常に全 6 組を走らせるので、`linux-arm64` が落ちる（arm のランナーを使えるようにするか、タグの前に公開に戻す）。macOS の x86_64 は arm のランナー上で交差ビルドし、Windows の arm64 は x64 のランナー上で交差ビルドする。交差ビルドの組が実際に通るかは、試運転（下）と実機で確かめる。
@@ -455,7 +460,7 @@ Cask はダウンロードしたアプリに隔離属性を付けるため、ア
 - [ ] （最初のリリースの前に）`support@getyunagi.com`・`security@getyunagi.com` にテストのメールを送り、オーナーの受信箱に届くことを確かめた（Cloudflare の Email Routing。届かないと、アプリの画面・SECURITY.md・プライバシーポリシーが案内する窓口が使えず、脆弱性の報告も届かない）
 - [ ] 公式サイトのデプロイ（Cloudflare Pages。2章「公式サイトの置き場所」）で `https://getyunagi.com/latest.json` を新しい版に更新し、`curl -fsS` で取った `version` が新しい版であることを確かめた
 - [ ] （2 回目のリリースから）Pages の「Deployments」に、直前の版の `latest.json` を載せた本番のデプロイが残っていて、そのデプロイの URL（またはデプロイ ID）と公開日時を、リリースの記録に控えた（取り下げ時の戻し先。2章。最初のリリースには戻し先が無い）
-- [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した）
+- [ ] 配布する全 OS・アーキテクチャで、インストールスクリプトによる新規導入と、旧版からの自動更新を確認した（検証できなかったものは「試験提供」と明記した。Intel Mac の macOS x86_64 は、実機で確かめるまで必ずこれに当たる。3.2「対応する macOS」）
 - [ ] 公式サイトのダウンロード案内と変更履歴を更新した（ダウンロードのページの一覧は `latest.json` の版から出る。変更履歴は CHANGELOG.md・CHANGELOG.en.md から取り込まれる。2章「公式サイトの作り方」）。利用者ガイドに仮の表記や「要確認」が残っていないことも見た（ガイドはサイトにそのまま載る）
 
 最初のリリースの前に、次も確かめる（初回だけ）：

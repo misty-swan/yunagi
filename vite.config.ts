@@ -24,7 +24,8 @@ export default defineConfig({
     // Svelte 5・Vite 8 が前提にする版（Vite 8 の既定 "baseline-widely-available" の chrome111・safari16.4）より古い。
     // そこで Vite 8 の既定と同じ下限にする。対応 OS（docs/Requirements-Document.md 8章）の WebView はどれもこれ以上：
     // - Windows 10/11：WebView2 は自動で更新される Chromium（111 以上）
-    // - macOS 直近3世代：Safari 18 以上の WebKit
+    // - macOS 直近3世代（Intel Mac は 26 まで）：Safari 18 以上の WebKit。Safari 16.4 の WebKit が入る最初の macOS 13.3 を、
+    //   配布用の最低の macOS（src-tauri/release/macos.json の minimumSystemVersion。ビルド・配布手順書 3.2）にしている
     // - Linux：Tauri 2 は webkit2gtk-4.1 を使い、Ubuntu LTS・Fedora は WebKitGTK 2.40（Safari 16.4 と同時期）以上を配る
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome111" : "safari16.4",
     // デバッグ版のビルドでは縮小せず、ソースマップを付ける。
