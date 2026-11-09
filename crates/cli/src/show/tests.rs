@@ -112,9 +112,12 @@ fn the_display_hint_is_for_linux_without_any_display_connection() {
     assert!(!no_display("macos", None, None));
     assert!(!no_display("windows", None, None));
     // 案内は、真のときだけ `message` に足す。ほかの文言は変えない
-    let plain = error::message(&launch_failed(false)).to_string();
+    let plain = error::message(&launch_failed_message(false)).to_string();
     assert!(!plain.contains("WAYLAND_DISPLAY"), "{plain}");
-    let hinted = error::message(&launch_failed(true)).to_string();
+    let hinted = error::message(&launch_failed_message(true)).to_string();
     assert!(hinted.starts_with(&plain), "{hinted}");
-    assert!(hinted.contains("WAYLAND_DISPLAY or DISPLAY"), "{hinted}");
+    assert!(
+        hinted.contains("Neither WAYLAND_DISPLAY nor DISPLAY"),
+        "{hinted}"
+    );
 }

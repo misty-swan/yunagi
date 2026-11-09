@@ -2260,10 +2260,25 @@ fn show_no_app(w: &World) {
     );
     // 画面の接続先（Linux は WAYLAND_DISPLAY と DISPLAY）が両方無いときだけ、案内を足す。
     // 他の失敗の文言は変えない
-    let saved = ["WAYLAND_DISPLAY", "DISPLAY"].map(|k| (k, std::env::var_os(k)));
+    // 途中の assert が失敗しても、環境変数を元に戻す
+    struct RestoreDisplay([(&'static str, Option<std::ffi::OsString>); 2]);
+    impl Drop for RestoreDisplay {
+        fn drop(&mut self) {
+            for (k, v) in std::mem::take(&mut self.0) {
+                // SAFETY: 試験は 1 つのスレッドで順に走る
+                unsafe {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+    }
+    let _restore = RestoreDisplay(["WAYLAND_DISPLAY", "DISPLAY"].map(|k| (k, std::env::var_os(k))));
     let launch_failed_message = |display: Option<(&str, &str)>| {
-        for (k, _) in &saved {
-            // SAFETY: 試験は 1 つのスレッドで順に走る
+        for k in ["WAYLAND_DISPLAY", "DISPLAY"] {
+            // SAFETY: 同上
             unsafe { std::env::remove_var(k) };
         }
         if let Some((k, v)) = display {
@@ -2283,17 +2298,8 @@ fn show_no_app(w: &World) {
     let without = launch_failed_message(None);
     let with_wayland = launch_failed_message(Some(("WAYLAND_DISPLAY", "wayland-0")));
     let with_x11 = launch_failed_message(Some(("DISPLAY", ":0")));
-    for (k, v) in saved {
-        // SAFETY: 同上
-        unsafe {
-            match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
-            }
-        }
-    }
     assert_eq!(
-        without.contains("WAYLAND_DISPLAY or DISPLAY"),
+        without.contains("Neither WAYLAND_DISPLAY nor DISPLAY"),
         cfg!(target_os = "linux"),
         "{without}"
     );

@@ -225,15 +225,19 @@ fn no_display_here() -> bool {
     )
 }
 
-/// `no_display` が真のときは、原因として考えられることを 1 文足す（GTK は画面の接続先が無いと
+/// 画面の接続先が無いときは、原因として考えられることを 1 文足す（GTK は画面の接続先が無いと
 /// 初期化で異常終了し、終了状態だけでは原因が分からないため。05 3.3）。
-fn launch_failed(no_display: bool) -> ErrorObject {
+fn launch_failed() -> ErrorObject {
+    launch_failed_message(no_display_here())
+}
+
+fn launch_failed_message(no_display: bool) -> ErrorObject {
     let mut message = String::from(
         "Yunagi is not running, and starting it failed. Nothing was changed. Start Yunagi yourself.",
     );
     if no_display {
         message.push_str(
-            " No display connection (WAYLAND_DISPLAY or DISPLAY) is set. Was this command run from a terminal that has no screen, such as an SSH session? Run it from a terminal on the desktop.",
+            " Neither WAYLAND_DISPLAY nor DISPLAY is set. Was this command run from a terminal that has no screen, such as an SSH session? If so, run it from a terminal on the desktop.",
         );
     }
     error::api_error("launch_failed", message)
@@ -310,7 +314,7 @@ pub fn run(
             match app.child.try_wait() {
                 Ok(Some(status)) if !status.success() => {
                     warn(&format!("yunagi: the app exited with {status}"));
-                    return Err(launch_failed(no_display_here()));
+                    return Err(launch_failed());
                 }
                 // 待ち受けが開く前に成功で終わった：動いているアプリ（起動時の画面など）に引き渡した。
                 // アプリが窓を前面に出しているので、待ち受けが開くのを待たない
@@ -388,7 +392,7 @@ fn start(options: &Options, note: bool, warn: &dyn Fn(&str)) -> Result<Launched,
                 "yunagi: could not start {target:?}: {}",
                 ErrorChain(&e)
             ));
-            Err(launch_failed(no_display_here()))
+            Err(launch_failed())
         }
     }
 }
