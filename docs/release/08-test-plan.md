@@ -423,7 +423,7 @@ YUN-87 のうち、**画面を見る項目**を Linux の実機で、オーナ�
 
 - 重大度「高」（定義は operations/support-runbook.md 3章）の未解決不具合がないこと。
 - 性能基準をすべて満たすこと。
-- 手動チェックリストを、配布する全 OS・アーキテクチャで完了していること（検証できなかった組み合わせは「試験提供」と明記して配布する）。Intel Mac（macOS の x86_64）は、実機が無い間は検証できない組として扱い、YUN-87 の Intel の項目（4章の③と macOS の項目）を未確認のまま残して公開してよい。公開を止めない代わりに、ダウンロードの案内とリリースノートに「試験提供（動作未保証）」と書く（ビルド・配布手順書 3.2「対応する macOS」）。
+- 手動チェックリストを、配布する全 OS・アーキテクチャで完了していること（検証できなかった組み合わせは「試験提供」と明記して配布する）。Intel Mac（macOS の x86_64）は、実機が無い間は検証できない組として扱い、YUN-87 の Intel の項目（4章の③と macOS の項目）を未確認のまま残して公開してよい（この例外は Intel Mac だけに限る。ほかの組には広げない）。利用者から Intel Mac で起動しない・データを壊すといった報告があり、直せないときは、Intel 版を配布から外す。公開を止めない代わりに、ダウンロードの案内とリリースノートに「試験提供（動作未保証）」と書く（ビルド・配布手順書 3.2「対応する macOS」）。
 - 公開前は macOS・Windows の CI が自動では回らないので、公開するコミットで、開発用 CI と配布用 CI の試運転を手動で実行し、すべて成功していること（2章「macOS・Windows での開発用 CI」の「公開前の確認」。YUN-87）。
 - リポジトリの公開前（ビルド・配布手順書 8.4。YUN-109）：①履歴全体と PR に秘密情報（鍵・トークン・個人の連絡先・非公開の取引先）が無いことを再検査した（8.2 の検索）。②GitHub の個人の設定で「Keep my email addresses private」と「Block command line pushes that expose my email」をオンにした。③`LICENSE-MIT`・`LICENSE-APACHE`・README の「ライセンス」の節があり、`pnpm check` の `scripts/docs/public.test.ts` が通る。④`docs/legal` の 3 文書（弁護士確認前の草案）の先頭に、草案の表示がある（8.3。`public.test.ts` が確かめる）。⑤リポジトリ全体の secrets が空である。
 - リポジトリの公開後（ビルド・配布手順書 8.6〜8.8。YUN-109・YUN-98）：①Actions の設定（SHA 固定の必須化・外部の PR の承認・`GITHUB_TOKEN` の既定を読み取りのみ）、main のブランチ保護、`v*` のタグの保護、Private vulnerability reporting、Dependabot、Discussions・Wiki の無効化が済んでいる。②公開後の `CI` の手動の実行で、`pnpm check (Linux)`・`cargo test (macOS)`・`cargo test (Windows)` が成功し、PR でも macOS・Windows が自動で走る。③`Release` の試運転で、検査と 6 組のビルドが成功する。④Linux の arm64 を試運転に加えるかを 8.8 の手順で決め、決めた結果を 07 の 3.2 に書いた（2026-11-06。YUN-111。加えた）。
