@@ -2275,13 +2275,14 @@ fn show_no_app(w: &World) {
             }
         }
     }
-    let _restore = RestoreDisplay(["WAYLAND_DISPLAY", "DISPLAY"].map(|k| (k, std::env::var_os(k))));
+    let restore = RestoreDisplay(["WAYLAND_DISPLAY", "DISPLAY"].map(|k| (k, std::env::var_os(k))));
     let launch_failed_message = |display: Option<(&str, &str)>| {
         for k in ["WAYLAND_DISPLAY", "DISPLAY"] {
-            // SAFETY: 同上
+            // SAFETY: 試験は 1 つのスレッドで順に走る
             unsafe { std::env::remove_var(k) };
         }
         if let Some((k, v)) = display {
+            // SAFETY: 同上（1 つのスレッドで順に走る）
             unsafe { std::env::set_var(k, v) };
         }
         let crash = app_script(w, "crash-display", "exit 101");
@@ -2298,6 +2299,8 @@ fn show_no_app(w: &World) {
     let without = launch_failed_message(None);
     let with_wayland = launch_failed_message(Some(("WAYLAND_DISPLAY", "wayland-0")));
     let with_x11 = launch_failed_message(Some(("DISPLAY", ":0")));
+    // 後ろの場面が実機の環境に左右されないよう、ここで元に戻す
+    drop(restore);
     assert_eq!(
         without.contains("Neither WAYLAND_DISPLAY nor DISPLAY"),
         cfg!(target_os = "linux"),
