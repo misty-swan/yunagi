@@ -26,7 +26,7 @@ Security fixes are released as patch versions of the latest minor version (for e
 ## Data
 
 - Data is stored only in your own data directory. The directory and the database are created so that only you can read and write them.
-- Network traffic is limited to the update check (on by default; you can turn it off in Settings) and features you turn on. The update check sends only the version, the OS and the architecture.
+- Network traffic is limited to the update check (on by default; you can turn it off in Settings), the supporter license key check, and features you turn on. The update check sends only the version, the OS and the architecture. The key check happens only when you enter a key and ask Yunagi to verify it (once each time you ask), and sends only the key and a fixed identifier for Yunagi's seller account (entering a key will be available in a later version).
 - An AI agent can only read by default. Writing is limited to what you allow, and every change is recorded and can be undone one by one.
 
 ## Announcements
