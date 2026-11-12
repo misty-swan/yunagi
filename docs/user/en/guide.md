@@ -180,6 +180,7 @@ In a terminal, `yunagi handoff export <TODO ID>` prints the same text (find the 
 
 - Yunagi never sends your data anywhere. Your data is stored in the data location on this computer (for content read by agents, see section 6).
 - To check for new versions, Yunagi sends only the app version, OS, and architecture, for example at startup (the download host records your IP address and the time). You can turn this off in the General section of Settings.
+- To check a supporter license key, Yunagi sends the key to the sales service once, when you enter the key and ask Yunagi to verify it (the sales service may record your IP address and the time). Your notes and other data are not sent. If you never enter a key, this connection is never made (entering a key will be available in a later version).
 - See or change the data location in the Data section of Settings. Backups of the last 7 days are created automatically, and you can restore one from the list in the same section. The backups made before an update and before a restore keep the newest 3 of each.
 - If you put the data location in an iCloud Drive or Dropbox folder, open Yunagi on only one computer at a time. To use several computers, we recommend syncing Markdown exports or backups instead.
 - You can export a day or a date range as Markdown. In the Data section of Settings, choose the start date, the end date, and a folder, then press Export to get one file per day.
