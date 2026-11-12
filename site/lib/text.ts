@@ -193,7 +193,7 @@ export const HOME: Record<Lang, Home> = {
         },
         {
           title: "データは手元に置く",
-          text: "ノートは自分の PC のファイルです。外部への通信は更新の確認（設定で無効にできます）と、自分で有効にした機能だけです。",
+          text: "ノートは自分の PC のファイルです。外部への通信は更新の確認（設定で無効にできます）、サポーターライセンスのキーの確認（キーを入力して確かめる操作をしたときだけ）、自分で有効にした機能だけです。",
         },
         {
           title: "脆弱性の報告",
@@ -262,7 +262,7 @@ export const HOME: Record<Lang, Home> = {
         },
         {
           title: "Your data stays on your machine",
-          text: "Your notes are files on your PC. The only network traffic is the update check (you can turn it off in Settings) and features you turn on yourself.",
+          text: "Your notes are files on your PC. The only network traffic is the update check (you can turn it off in Settings), the supporter license key check (only when you enter a key and ask Yunagi to verify it), and features you turn on yourself.",
         },
         {
           title: "Reporting a vulnerability",

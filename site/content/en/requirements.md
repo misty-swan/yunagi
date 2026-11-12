@@ -13,7 +13,7 @@ A combination we could not test before a release is marked "trial support (not g
 ## Other notes
 
 - You do not need administrator rights. The install script installs for the signed-in user only.
-- Every feature works without a network. Yunagi connects only for the update check (on by default; you can turn it off in Settings), for the supporter license key check (once, when you enter a key and ask Yunagi to verify it; entering a key will be available in a later version), and for features you turn on yourself. The update check sends only the version, the OS and the architecture. The key check sends only the key.
+- Every feature works without a network. Yunagi connects only for the update check (on by default; you can turn it off in Settings), for the supporter license key check (only when you enter a key and ask Yunagi to verify it, once each time you ask; entering a key will be available in a later version), and for features you turn on yourself. The update check sends only the version, the OS and the architecture. The key check sends only the key and a fixed identifier for Yunagi's seller account.
 - The Linux AppImage needs FUSE 2 to start. On Wayland, the system-wide shortcut may not work. The setup for that is in [chapter 2 of the guide](/en/guide/#2-first-launch).
 - The interface is available in Japanese and English. Light and dark follow your OS appearance setting.
 - Your notes are saved as files on your PC. You can change where in Settings.
