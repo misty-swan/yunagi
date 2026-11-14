@@ -1,5 +1,11 @@
 # Claude Code の個人設定（端末ごと）
 .claude/settings.local.json
+.claude/settings.json
+
+# 手元に入れたエージェント用のスキル（外部の配布物。npx skills などで入れる）
+.claude/skills/
+.agents/
+skills-lock.json
 
 # OS が作るファイル
 .DS_Store
