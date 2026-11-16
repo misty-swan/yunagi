@@ -651,6 +651,30 @@ export type ShowRequested = { note: boolean, };
 export type UpdateState = { "state": "none" } | { "state": "available", version: string, notes: string | null, } | { "state": "downloading", version: string, progress: number | null, } | { "state": "failed", version: string, } | { "state": "restarting" };
 
 /**
+ * 確認済みの印（画面設計書 7章「ライセンス区分と『このアプリについて』」）。キーの全体は持たない。
+ */
+export type VerifiedLicense = { 
+/**
+ * キーの末尾 6 文字。
+ */
+keyTail: string, 
+/**
+ * 確認できた時刻。
+ */
+verifiedAt: Millis, };
+
+/**
+ * サポーターライセンスの状態（`get_license`）。確認済み → 確認中 → 使えない（販売元の識別子が空の
+ * ビルド） → 未確認の順に見る（確認済みなら、識別子が空のビルドでも確認済み）。
+ */
+export type LicenseState = { "state": "verified", license: VerifiedLicense, } | { "state": "verifying" } | { "state": "unavailable" } | { "state": "unverified" };
+
+/**
+ * キーを確かめた結果（`verify_license`。画面設計書 7章の場面ごと）。失敗では何も保存していない。
+ */
+export type VerifyResult = { "result": "verified", license: VerifiedLicense, } | { "result": "invalid_format" } | { "result": "rejected" } | { "result": "unreachable" } | { "result": "service_error" } | { "result": "save_failed" } | { "result": "unavailable" } | { "result": "busy" } | { "result": "discarded" };
+
+/**
  * テーマ（画面設計書 7章「表示」）。
  */
 export type Theme = "system" | "light" | "dark";

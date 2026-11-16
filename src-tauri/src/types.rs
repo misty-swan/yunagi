@@ -1300,6 +1300,70 @@ pub enum UpdateState {
     Restarting,
 }
 
+// ---- サポーターライセンス ----
+
+/// 確認済みの印（画面設計書 7章「ライセンス区分と『このアプリについて』」）。キーの全体は持たない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(rename_all = "camelCase")]
+pub struct VerifiedLicense {
+    /// キーの末尾 6 文字。
+    pub key_tail: String,
+    /// 確認できた時刻。
+    pub verified_at: Millis,
+}
+
+impl From<yunagi_core::domain::license::License> for VerifiedLicense {
+    fn from(l: yunagi_core::domain::license::License) -> Self {
+        Self {
+            key_tail: l.key_tail,
+            verified_at: Millis(l.verified_at),
+        }
+    }
+}
+
+/// サポーターライセンスの状態（`get_license`）。確認済み → 確認中 → 使えない（販売元の識別子が空の
+/// ビルド） → 未確認の順に見る（確認済みなら、識別子が空のビルドでも確認済み）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum LicenseState {
+    /// 確認済み。
+    Verified { license: VerifiedLicense },
+    /// 確かめている（`verify_license` の途中）。
+    Verifying,
+    /// この版では確認できない（販売元の識別子が空のビルド）。
+    Unavailable,
+    /// 未確認（入力欄を出す）。
+    Unverified,
+}
+
+/// キーを確かめた結果（`verify_license`。画面設計書 7章の場面ごと）。失敗では何も保存していない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(TS))]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum VerifyResult {
+    /// 確認できて、保存した。
+    Verified { license: VerifiedLicense },
+    /// 入力がキーの形でない（通信していない）。
+    InvalidFormat,
+    /// 販売サービスが、キーが無いか無効だと答えた。
+    Rejected,
+    /// 販売サービスに接続できなかった（つながらない・名前を引けない・時間切れ・TLS の失敗）。
+    Unreachable,
+    /// 販売サービスから正しい応答が無かった（5xx・429・読めない本文・リダイレクトなど）。
+    ServiceError,
+    /// 確認できたが、保存できなかった。
+    SaveFailed,
+    /// この版では確認できない（販売元の識別子が空のビルド。通信していない）。
+    Unavailable,
+    /// ほかの確認の途中（通信していない。確認は同時に 1 本だけ）。
+    Busy,
+    /// 確かめている間に、データベースが別のものに替わったか閉じられた。結果を捨て、何も保存していない
+    /// （画面は文を出さない）。
+    Discarded,
+}
+
 // ---- 設定 ----
 
 /// テーマ（画面設計書 7章「表示」）。

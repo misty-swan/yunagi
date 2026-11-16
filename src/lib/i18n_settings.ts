@@ -126,6 +126,45 @@ export interface SettingsMessages {
     history: string;
     openHistory: string;
   };
+  /** ライセンス区分（サポーターライセンスのキー。画面設計書 7章「ライセンス区分と『このアプリについて』」）。 */
+  license: {
+    key: string;
+    verify: string;
+    /** 押す前から出す、通信することの説明。 */
+    networkNote: string;
+    unavailable: string;
+    verifying: string;
+    /** 確認済みの表示（キーの末尾と、確認した日 `YYYY.MM.DD`）。 */
+    status: (tail: string, date: string) => string;
+    remove: string;
+    removeConfirm: string;
+    removeYes: string;
+    removeNo: string;
+    loadFailed: string;
+    /** 結果の文。 */
+    notices: {
+      verified: string;
+      invalid_format: string;
+      rejected: string;
+      unreachable: string;
+      service_error: string;
+      save_failed: string;
+      removed: string;
+      remove_failed: string;
+    };
+  };
+  /** 「このアプリについて」区分。 */
+  about: {
+    version: string;
+    license: string;
+    licenseText: string;
+    thirdParty: string;
+    showThirdParty: string;
+    hideThirdParty: string;
+    thirdPartyMissing: string;
+    /** サポーターの表示（キーが確認できているときだけ）。 */
+    supporter: string;
+  };
 }
 
 const ja: SettingsMessages = {
@@ -293,6 +332,44 @@ const ja: SettingsMessages = {
     history: "変更履歴",
     openHistory: "変更履歴を開く",
   },
+  license: {
+    key: "ライセンスキー",
+    verify: "確認する",
+    networkNote:
+      "「確認する」を押すと、キーを確かめるために、販売サービス（Polar）と 1 回だけ通信します。送るのは、キーと、Yunagi の販売元を示す固定の識別子だけです。ノートなどのデータは送りません。",
+    unavailable: "この版では、ライセンスキーの確認はまだ使えません。",
+    verifying: "確認しています…",
+    status: (tail, date) => `サポーターライセンス：確認済み（キーの末尾 ${tail}、確認した日 ${date}）`,
+    remove: "キーを消す",
+    removeConfirm:
+      "サポーターの表示を消します。戻すには、キーをもう一度入力して確かめる必要があります（通信が要ります）。",
+    removeYes: "消す",
+    removeNo: "やめる",
+    loadFailed: "ライセンスの状態を読めませんでした。",
+    notices: {
+      verified: "サポーターライセンスを確認しました。ありがとうございます。",
+      invalid_format: "キーの形が違います。購入のときに届いたキーを、そのまま貼り付けてください。",
+      rejected:
+        "このキーは確認できませんでした。キーに誤りがないか確かめてください。正しいはずのときは、support@getyunagi.com へお知らせください。",
+      unreachable:
+        "販売サービスに接続できなかったため、確認できませんでした。ネットワークにつながっているときに、もう一度お試しください。確認できなくても、Yunagi の機能はすべて使えます。",
+      service_error:
+        "販売サービスから正しい応答が無かったため、確認できませんでした。時間をおいて、もう一度お試しください。確認できなくても、Yunagi の機能はすべて使えます。",
+      save_failed: "確認はできましたが、保存できませんでした。もう一度「確認する」を押してください。",
+      removed: "キーを消しました。",
+      remove_failed: "キーを消せませんでした。もう一度お試しください。",
+    },
+  },
+  about: {
+    version: "版",
+    license: "ライセンス",
+    licenseText: "MIT と Apache-2.0 のどちらか（利用する人が選べます）",
+    thirdParty: "サードパーティライセンス",
+    showThirdParty: "表示する",
+    hideThirdParty: "閉じる",
+    thirdPartyMissing: "この版には、サードパーティライセンスの表記が入っていません（開発用のビルド）。",
+    supporter: "サポーターライセンスで Yunagi を支えていただき、ありがとうございます。",
+  },
 };
 
 const en: SettingsMessages = {
@@ -459,6 +536,43 @@ const en: SettingsMessages = {
     apiState: "Status",
     history: "Change history",
     openHistory: "Open change history",
+  },
+  license: {
+    key: "License key",
+    verify: "Verify",
+    networkNote:
+      "Pressing Verify connects once to our sales service (Polar) to check the key. Only the key and a fixed identifier for Yunagi's seller account are sent, never your notes or other data.",
+    unavailable: "License key verification isn't available in this version yet.",
+    verifying: "Verifying…",
+    status: (tail, date) => `Supporter license: verified (key ending ${tail}, verified ${date})`,
+    remove: "Remove key",
+    removeConfirm:
+      "This removes the supporter display. To bring it back, you'll need to enter the key and verify it again (this needs a connection).",
+    removeYes: "Remove",
+    removeNo: "Cancel",
+    loadFailed: "Couldn't read the license status.",
+    notices: {
+      verified: "Supporter license verified. Thank you for your support.",
+      invalid_format: "That doesn't look like a license key. Paste the key you received when you purchased, exactly as it is.",
+      rejected: "This key couldn't be verified. Check that it is correct. If you believe it is, contact support@getyunagi.com.",
+      unreachable:
+        "Couldn't reach the sales service, so the key wasn't verified. Try again when you're online. Every Yunagi feature works without it.",
+      service_error:
+        "The sales service didn't respond properly, so the key wasn't verified. Please try again later. Every Yunagi feature works without it.",
+      save_failed: "The key was verified but couldn't be saved. Press Verify again.",
+      removed: "Key removed.",
+      remove_failed: "Couldn't remove the key. Please try again.",
+    },
+  },
+  about: {
+    version: "Version",
+    license: "License",
+    licenseText: "MIT or Apache-2.0, at your option",
+    thirdParty: "Third-party licenses",
+    showThirdParty: "Show",
+    hideThirdParty: "Hide",
+    thirdPartyMissing: "This build doesn't include the third-party license notices (development build).",
+    supporter: "Thank you for supporting Yunagi with a Supporter license.",
   },
 };
 

@@ -23,13 +23,14 @@ use crate::app_core::{AppCore, Changes, ScreenWrite, now, system_tz};
 use crate::clipboard::HandoffClipboard;
 use crate::global_shortcut::GlobalShortcutController;
 use crate::ime::ImeWorker;
+use crate::license::LicenseService;
 use crate::types::{
     AgentRow, AgentScope, ApiStatus, Archive, BackupEntry, Board, CarryoverConfirmed,
     CarryoverDecision, CarryoverList, CarryoverStatus, ChangeEntry, ChangeList, CloudService,
     CommandError, DataDirChanged, Date, Deleted, GlobalShortcutStatus, Id, ImeStatus, Item,
-    ItemFields, ItemKind, ItemOutcome, NoteMark, Overview, Position, RevertPlan, Reverted,
-    ScopesChanged, SearchHit, SendResult, Settings, SettingsPatch, Snapshot, SplitResult, Startup,
-    TextDoc, TextSave, UiReport, UpdateState,
+    ItemFields, ItemKind, ItemOutcome, LicenseState, NoteMark, Overview, Position, RevertPlan,
+    Reverted, ScopesChanged, SearchHit, SendResult, Settings, SettingsPatch, Snapshot, SplitResult,
+    Startup, TextDoc, TextSave, UiReport, UpdateState, VerifyResult,
 };
 use crate::updater::UpdateService;
 
@@ -467,6 +468,68 @@ pub async fn install_update(update: State<'_, Arc<UpdateService>>) -> Result<(),
         .map_err(|e| CommandError::Internal {
             detail: e.to_string(),
         })
+}
+
+/// サポーターライセンスの状態（画面設計書 7章「ライセンス区分と『このアプリについて』」）。通信しない。
+#[tauri::command]
+pub async fn get_license(
+    core: Core<'_>,
+    license: State<'_, Arc<LicenseService>>,
+) -> Result<LicenseState, CommandError> {
+    let license = Arc::clone(&license);
+    blocking(&core, move |core| license.state(core)).await
+}
+
+/// 入力したキーを確かめる（「確認する」）。通信するのは、形の検査を通ったときの 1 回だけ。確認できた
+/// ときだけ保存する。画面が閉じても、確認は最後まで行う。
+#[tauri::command]
+pub async fn verify_license(
+    core: Core<'_>,
+    license: State<'_, Arc<LicenseService>>,
+    key: String,
+) -> Result<VerifyResult, CommandError> {
+    let license = Arc::clone(&license);
+    blocking(&core, move |core| license.verify(core, &key)).await
+}
+
+/// 確認の印を消す（「キーを消す」で「消す」を選んだとき）。通信しない。
+#[tauri::command]
+pub async fn remove_license(
+    core: Core<'_>,
+    license: State<'_, Arc<LicenseService>>,
+) -> Result<(), CommandError> {
+    let license = Arc::clone(&license);
+    blocking(&core, move |core| license.remove(core)).await
+}
+
+/// サードパーティライセンスの表記の最大の大きさ（バイト）。超えるものは読まない。
+pub const THIRD_PARTY_LICENSES_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// 配布物に入れたサードパーティライセンスの表記（`THIRD_PARTY_LICENSES.md`。ビルド・配布手順書 3章）の
+/// 中身（「このアプリについて」に出す）。開発のビルドには無いので `null`。
+#[tauri::command]
+pub async fn get_third_party_licenses<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Option<String>, CommandError> {
+    use std::io::Read;
+    use tauri::Manager;
+    let Ok(dir) = app.path().resource_dir() else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let Ok(file) = std::fs::File::open(dir.join("THIRD_PARTY_LICENSES.md")) else {
+            return None;
+        };
+        let mut text = String::new();
+        file.take(THIRD_PARTY_LICENSES_MAX_BYTES)
+            .read_to_string(&mut text)
+            .ok()
+            .map(|_| text)
+    })
+    .await
+    .map_err(|e| CommandError::Internal {
+        detail: e.to_string(),
+    })
 }
 
 /// いまの保存先のフォルダ（設定画面のデータ区分に示す）。

@@ -11,6 +11,7 @@ pub mod export;
 pub mod handoff;
 pub mod history;
 pub mod item;
+pub mod license;
 pub mod logical_date;
 pub mod note_body;
 pub mod note_send;

@@ -16,6 +16,7 @@ pub mod clipboard;
 pub mod commands;
 pub mod global_shortcut;
 pub mod ime;
+pub mod license;
 mod screen;
 pub mod types;
 pub mod updater;
@@ -84,6 +85,10 @@ pub fn invoke_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync 
         commands::save_settings,
         commands::get_update_state,
         commands::install_update,
+        commands::get_license,
+        commands::verify_license,
+        commands::remove_license,
+        commands::get_third_party_licenses,
         commands::get_data_dir,
         commands::check_data_dir,
         commands::change_data_dir,
@@ -209,6 +214,9 @@ pub fn run() {
         .invoke_handler(invoke_handler())
         .setup(|app| {
             manage_core(app.handle()).start();
+            // サポーターライセンスの確認（画面設計書 7章）。このビルドの識別子と本物の通信の部品。
+            // 窓の無い試験は、偽物を持たせる
+            license::install(app.handle());
             // 入れられなくても起動する。OS 全体のショートカットだけが使えなくなる
             global_shortcut::install(app.handle());
             // 入れられなくても起動する。依頼文の書き出しだけが使えなくなる

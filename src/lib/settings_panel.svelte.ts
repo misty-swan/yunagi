@@ -3,10 +3,18 @@
 // 「保存先を変える」のどれか（どれも App の `openScreen` を通る）。閉じたら、開く直前にフォーカスの
 // あった所へ戻る。
 
-/** 設定の区分（画面設計書 7章。連携・ライセンス・このアプリについては、その機能を作るときに足す）。 */
-export type SettingsSection = "general" | "display" | "operation" | "data" | "agents";
+/** 設定の区分（画面設計書 7章。連携は、その機能を作るときに足す）。 */
+export type SettingsSection = "general" | "display" | "operation" | "data" | "agents" | "license" | "about";
 
-export const SETTINGS_SECTIONS: readonly SettingsSection[] = ["general", "display", "operation", "data", "agents"];
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  "general",
+  "display",
+  "operation",
+  "data",
+  "agents",
+  "license",
+  "about",
+];
 
 export class SettingsPanel {
   open = $state(false);

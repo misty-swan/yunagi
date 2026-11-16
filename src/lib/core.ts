@@ -30,6 +30,7 @@ import {
   type ItemFields,
   type ItemKind,
   type ItemOutcome,
+  type LicenseState,
   type LogicalDate,
   type NoteMark,
   type Overview,
@@ -50,6 +51,7 @@ import {
   type TodayChanged,
   type UiReport,
   type UpdateState,
+  type VerifyResult,
 } from "./bindings";
 
 /**
@@ -164,6 +166,14 @@ export const core = {
    * 失敗は `update-state` で届く。再起動するので、返ってこないことがある。先に入力中の内容を保存し終えてから呼ぶ。
    */
   installUpdate: () => call<null>("install_update"),
+  /** サポーターライセンスの状態（通信しない）。 */
+  getLicense: () => call<LicenseState>("get_license"),
+  /** 入力したキーを確かめる（形の検査を通ったときだけ、販売サービスと 1 回だけ通信する）。 */
+  verifyLicense: (key: string) => call<VerifyResult>("verify_license", { key }),
+  /** 確認の印を消す（通信しない）。 */
+  removeLicense: () => call<null>("remove_license"),
+  /** 配布物に入れたサードパーティライセンスの表記（開発のビルドには無いので `null`）。 */
+  getThirdPartyLicenses: () => call<string | null>("get_third_party_licenses"),
   /** いまの保存先のフォルダ。 */
   getDataDir: () => call<string>("get_data_dir"),
   /** 保存先の候補 `dir` がクラウド同期フォルダ（の中）と判定できるか（判定できなければ `null`）。 */
