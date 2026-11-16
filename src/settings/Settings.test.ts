@@ -4,7 +4,16 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { flushSync, mount, unmount } from "svelte";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "../App.svelte";
-import type { AgentRow, AgentScope, ApiStatus, BackupEntry, Settings } from "../lib/bindings";
+import type {
+  AgentRow,
+  AgentScope,
+  ApiStatus,
+  BackupEntry,
+  LicenseState,
+  Settings,
+  VerifiedLicense,
+  VerifyResult,
+} from "../lib/bindings";
 import { prefs } from "../lib/prefs.svelte";
 
 // OS のフォルダ選択（Tauri のダイアログ）と、画面の読み込み直しは、テストで差し替える
@@ -103,6 +112,13 @@ interface Mock {
   /** エージェントの一覧（権限の変更・登録の削除で変わる）。 */
   agents: AgentRow[];
   api: ApiStatus;
+  /** サポーターライセンスの状態（`verify_license` で確認できたら・`remove_license` で変わる）。 */
+  license: LicenseState;
+  /** 次の `verify_license` の答え。 */
+  verifyResult: VerifyResult;
+  /** あれば、`verify_license` の答えをこれが解決するまで待たせる。 */
+  verifyGate: Promise<void> | null;
+  thirdParty: string | null;
   count: (cmd: string) => number;
   last: (cmd: string) => Record<string, unknown> | undefined;
 }
@@ -116,6 +132,10 @@ function mockCore(settings: Partial<Settings> = {}): Mock {
     answer: {},
     agents: AGENT_ROWS.map((r) => ({ ...r })),
     api: { state: "listening", connections: 0 },
+    license: { state: "unverified" },
+    verifyResult: { result: "rejected" },
+    verifyGate: null,
+    thirdParty: null,
     count: (cmd) => m.calls.filter((c) => c.cmd === cmd).length,
     last: (cmd) => m.calls.filter((c) => c.cmd === cmd).at(-1)?.args,
   };
@@ -191,6 +211,21 @@ function mockCore(settings: Partial<Settings> = {}): Mock {
         case "remove_agent":
           m.agents = m.agents.filter((r) => r.name !== a.client);
           return null;
+        case "get_license":
+          return m.license;
+        case "verify_license": {
+          const before = m.license;
+          m.license = { state: "verifying" };
+          if (m.verifyGate !== null) await m.verifyGate;
+          const r = m.verifyResult;
+          m.license = r.result === "verified" ? { state: "verified", license: r.license } : before;
+          return r;
+        }
+        case "remove_license":
+          m.license = { state: "unverified" };
+          return null;
+        case "get_third_party_licenses":
+          return m.thirdParty;
       }
     },
     { shouldMockEvents: true },
@@ -253,7 +288,7 @@ function change(el: HTMLElement | null, value: string) {
   flushSync();
 }
 
-test("Mod+, で開いて 5 つの区分を出し、Esc か Mod+, で閉じて、開く前のフォーカスへ戻る。背後は操作できない", async () => {
+test("Mod+, で開いて 7 つの区分を出し、Esc か Mod+, で閉じて、開く前のフォーカスへ戻る。背後は操作できない", async () => {
   await start();
   const before = $(".search") as HTMLElement;
   before.focus();
@@ -266,6 +301,8 @@ test("Mod+, で開いて 5 つの区分を出し、Esc か Mod+, で閉じて、
     "Operation",
     "Data",
     "Agents",
+    "License",
+    "About",
   ]);
   // 背後（外枠と本文）は操作できない
   expect(inert($(".shell"))).toBe(true);
@@ -1062,7 +1099,7 @@ test("区分の一覧は ↑/↓ で移り、Tab は設定の中だけを回る"
   press({ key: "ArrowUp" }, document.activeElement!);
   await until(() => document.activeElement?.getAttribute("data-section") === "general");
   press({ key: "ArrowUp" }, document.activeElement!);
-  await until(() => document.activeElement?.getAttribute("data-section") === "agents");
+  await until(() => document.activeElement?.getAttribute("data-section") === "about");
 
   // 最後のボタンから Tab で先頭へ戻る
   const items = $$("[data-settings] button, [data-settings] input, [data-settings] select");
@@ -1071,4 +1108,220 @@ test("区分の一覧は ↑/↓ で移り、Tab は設定の中だけを回る"
   items.at(-1)!.dispatchEvent(tab);
   expect(tab.defaultPrevented).toBe(true);
   expect(dialog()!.contains(document.activeElement)).toBe(true);
+});
+
+// ---- サポーターライセンス（画面設計書 7章「ライセンス区分と『このアプリについて』」） ----
+
+const VERIFIED: VerifiedLicense = { keyTail: "E304DA", verifiedAt: new Date(2026, 10, 12, 12).getTime() };
+/** 試験用のキー（秘密の検査に掛からないよう、0 を並べた偽物）。 */
+const ENTERED = "YUNAGI_00000000-0000-4000-8000-0000000E304DA";
+const keyInput = () => $("#set-license-key") as HTMLInputElement | null;
+const result = () => text("[data-settings] .result");
+
+function typeKey(value: string) {
+  const el = keyInput()!;
+  el.value = value;
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  flushSync();
+}
+
+test("ライセンス：開いただけでは確かめない。押す前から通信することを書き、空のときは「確認する」を押せない", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  expect(text('[data-pane="license"] .note')).toContain("販売サービス（Polar）と 1 回だけ通信します");
+  expect(button("確認する").disabled).toBe(true);
+  typeKey("   ");
+  expect(button("確認する").disabled).toBe(true);
+  // 区分を移っても、閉じても、開き直しても確かめない
+  $('[data-section="about"]')?.click();
+  press({ key: "Escape" }, document.activeElement!);
+  await open("license");
+  expect(core.count("verify_license")).toBe(0);
+  expect(core.count("get_license")).toBeGreaterThan(0);
+});
+
+test("ライセンス：確認中は欄とボタンを押せなくし、失敗は文を出してキーを残す。確認できたら確認済みの表示とサポーターの一文", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  let release!: () => void;
+  core.verifyGate = new Promise((r) => (release = r));
+  core.verifyResult = { result: "unreachable" };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result() === "確認しています…");
+  expect(keyInput()!.disabled).toBe(true);
+  expect(button("確認する").disabled).toBe(true);
+  release();
+  await until(() => result().startsWith("販売サービスに接続できなかったため"));
+  expect(result()).toContain("Yunagi の機能はすべて使えます");
+  expect(keyInput()!.value).toBe(ENTERED);
+  expect(core.count("verify_license")).toBe(1);
+  expect(core.last("verify_license")).toEqual({ key: ENTERED });
+
+  for (const [r, message] of [
+    ["rejected", "このキーは確認できませんでした。"],
+    ["service_error", "販売サービスから正しい応答が無かったため"],
+    ["invalid_format", "キーの形が違います。"],
+    ["save_failed", "確認はできましたが、保存できませんでした。"],
+  ] as const) {
+    core.verifyGate = null;
+    core.verifyResult = { result: r };
+    button("確認する").click();
+    await until(() => result().startsWith(message));
+    expect(keyInput()!.value).toBe(ENTERED);
+  }
+
+  core.verifyResult = { result: "verified", license: VERIFIED };
+  button("確認する").click();
+  await until(() => result() === "サポーターライセンスを確認しました。ありがとうございます。");
+  expect(text('[data-license="verified"]')).toBe("サポーターライセンス：確認済み（キーの末尾 E304DA、確認した日 2026.11.12）");
+  expect(keyInput()).toBeNull();
+  $('[data-section="about"]')?.click();
+  await until(() => $('[data-about="supporter"]') !== null);
+  expect(text('[data-about="supporter"]')).toBe("サポーターライセンスで Yunagi を支えていただき、ありがとうございます。");
+});
+
+test("ライセンス：確認中に設定を閉じても確認は続く。閉じている間の失敗は捨て、確認できていれば次に開いたとき確認済み", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  let release!: () => void;
+  core.verifyGate = new Promise((r) => (release = r));
+  core.verifyResult = { result: "rejected" };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result() === "確認しています…");
+  press({ key: "Escape" }, document.activeElement!);
+  expect(dialog()).toBeNull();
+  // 開き直すと確認中
+  await open("license");
+  await until(() => result() === "確認しています…");
+  press({ key: "Escape" }, document.activeElement!);
+  release();
+  await new Promise((r) => setTimeout(r, 0));
+  await open("license");
+  await until(() => keyInput() !== null && !keyInput()!.disabled);
+  expect(keyInput()!.value).toBe("");
+  expect(result()).toBe("");
+
+  core.verifyGate = new Promise((r) => (release = r));
+  core.verifyResult = { result: "verified", license: VERIFIED };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result() === "確認しています…");
+  press({ key: "Escape" }, document.activeElement!);
+  release();
+  await new Promise((r) => setTimeout(r, 0));
+  await open("license");
+  await until(() => $('[data-license="verified"]') !== null);
+  expect(core.count("verify_license")).toBe(2);
+});
+
+test("ライセンス：確認中に区分を離れて戻ったら、その後に終わった失敗の文は出す。About の版が届いても確認の状態は読み直さない", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  let release!: () => void;
+  core.verifyGate = new Promise((r) => (release = r));
+  core.verifyResult = { result: "rejected" };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result() === "確認しています…");
+  $('[data-section="about"]')?.click();
+  await until(() => text('[data-about="version"]') === "v0.4.0");
+  const reads = core.count("get_license");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(core.count("get_license")).toBe(reads);
+  $('[data-section="license"]')?.click();
+  await until(() => result() === "確認しています…");
+  release();
+  await until(() => result().startsWith("このキーは確認できませんでした。"));
+  // 欄は押せる状態に戻る（入力は区分を離れたときに捨ててある）
+  expect(keyInput()!.disabled).toBe(false);
+});
+
+test("ライセンス：確かめる処理そのものが失敗したら、押したことへの答えを出す", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  core.answer.verify_license = { kind: "not_ready" };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result().startsWith("確認できませんでした。もう一度お試しください。"));
+  expect(keyInput()!.value).toBe(ENTERED);
+});
+
+test("このアプリについて：表記を読めなかったときは、無いとは言わずに伝え、次に押したときに読み直す", async () => {
+  const core = await start();
+  core.answer.get_third_party_licenses = { kind: "internal", detail: "x" };
+  await open("about");
+  button("表示する").click();
+  await until(() => text('[data-pane="about"] .missing') !== "");
+  expect(text('[data-pane="about"] .missing')).toContain("読めませんでした");
+  button("閉じる").click();
+  await until(() => $('[data-pane="about"] .missing') === null);
+  delete core.answer.get_third_party_licenses;
+  core.thirdParty = "notices";
+  button("表示する").click();
+  await until(() => $('[data-pane="about"] pre')?.textContent === "notices");
+});
+
+test("ライセンス：キーを消すは確かめる文を出し（初めのフォーカスは「やめる」）、Esc で閉じる。「消す」で消して伝える", async () => {
+  const core = await start();
+  core.license = { state: "verified", license: VERIFIED };
+  await open("license");
+  await until(() => $('[data-license="verified"]') !== null);
+  button("キーを消す").click();
+  await until(() => document.activeElement?.textContent?.trim() === "やめる");
+  expect(text("[data-settings] .confirm p")).toContain("サポーターの表示を消します。");
+  press({ key: "Escape" }, document.activeElement!);
+  expect(dialog()).not.toBeNull();
+  expect($("[data-settings] .confirm")).toBeNull();
+  expect(core.count("remove_license")).toBe(0);
+  button("キーを消す").click();
+  await until(() => $("[data-settings] .confirm") !== null);
+  button("消す").click();
+  await until(() => result() === "キーを消しました。");
+  expect(core.count("remove_license")).toBe(1);
+  await until(() => keyInput() !== null);
+  expect(core.count("verify_license")).toBe(0);
+});
+
+test("ライセンス：識別子が空のビルドでは、未確認なら入力欄を出さずに使えない旨だけを出す", async () => {
+  const core = await start();
+  core.license = { state: "unavailable" };
+  await open("license");
+  await until(() => $('[data-license="unavailable"]') !== null);
+  expect(text('[data-license="unavailable"]')).toBe("この版では、ライセンスキーの確認はまだ使えません。");
+  expect(keyInput()).toBeNull();
+  expect($$("[data-settings] button").some((b) => b.textContent?.trim() === "確認する")).toBe(false);
+});
+
+test("このアプリについて：版・ライセンス・サードパーティライセンス。未確認ならサポーターの表示も購入の案内も出さない", async () => {
+  const core = await start();
+  await open("about");
+  await until(() => text('[data-about="version"]') === "v0.4.0");
+  expect(text('[data-pane="about"]')).toContain("MIT と Apache-2.0 のどちらか");
+  expect($('[data-about="supporter"]')).toBeNull();
+  // 開発のビルドには表記が無い
+  button("表示する").click();
+  await until(() => text('[data-pane="about"] .missing') !== "");
+  button("閉じる").click();
+  await until(() => $('[data-pane="about"] .missing') === null);
+  press({ key: "Escape" }, document.activeElement!);
+
+  // 配布物の表記はプレーンテキストで出す
+  core.thirdParty = "# Third-party licenses\n<b>not html</b>";
+  app && unmount(app);
+  app = mount(App, { target: document.body });
+  await until(() => $("main.content")?.dataset.date === TODAY);
+  await open("about");
+  await until(() => text('[data-about="version"]') === "v0.4.0");
+  button("表示する").click();
+  await until(() => $('[data-pane="about"] pre') !== null);
+  expect($('[data-pane="about"] pre')!.textContent).toBe("# Third-party licenses\n<b>not html</b>");
+  expect($('[data-pane="about"] pre b')).toBeNull();
+  expect(core.count("verify_license")).toBe(0);
 });

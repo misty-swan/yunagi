@@ -212,6 +212,9 @@ describe("画面の文言がコードにある", () => {
     ["持ち越しを開く", "Open carry-over"],
     ["更新して再起動", "Update and restart"],
     ["保存できていません", "Not saved"],
+    ["ライセンスキー", "License key"],
+    ["確認する", "Verify"],
+    ["キーを消す", "Remove key"],
   ];
 
   it("ガイドの設定の項目名・ボタン名・通知が、画面の文言と同じ", () => {
@@ -224,13 +227,13 @@ describe("画面の文言がコードにある", () => {
     }
   });
 
-  it("設定の区分の名前は、日英とも英字（General・Display・Operation・Data・Agents）で書く", () => {
+  it("設定の区分の名前は、日英とも英字（General・Display・Operation・Data・Agents・License・About）で書く", () => {
     for (const text of [GUIDES.ja, GUIDES.en]) {
       for (const bad of ["「一般」", "「操作」", "「データ」", "「エージェント」", "Settings → Input", "→ General", "→ Data"]) {
         expect(text, bad).not.toContain(bad);
       }
     }
-    for (const section of ["General", "Display", "Operation", "Data", "Agents"]) {
+    for (const section of ["General", "Display", "Operation", "Data", "Agents", "License", "About"]) {
       expect(code).toContain(`${section.toLowerCase()}: "${section}"`);
       expect(GUIDES.ja).toContain(`「${section}」区分`);
       expect(GUIDES.en).toContain(`${section} section`);

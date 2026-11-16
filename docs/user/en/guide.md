@@ -180,10 +180,23 @@ In a terminal, `yunagi handoff export <TODO ID>` prints the same text (find the 
 
 - Yunagi never sends your data anywhere. Your data is stored in the data location on this computer (for content read by agents, see section 6).
 - To check for new versions, Yunagi sends only the app version, OS, and architecture, for example at startup (the download host records your IP address and the time). You can turn this off in the General section of Settings.
-- To check a supporter license key, Yunagi sends the key and a fixed identifier for Yunagi's seller account to the sales service, only when you enter the key and ask Yunagi to verify it, once each time you ask (the sales service may record your IP address and the time). Your notes and other data are not sent. If you never enter a key, this connection is never made (entering a key will be available in a later version).
+- To check a supporter license key, Yunagi sends the key and a fixed identifier for Yunagi's seller account to the sales service, only when you enter the key and ask Yunagi to verify it, once each time you ask (the sales service may record your IP address and the time). Your notes and other data are not sent. If you never enter a key, this connection is never made (how to enter one is under "Supporter license" below).
 - See or change the data location in the Data section of Settings. Backups of the last 7 days are created automatically, and you can restore one from the list in the same section. The backups made before an update and before a restore keep the newest 3 of each.
 - If you put the data location in an iCloud Drive or Dropbox folder, open Yunagi on only one computer at a time. To use several computers, we recommend syncing Markdown exports or backups instead.
 - You can export a day or a date range as Markdown. In the Data section of Settings, choose the start date, the end date, and a folder, then press Export to get one file per day.
+
+### Supporter license
+
+A supporter license is a way to support Yunagi's development. Every Yunagi feature works without a key, and even if a key can't be verified.
+
+1. Open the License section of Settings.
+2. Paste the key you received when you purchased into the License key field, exactly as it is, and press Verify. Yunagi connects once to the sales service to check it.
+3. Once verified, Settings shows the license as verified (the last 6 characters of the key and the date it was verified), and the About section shows a thank-you line. Yunagi doesn't connect again after that.
+
+- After verifying, Yunagi keeps only the last 6 characters of the key and the date. The full key isn't stored.
+- If the key can't be verified, the reason is shown. The key stays in the field so you can fix it and press Verify again.
+- To remove the display, press Remove key. To bring it back, enter the key and verify it again (this needs a connection).
+- You can use the same key on as many computers as you like.
 
 ## 8. Uninstall
 

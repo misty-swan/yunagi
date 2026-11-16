@@ -9,8 +9,8 @@
 #![allow(clippy::result_large_err)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -21,6 +21,8 @@ use tauri::test::{
 use tauri::webview::InvokeRequest;
 use tauri::{App, Listener, Manager, WebviewWindow, WebviewWindowBuilder};
 use yunagi_app::AppCore;
+use yunagi_app::license::{Backend, LicenseService, Response, SELLER, Seller};
+use yunagi_app::types::VerifyResult;
 use yunagi_core::domain::agent::{ItemField, ProtectedLines, UiState};
 use yunagi_core::domain::item::{self, ItemError};
 use yunagi_core::domain::logical_date::LogicalDate;
@@ -44,7 +46,7 @@ fn main() {
     }
     let default_dir = yunagi_core::storage::data_dir::default_dir().unwrap();
     assert!(default_dir.path().starts_with(&home));
-    let tests: [(&str, Test); 24] = [
+    let tests: [(&str, Test); 25] = [
         (
             "opens_on_first_use_and_backs_up",
             opens_on_first_use_and_backs_up,
@@ -111,6 +113,7 @@ fn main() {
             "data_dir_operations_keep_the_screen_ready",
             data_dir_operations_keep_the_screen_ready,
         ),
+        ("license_commands", license_commands),
     ];
     // `cargo test <名前>` の名前（`-` で始まらない引数）があれば、名前にそれを含むものだけを走らせる
     let filters: Vec<String> = std::env::args()
@@ -2094,6 +2097,274 @@ fn data_dir_operations_keep_the_screen_ready(default_dir: &Path) {
     h.assert_no_event();
     drop(h);
     std::fs::remove_file(default_dir.join("config.json")).unwrap();
+}
+
+// ---- サポーターライセンス ----
+
+/// 偽の販売サービス：呼ばれた回数と送られた本文を覚え、決めた応答を返す。`gate` があれば、応答の前に
+/// 知らせて（`entered`）、止まる（試験が `gate` に送るまで）。
+struct FakeSales {
+    calls: Mutex<Vec<Vec<u8>>>,
+    reply: Mutex<Response>,
+    gate: Mutex<Option<(mpsc::Sender<()>, Receiver<()>)>>,
+}
+
+impl FakeSales {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: Mutex::new(Vec::new()),
+            reply: Mutex::new(Response::Http {
+                status: 404,
+                body: Some(Vec::new()),
+            }),
+            gate: Mutex::new(None),
+        })
+    }
+
+    fn reply(&self, status: u16, body: &str) {
+        *self.reply.lock().unwrap() = Response::Http {
+            status,
+            body: Some(body.as_bytes().to_vec()),
+        };
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+}
+
+impl Backend for FakeSales {
+    fn validate(&self, body: Vec<u8>) -> Response {
+        self.calls.lock().unwrap().push(body);
+        if let Some((entered, release)) = self.gate.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        self.reply.lock().unwrap().clone()
+    }
+}
+
+const TEST_SELLER: Seller = Seller {
+    organization_id: "00000000-0000-4000-8000-000000000001",
+    benefit_id: "00000000-0000-4000-8000-000000000002",
+    key_prefix: "YUNAGI_",
+};
+
+/// 試験用のキー（秘密の検査に掛からないよう、0 を並べた偽物）。
+const TEST_KEY: &str = "YUNAGI_00000000-0000-4000-8000-0000000E304DA";
+
+/// 確認の手段（`seller` と偽の販売サービス）を持たせたアプリ。
+fn license_harness(seller: Seller, sales: &Arc<FakeSales>) -> (Harness, Arc<LicenseService>) {
+    let h = Harness::opened();
+    let service = LicenseService::new(seller, Arc::clone(sales) as Arc<dyn Backend>);
+    assert!(h.webview.app_handle().manage(Arc::clone(&service)));
+    (h, service)
+}
+
+/// サポーターライセンスのキーの確認（テスト計画書 4.7、画面設計書 7章「ライセンス区分と『このアプリ
+/// について』」）：通信の回数、結果の分け方と保存、キーの全体を残さないこと、確認中の扱い。
+fn license_commands(default_dir: &Path) {
+    let base = default_dir.parent().unwrap().join("license-base");
+    // 単独で走らせたときも、既定ディレクトリ（config.json の置き場所）を作っておく
+    std::fs::create_dir_all(default_dir).unwrap();
+    create_with_backup(default_dir, &base, "seed");
+    let sales = FakeSales::new();
+    let (h, service) = license_harness(TEST_SELLER, &sales);
+    let today = h.today();
+    let verify = |key: &str| h.ok("verify_license", json!({ "key": key }));
+
+    // 開いただけ・状態を読むだけでは通信しない
+    assert_eq!(
+        h.ok("get_license", json!({})),
+        json!({ "state": "unverified" })
+    );
+    assert_eq!(sales.calls(), 0);
+
+    // 形の違う入力は通信しない
+    let long = format!("YUNAGI_{}", "a".repeat(128));
+    for bad in [
+        "",
+        "今日のノートの一部です。YUNAGI_ABCDEF12",
+        "YUNAGI_ABC DEF12",
+        "YUNAGI_ABC\nDEF12",
+        "YUNAGI_",
+        long.as_str(),
+        "ghp_0123456789abcdefABCDEF",
+    ] {
+        assert_eq!(
+            verify(bad),
+            json!({ "result": "invalid_format" }),
+            "{bad:?}"
+        );
+    }
+    assert_eq!(sales.calls(), 0);
+
+    // 失敗は 1 回押すごとに 1 回だけ通信し、何も保存しない。ボードはそのまま読み書きできる
+    let stored = |h: &Harness| {
+        h.core
+            .read(|conn| yunagi_core::storage::table::setting::get(conn, "license"))
+            .unwrap()
+    };
+    for (reply, result) in [
+        ((404, r#"{"error":"ResourceNotFound"}"#), "rejected"),
+        ((200, r#"{"status":"revoked"}"#), "rejected"),
+        ((500, ""), "service_error"),
+        ((429, ""), "service_error"),
+        ((302, ""), "service_error"),
+        ((200, "<html>"), "service_error"),
+    ] {
+        let before = sales.calls();
+        sales.reply(reply.0, reply.1);
+        assert_eq!(verify(TEST_KEY), json!({ "result": result }), "{reply:?}");
+        assert_eq!(sales.calls(), before + 1);
+        assert_eq!(stored(&h), None);
+    }
+    *sales.reply.lock().unwrap() = Response::Unreachable("offline".into());
+    assert_eq!(verify(TEST_KEY), json!({ "result": "unreachable" }));
+    assert_eq!(stored(&h), None);
+    h.add_todo(&today, "still works");
+    let board = h.ok("get_board", json!({ "date": today }));
+    assert_eq!(texts(&board["todos"]), ["seed", "still works"]);
+
+    // 確認できた：送ったのはキーと販売元の識別子だけ。保存はキーの末尾と時刻だけ
+    sales.reply(
+        200,
+        r#"{"status":"granted","customer":{"name":"Buyer","email":"buyer@example.com"}}"#,
+    );
+    let calls = sales.calls();
+    let verified = verify(&format!("  {TEST_KEY}\n"));
+    assert_eq!(sales.calls(), calls + 1);
+    assert_eq!(verified["result"], "verified", "{verified}");
+    assert_eq!(verified["license"]["keyTail"], "E304DA");
+    let sent: Value = serde_json::from_slice(sales.calls.lock().unwrap().last().unwrap()).unwrap();
+    assert_eq!(
+        sent,
+        json!({
+            "key": TEST_KEY,
+            "organization_id": TEST_SELLER.organization_id,
+            "benefit_id": TEST_SELLER.benefit_id,
+        })
+    );
+    let state = h.ok("get_license", json!({}));
+    assert_eq!(state["state"], "verified");
+    assert_eq!(state["license"], verified["license"]);
+    let mark = stored(&h).unwrap();
+    assert!(!mark.contains(TEST_KEY) && !mark.contains("Buyer") && !mark.contains("buyer@"));
+    // データベースのファイルにも、キーの全体は残らない（WAL を含む）
+    for name in ["yunagi.db", "yunagi.db-wal"] {
+        if let Ok(bytes) = std::fs::read(base.join(name)) {
+            assert!(
+                !bytes
+                    .windows(TEST_KEY.len())
+                    .any(|w| w == TEST_KEY.as_bytes()),
+                "{name}"
+            );
+        }
+    }
+    // 確認済みの後は、読むだけで通信しない
+    let calls = sales.calls();
+    h.ok("get_license", json!({}));
+    drop(h);
+    drop(service);
+
+    // 起動し直しても通信せずに確認済み。識別子が空のビルドでも、確認済みの表示は出る
+    let (h, _service) = license_harness(SELLER, &sales);
+    let state = h.ok("get_license", json!({}));
+    assert_eq!(state["state"], "verified");
+    assert_eq!(state["license"], verified["license"]);
+    // キーを消す：通信しない
+    h.ok("remove_license", json!({}));
+    assert_eq!(stored(&h), None);
+    // 識別子が空のビルドでは、未確認なら使えない旨。押しても通信しない
+    assert_eq!(
+        h.ok("get_license", json!({})),
+        json!({ "state": "unavailable" })
+    );
+    assert_eq!(verify_on(&h, TEST_KEY), json!({ "result": "unavailable" }));
+    assert_eq!(sales.calls(), calls);
+    drop(h);
+
+    // 壊れた印は未確認として扱う
+    let (h, service) = license_harness(TEST_SELLER, &sales);
+    h.core
+        .read(|conn| yunagi_core::storage::table::setting::set(conn, "license", r#"{"x":1}"#))
+        .unwrap();
+    assert_eq!(
+        h.ok("get_license", json!({})),
+        json!({ "state": "unverified" })
+    );
+
+    // 確認できたが保存できなかった
+    sales.reply(200, r#"{"status":"granted"}"#);
+    h.core
+        .read(|conn| {
+            conn.pragma_update(None, "query_only", true)
+                .map_err(StorageError::from)
+        })
+        .unwrap();
+    assert_eq!(verify_on(&h, TEST_KEY), json!({ "result": "save_failed" }));
+    h.core
+        .read(|conn| {
+            conn.pragma_update(None, "query_only", false)
+                .map_err(StorageError::from)
+        })
+        .unwrap();
+
+    // 確認中：状態は「確認中」、2 本目は通信せずに断る。その間もボードを読み書きできる
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    *sales.gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let running = {
+        let core = Arc::clone(&h.core);
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || service.verify(&core, TEST_KEY).unwrap())
+    };
+    entered.recv_timeout(WAIT).unwrap();
+    let calls = sales.calls();
+    assert_eq!(
+        h.ok("get_license", json!({})),
+        json!({ "state": "verifying" })
+    );
+    assert_eq!(verify_on(&h, TEST_KEY), json!({ "result": "busy" }));
+    assert_eq!(sales.calls(), calls);
+    h.add_todo(&today, "while verifying");
+    // 確認中にデータベースが替わった（復元）：結果を捨て、何も保存しない
+    let daily = h.ok("list_backups", json!({}))[0]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    h.ok("restore_backup", json!({ "backup": daily }));
+    release.send(()).unwrap();
+    assert_eq!(running.join().unwrap(), VerifyResult::Discarded);
+    assert_eq!(stored(&h), None);
+    assert_eq!(
+        h.ok("get_license", json!({})),
+        json!({ "state": "unverified" })
+    );
+
+    // 確認中に何も替わらなければ、画面が待っていなくても（設定を閉じても）保存される
+    let (entered_tx, entered) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    *sales.gate.lock().unwrap() = Some((entered_tx, release_rx));
+    let running = {
+        let core = Arc::clone(&h.core);
+        let service = Arc::clone(&service);
+        std::thread::spawn(move || service.verify(&core, TEST_KEY).unwrap())
+    };
+    entered.recv_timeout(WAIT).unwrap();
+    release.send(()).unwrap();
+    assert!(matches!(
+        running.join().unwrap(),
+        VerifyResult::Verified { .. }
+    ));
+    assert_eq!(h.ok("get_license", json!({}))["state"], "verified");
+    h.ok("remove_license", json!({}));
+    drop(h);
+    std::fs::remove_file(default_dir.join("config.json")).unwrap();
+}
+
+fn verify_on(h: &Harness, key: &str) -> Value {
+    h.ok("verify_license", json!({ "key": key }))
 }
 
 /// `db` のスキーマの番号を `version` にする（新しい版で作られたことにする）。

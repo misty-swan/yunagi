@@ -48,6 +48,8 @@
   import { SettingsPanel } from "./lib/settings_panel.svelte";
   import { DataSettings } from "./lib/settings_data.svelte";
   import SettingsDialog from "./settings/SettingsDialog.svelte";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { AboutStore, LicenseStore } from "./lib/license.svelte";
   import { AgentAdmin } from "./lib/agent_admin.svelte";
   import { AgentsScreen } from "./lib/agents.svelte";
   import AgentsDialog from "./agents/Agents.svelte";
@@ -87,6 +89,10 @@
   const agentAdmin = new AgentAdmin();
   agentAdmin.start();
   onDestroy(() => agentAdmin.stop());
+  // サポーターライセンスと「このアプリについて」（設定の License・About。設定を閉じても、確かめている途中の
+  // 結果を受けられるよう、画面の外に持つ）
+  const licenseStore = new LicenseStore();
+  const aboutStore = new AboutStore(getVersion);
   const agentsScreen = new AgentsScreen({ flush: () => save.flushAll() });
   agentsScreen.start();
   onDestroy(() => agentsScreen.stop());
@@ -576,6 +582,8 @@
     store={settingsStore}
     data={dataSettings}
     admin={agentAdmin}
+    license={licenseStore}
+    about={aboutStore}
     {mac}
     onOpenAgents={() => openScreen("agents")}
   />

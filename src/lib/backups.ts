@@ -26,8 +26,14 @@ function pad(n: number) {
   return String(n).padStart(2, "0");
 }
 
+/** 日付（端末のタイムゾーンで `2026.11.03`。サポーターライセンスの確認した日にも使う）。 */
+export function localDate(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
+}
+
 /** 作った時刻（端末のタイムゾーンで `2026.11.03 14:05`）。 */
 export function backupTime(ms: number): string {
   const d = new Date(ms);
-  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${localDate(ms)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

@@ -61,6 +61,8 @@ const labels = {
     operation: "Operation",
     data: "Data",
     agents: "Agents",
+    license: "License",
+    about: "About",
     backups: "BACKUPS",
     export: "EXPORT",
   },

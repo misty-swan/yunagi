@@ -1,14 +1,14 @@
 <script lang="ts">
   // 設定（S-05。画面設計書 7章）。外枠の上に重ねるパネル（形は検索パレット S-04・持ち越し S-03 と同じ）。
-  // 左に区分（General / Display / Operation / Data / Agents）、右にその区分の設定を並べる。
+  // 左に区分（General / Display / Operation / Data / Agents / License / About）、右にその区分の設定を並べる。
   // 変えた値はすぐ画面に当て、コアの setting に保存する（`SettingsStore.save`）。保存先・バックアップ・
   // 書き出しは DataSection、ショートカット割当は ShortcutsSection、エージェントと権限・ローカル API は
-  // AgentsSection。
+  // AgentsSection、サポーターライセンスのキーは LicenseSection、版とライセンスの表記は AboutSection。
   //
   // キー：Esc で閉じる（保存先などの確かめる画面を出していれば、先にそれを閉じる）、Mod+, でも閉じる、
   // Tab はこの画面の中だけを回る。開いている間は、ほかの画面のキー（Mod+J・ノートの Mod+Shift+H など）を
   // 受け付けない。区分の一覧は ↑/↓ で移る。
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { t } from "../lib/i18n";
   import { imeSupport } from "../lib/ime.svelte";
   import { shellActionOf } from "../lib/keys";
@@ -26,8 +26,11 @@
   import type { SettingsStore } from "../lib/settings.svelte";
   import { ShortcutEditor } from "../lib/shortcuts_edit.svelte";
   import type { AgentAdmin } from "../lib/agent_admin.svelte";
+  import type { AboutStore, LicenseStore } from "../lib/license.svelte";
+  import AboutSection from "./AboutSection.svelte";
   import AgentsSection from "./AgentsSection.svelte";
   import DataSection from "./DataSection.svelte";
+  import LicenseSection from "./LicenseSection.svelte";
   import ShortcutsSection from "./ShortcutsSection.svelte";
 
   let {
@@ -35,6 +38,8 @@
     store,
     data,
     admin,
+    license,
+    about,
     mac,
     onOpenAgents,
   }: {
@@ -42,6 +47,8 @@
     store: SettingsStore;
     data: DataSettings;
     admin: AgentAdmin;
+    license: LicenseStore;
+    about: AboutStore;
     mac: boolean;
     /** エージェント変更履歴（S-06）を開く。 */
     onOpenAgents: () => void;
@@ -99,6 +106,19 @@
     }
   });
 
+  // ライセンス区分・このアプリについてを開くたびに、確認の状態を読む（通信しない）。離れる・閉じるときは、
+  // 入力と結果の文を捨てる（確かめている途中の確認は、コアで続く）
+  $effect(() => {
+    if (panel.open && (panel.section === "license" || panel.section === "about")) {
+      // 読み込みが読む状態（版など）に、この effect を結び付けない（届いたときに開き直したことにしない）
+      untrack(() => {
+        void license.show();
+        if (panel.section === "about") void about.load();
+      });
+      return () => license.hide();
+    }
+  });
+
   const error = $derived.by(() => {
     const e = store.error;
     if (e === null) return null;
@@ -133,6 +153,7 @@
       if (data.flow !== null) data.cancel();
       else if (admin.ask !== null) admin.cancelAsk();
       else if (admin.removing !== null) admin.cancelRemove();
+      else if (license.confirmingRemove) license.cancelRemove();
       else panel.close();
       return;
     }
@@ -352,9 +373,15 @@
         {:else if panel.section === "data"}
           <h3 class="label">{labels.data}</h3>
           <DataSection {data} />
-        {:else}
+        {:else if panel.section === "agents"}
           <h3 class="label">{labels.agents}</h3>
           <AgentsSection {admin} {onOpenAgents} />
+        {:else if panel.section === "license"}
+          <h3 class="label">{labels.license}</h3>
+          <LicenseSection {license} />
+        {:else}
+          <h3 class="label">{labels.about}</h3>
+          <AboutSection {about} {license} />
         {/if}
       </div>
     </div>

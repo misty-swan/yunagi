@@ -203,7 +203,7 @@ GitHub Actions で OS ごとのマトリクスビルドを行う。ワークフ�
 - Rust は `cargo-about`（`about.toml`）で調べる。配布する 6 組の target の依存だけを数え、ビルド時とテスト時にだけ使う依存（ビルドスクリプト・proc-macro・dev-dependencies）は実行ファイルに入らないので数えない。自分たちのクレートは数えない。JavaScript は `pnpm licenses list --prod`（配布物に入る `dependencies` だけ。脆弱性の検査と違い `devDependencies` は数えない：ライセンスは配布する物にだけ付くため）。同梱するフォントは、知らないフォルダ・ファイル（デザインガイド 4章に無いもの）と、足りないライセンス文書を `scripts/release/licenses.ts` が見つける。
 - **許可するか決まっていないライセンス**（`pending`）：新しい依存が一覧に無いライセンスを連れてきたとき、オーナーが決めるまでの置き場で、ふだんは空（2026-11-06 の YUN-96 で、それまで入っていた BSL-1.0・CDLA-Permissive-2.0・Unicode-3.0 を `allowed` へ移した）。入っている間は、配布用 CI のこの検査は落とす（タグの push でも試運転でも。試運転の PR は、オーナーが決めて `pending` が空になるまで赤のままで、その後ろの `THIRD_PARTY_LICENSES.md` の生成も走らない。`release.yml` の「Licenses (disallowed)」に `continue-on-error` は付けない）。`THIRD_PARTY_LICENSES.md` の生成は、`about.toml` の `accepted` に `pending` も入れて受け入れ、決まるまでも一覧を作れるようにしている（`accepted` は `allowed` と `pending` を合わせたものと同じに保つ。試験が確かめる）。決まったら、許可するものは `allowed` へ移し、許可しないものは依存を外して `pending` から消す。
 - **フォントのファイルの SHA-256 とライセンス文書**は `src/styles/fonts.test.ts`（`pnpm check` に含まれ、デザインガイド 4章の値と照合する）を `verify` ジョブでも動かす。違えば中止する。
-- `THIRD_PARTY_LICENSES.md`：`node scripts/release/licenses.ts generate <出力先>`。フォント → JavaScript の依存 → Rust の依存の順に、同じライセンス文書ごとにまとめて載せる。`verify` ジョブが作って成果物にし、ビルドの各ジョブが `src-tauri/THIRD_PARTY_LICENSES.md` に置いて、`bundle.resources`（`src-tauri/release/common.json`）で配布物に入れる（Linux の AppImage の中は `usr/lib/Yunagi/THIRD_PARTY_LICENSES.md` に入ることを確かめた）。アプリの「設定 → このアプリについて」でこのファイルを表示する画面は、まだ無い（画面の課題で作る。third-party-licenses.md 2章）。
+- `THIRD_PARTY_LICENSES.md`：`node scripts/release/licenses.ts generate <出力先>`。フォント → JavaScript の依存 → Rust の依存の順に、同じライセンス文書ごとにまとめて載せる。`verify` ジョブが作って成果物にし、ビルドの各ジョブが `src-tauri/THIRD_PARTY_LICENSES.md` に置いて、`bundle.resources`（`src-tauri/release/common.json`）で配布物に入れる（Linux の AppImage の中は `usr/lib/Yunagi/THIRD_PARTY_LICENSES.md` に入ることを確かめた）。アプリの「設定 → このアプリについて」の「表示する」が、リソースのフォルダのこのファイルを読んで出す（Rust のコマンド `get_third_party_licenses`。2026-11-16。YUN-114。画面設計書 7章）。開発のビルド（`pnpm tauri dev`）には無いので、その旨を出す。
 
 **使う道具の版**：`cargo-audit` 0.22.2、`cargo-about` 0.9.2（最新の 0.9.3 は公開から 14 日たっていないので、14 日を経た中で最も新しい版にした。`cargo install --locked` で入れる）。上げるときは、公開から 14 日を経た版を採る（SECURITY.md 4.4）。
 
@@ -456,6 +456,7 @@ Cask はダウンロードしたアプリに隔離属性を付けるため、ア
 - [ ] バージョン番号を直下の `Cargo.toml` の `[workspace.package]` の `version` で上げた（版を書くのはここ 1 か所。`tauri.conf.json`・`package.json` は版を持たない。README.md）。タグは `v<この版>` にする（違えば配布用 CI が中止する。3 の 1）
 - [ ] テスト計画書のリリース前テストを完了した
 - [ ] 配布用 CI の検査ジョブ（`verify`）が成功した：許可外ライセンスと既知脆弱性が無く、許可リストの期限内で、`THIRD_PARTY_LICENSES.md` が生成された（3.1）。検査が「検査できなかった」で止まったときは、つなぎ直して再実行する。あわせて、許可リスト（`scripts/release/audit-allowlist.json`）の全件の理由がまだ成り立つことと、`cargo audit` の警告の一覧に新しいもの（特に `unsound`）が増えていないことを目で見た（3.1「警告の扱い」）
+- [ ] サポーターライセンスの販売元の識別子（`src-tauri/src/license.rs` の `SELLER`）が入っている（空のままだと、ライセンス区分は「この版では使えない」を出す。利用者ガイドと公式サイトはキーを入力できる前提で書いてある。値の入れ方は画面設計書 7章「販売元の識別子を入れる」）。販売ページ（YUN-108）を公開する前の版では、空のままでよい
 - [ ] 型チェックの道具（svelte-check）の新しい版が TypeScript 7 系に正式に対応したかを、アーキテクチャ設計書 3.2 の目安で確かめた（対応していれば移行を判断する）
 - [ ] タグを作成して push した
 - [ ] CI の全ジョブが成功し、配布物・`.sha256`・`.sig`・`SHA256SUMS`・`SHA256SUMS.sig` が揃っている（`.sig` 以降は YUN-101 が作る。3.4。YUN-97 の範囲では、全 6 組のビルドが成功し、配布物と `.sha256` が成果物に揃っているまで）

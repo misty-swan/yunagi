@@ -66,6 +66,13 @@ tauri-plugin-single-instance = "=2.5.5"
 # 断られうるため。3.x は alpha なので 2.x の最新（2026-10-14 公開）に固定する
 tauri-plugin-clipboard-manager = "=2.5.0"
 tauri-plugin-updater = "=2.14.0"
+# サポーターライセンスのキーの確認（販売サービスへの 1 回の問い合わせ。src-tauri/src/license.rs、
+# docs/design/01-architecture.md 4.3）。自動更新のプラグインがすでに連れてきている版と機能にそろえ、
+# 新しく取り込むクレートを増やさない（Cargo.lock の版。セキュリティ方針 4.4）。プラグインの版を上げて
+# reqwest・rustls の版が変わったら、この版も同じに上げる。TLS は rustls（暗号の部品は ring）で、
+# 暗号の部品は使う前に入れる（`license::ensure_crypto_provider`）
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring"] }
 # SQLite（docs/design/01-architecture.md 3章）。bundled で SQLite 本体（FTS5 を含む）を
 # 同梱してビルドし、OS ごとの SQLite の版の違いに左右されないようにする。
 # backup はマイグレーション前のバックアップと失敗時の復元に使う（SQLite のオンラインバックアップ）

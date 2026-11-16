@@ -12,7 +12,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -110,6 +110,11 @@ struct FailureInfo {
 /// アプリの中のコア。Tauri の状態（`State<Arc<AppCore>>`）として持つ。
 pub struct AppCore {
     db: Mutex<Slot>,
+    /// データベースの世代。開いた・閉じた・別のデータに替わった（保存先の変更・選び直し・復元）たびに
+    /// 進める。進めるのは `db` の錠を持っている間だけ（[`AppCore::bump_generation`]）。時間のかかる処理の
+    /// 結果を、始めたときと同じデータベースにだけ書くために使う（[`AppCore::write_if_same_database`]。
+    /// サポーターライセンスの確認。画面設計書 7章）。
+    generation: AtomicU64,
     screen: ScreenState,
     /// 最後に確かめた今日の論理日付（変わったかを見るため）。
     today: Mutex<Option<LogicalDate>>,
@@ -277,6 +282,7 @@ impl AppCore {
     pub fn new(notify: Notify) -> Arc<Self> {
         Arc::new(Self {
             db: Mutex::new(Slot::Opening),
+            generation: AtomicU64::new(0),
             screen: ScreenState::default(),
             today: Mutex::new(None),
             backup: Mutex::new(BackupState::default()),
@@ -461,16 +467,20 @@ impl AppCore {
         let held = match db.close_keeping_lock() {
             Ok(held) => held,
             Err(e) => {
+                // 閉じられず、同じデータベースのまま：世代は進めない
                 let e = *e;
                 *slot = Slot::Open(e.db);
                 return Err(CommandError::storage(&e.error));
             }
         };
+        // 閉じられた：開き直すデータは別のものかもしれないので、世代を進める
+        self.bump_generation(&slot);
         // `f` が panic しても、開き直してから伝える（データベースを開けないまま残さない）
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&held)));
         let reopened = open_slot(held, Database::open);
         let opened = matches!(reopened, Slot::Open(_));
         *slot = reopened;
+        self.bump_generation(&slot);
         drop(slot);
         if !opened {
             // 開き直せず、ロックも離れた。待ち受けを止める（待っていた依頼は、データベースが開いて
@@ -547,7 +557,11 @@ impl AppCore {
             let Slot::Open(db) = &mut *slot else {
                 return Err(CommandError::NotReady);
             };
-            db.restore_backup(backup).map_err(|e| {
+            let restored = db.restore_backup(backup);
+            // 失敗しても、途中まで替わったかもしれないので世代を進める（進めすぎても、確認の結果を
+            // 捨てるだけ）
+            self.bump_generation(&slot);
+            restored.map_err(|e| {
                 eprintln!(
                     "yunagi: could not restore from {}: {}",
                     backup.display(),
@@ -583,6 +597,7 @@ impl AppCore {
             return Err(CommandError::InvalidState);
         }
         *slot = Slot::Opening;
+        self.bump_generation(&slot);
         Ok(())
     }
 
@@ -607,6 +622,7 @@ impl AppCore {
                 return;
             }
             *current = slot;
+            self.bump_generation(&current);
         }
         // ロックを持ち、データベースを開き終えた：ここから待ち受ける（4.4）
         if ready {
@@ -674,6 +690,47 @@ impl AppCore {
         f: impl FnOnce(&Connection) -> Result<T, E>,
     ) -> Result<T, CommandError> {
         self.with_db(|db| f(db.connection()).map_err(Into::into))
+    }
+
+    /// 画面の操作による書き込みのうち、ほかの画面にもエージェントにも知らせないもの（`changed` を出さず、
+    /// 保存の失敗中にも数えない。サポーターライセンスの確認の印を消すとき）。読み取り（[`AppCore::read`]）
+    /// とは別に、開いたデータベースで `f` を行う（読み取りの入口の決まりが変わっても、書き込みに響かない
+    /// ように）。
+    pub fn quiet_write<T, E: Into<CommandError>>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, E>,
+    ) -> Result<T, CommandError> {
+        self.with_db(|db| f(db.connection()).map_err(Into::into))
+    }
+
+    /// データベースの世代を進める。`db` の錠を持っている間に呼ぶ（錠の中身 `_slot` を受け取るのは、
+    /// 持っていることを呼ぶ側に求めるため）。
+    fn bump_generation(&self, _slot: &MutexGuard<'_, Slot>) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// いま開いているデータベースの世代。開いていなければ `None`。
+    pub fn database_generation(&self) -> Option<u64> {
+        let slot = lock(&self.db);
+        matches!(*slot, Slot::Open(_)).then(|| self.generation.load(Ordering::Acquire))
+    }
+
+    /// 世代が `generation`（[`AppCore::database_generation`] で得たもの）のままなら、そのデータベースで
+    /// `f` を行う（書き込み。画面の操作の扱いで、`changed` は知らせず、保存の失敗中にも数えない。設定の
+    /// 保存と同じ）。別のデータベースに替わったか閉じられていたら、何もせずに `Ok(None)`。世代の照合と
+    /// 書き込みは、同じ錠の中で行う（照合と書き込みの間に替わらないように）。
+    pub fn write_if_same_database<T, E: Into<CommandError>>(
+        &self,
+        generation: u64,
+        f: impl FnOnce(&Connection) -> Result<T, E>,
+    ) -> Result<Option<T>, CommandError> {
+        let slot = lock(&self.db);
+        match &*slot {
+            Slot::Open(db) if self.generation.load(Ordering::Acquire) == generation => {
+                f(db.connection()).map(Some).map_err(Into::into)
+            }
+            _ => Ok(None),
+        }
     }
 
     /// 画面からの書き込み。
@@ -997,7 +1054,12 @@ impl AppCore {
         self.stop_api();
         // 先に閉じた状態にして、次のバックアップが始まらないようにしてから待つ。データベース
         // （ロック）は、待ち終わるまで手元に持つ
-        let slot = std::mem::replace(&mut *lock(&self.db), Slot::Closed);
+        let slot = {
+            let mut current = lock(&self.db);
+            let slot = std::mem::replace(&mut *current, Slot::Closed);
+            self.bump_generation(&current);
+            slot
+        };
         self.wait_for_backup();
         close_slot(slot);
     }
