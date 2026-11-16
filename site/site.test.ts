@@ -11,6 +11,7 @@ import { build, checkPurchaseUrl, headersFile, ROOT } from "./lib/build.ts";
 import { ISSUES_URL, LANGS, PURCHASE_URL, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
 import { fetchPublishedLatest, parseLatest } from "./lib/latest.ts";
 import { renderMarkdown, slugify } from "./lib/markdown.ts";
+import { buildPages } from "./lib/pages.ts";
 import { PAGE_KEYS } from "./lib/text.ts";
 
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
@@ -467,25 +468,32 @@ describe("販売ページ（サポーターライセンス）", () => {
     for (const lang of LANGS) {
       const doc = dom(join(plainDir, lang, "supporter", "index.html"));
       if (PURCHASE_URL === "") {
-        expect(doc.querySelector(".doc .notice"), lang).not.toBeNull();
+        expect(doc.querySelector(".doc .notice")?.textContent, lang).toContain(
+          lang === "ja" ? "購入の受け付けは準備中です" : "Purchases are not open yet",
+        );
         expect(doc.querySelectorAll(".doc a.button"), lang).toHaveLength(0);
       } else {
         expect([...doc.querySelectorAll(".doc a.button")].map((a) => a.getAttribute("href")), lang).toEqual([PURCHASE_URL]);
+        expect(doc.querySelector(".doc .notice"), lang).toBeNull();
       }
     }
-    expect(page(plainDir, "ja")).toContain("購入の受け付けは準備中です");
-    expect(page(plainDir, "en")).toContain("Purchases are not open yet");
   });
 
   it("購入リンクを入れると、日英のページに同じ 1 つのリンクが出て、『準備中』は消える", () => {
-    const out = join(tmp, "purchase-out");
-    build({ outDir: out, purchaseUrl: URL_OK });
     for (const lang of LANGS) {
-      const doc = dom(join(out, lang, "supporter", "index.html"));
+      const html = buildPages(lang, { root: ROOT, latest: null, releaseKey: null, purchaseUrl: URL_OK }).supporter;
+      const doc = new JSDOM(html).window.document;
       expect([...doc.querySelectorAll(".doc a.button")].map((a) => a.getAttribute("href")), lang).toEqual([URL_OK]);
       expect(doc.querySelector(".doc .notice"), lang).toBeNull();
       // 外部のスクリプト・埋め込みは、リンクを入れても増えない（各ページの HTML の検査と同じ）
       expect(doc.querySelectorAll("script,iframe,form"), lang).toHaveLength(0);
+    }
+  });
+
+  it("購入リンクを入れたら、お知らせで受け付けを始めたことを知らせている（『準備中』の文の約束）", () => {
+    if (PURCHASE_URL === "") return;
+    for (const lang of LANGS) {
+      expect(read(`site/content/${lang}/news.md`), lang).toContain(`(/${lang}/supporter/)`);
     }
   });
 
@@ -498,6 +506,9 @@ describe("販売ページ（サポーターライセンス）", () => {
       "javascript:alert(1)",
       "//example.com/checkout",
       "example.com/checkout",
+      "https://example.com/​checkout",
+      "https://example.com/\u0001checkout",
+      "https://exämple.com/checkout",
     ]) {
       expect(() => checkPurchaseUrl(bad), bad).toThrow(/購入リンク/);
     }
@@ -511,14 +522,17 @@ describe("販売ページ（サポーターライセンス）", () => {
   });
 
   it("価格と有料同期の目安は、ロードマップ 4章と同じ値を載せる", () => {
+    // 値はロードマップから読む（ロードマップを変えたら、販売ページも直さないと通らない）
     const roadmap = read("docs/future/roadmap.md");
-    expect(roadmap).toContain("価格：**2,500 円（税込）**");
-    expect(roadmap).toContain("月 500 円（仮）");
+    const price = roadmap.match(/価格：\*\*([0-9,]+) 円（税込）\*\*/)?.[1];
+    const sync = roadmap.match(/有料同期（有料機能 B）：月 ([0-9,]+) 円（仮）/)?.[1];
+    expect(price).toBeDefined();
+    expect(sync).toBeDefined();
     // サイトの日本語は数字と助数詞の間に空白を入れない（下の「数字と助数詞」の検査）
-    expect(page(plainDir, "ja")).toContain("2,500円（税込）");
-    expect(page(plainDir, "ja")).toContain("月500円を目安");
-    expect(page(plainDir, "en")).toContain("JPY 2,500 (tax included)");
-    expect(page(plainDir, "en")).toContain("around JPY 500 a month");
+    expect(page(plainDir, "ja")).toContain(`${price}円（税込）`);
+    expect(page(plainDir, "ja")).toContain(`月${sync}円を目安`);
+    expect(page(plainDir, "en")).toContain(`JPY ${price} (tax included)`);
+    expect(page(plainDir, "en")).toContain(`around JPY ${sync} a month`);
   });
 
   it("キーの入力の案内は、アプリの画面の文言（設定のライセンス区分）と同じ", () => {

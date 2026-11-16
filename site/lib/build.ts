@@ -28,12 +28,13 @@ export interface BuildOptions {
 
 /**
  * 購入リンクの形を確かめる。空（準備中）か、`https://` の URL 1 つだけを通す。
- * 認証の情報（`user:pass@`）・空白・引用符を含むもの、ホストの無いものは、ビルドを止める。
+ * 認証の情報（`user:pass@`）・空白・引用符・表示できない文字（制御文字・幅の無い空白・ASCII の外の文字）を含むもの、
+ * ホストの無いものは、ビルドを止める（コピーのときに混じった見えない文字で、リンクの行き先を黙って変えない）。
  * 販売サービスのホスト名は決め打ちしない（窓口を選び直すことがあるため。要件定義書 9章）。
  */
 export function checkPurchaseUrl(url: string): string {
   if (url === "") return url;
-  if (/[\s"'<>`]/.test(url)) throw new Error(`購入リンクに空白や引用符がある: ${url}`);
+  if (/[^\x21-\x7e]|["'<>`]/.test(url)) throw new Error(`購入リンクに空白・引用符・表示できない文字がある: ${JSON.stringify(url)}`);
   let parsed: URL;
   try {
     parsed = new URL(url);

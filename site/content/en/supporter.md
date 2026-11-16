@@ -26,14 +26,16 @@ When the purchase is complete, a license key is issued. You can view and copy it
 2. Paste the key into the License key field, exactly as it is, and press Verify.
 3. Once verified, Settings shows the license as verified, and the About section shows a thank-you line.
 
-- Verifying the key needs an internet connection once, when you press Verify. Only the key and a fixed identifier for Yunagi's seller account are sent, never your notes or other data. Yunagi doesn't connect again after the key is verified.
+- Verifying the key needs an internet connection once, when you press Verify. Only the key and a fixed identifier for Yunagi's seller account are sent, never your notes or other data (the sales service may record your IP address and the time). Yunagi doesn't connect again after the key is verified.
 - If Yunagi can't connect, or the key can't be verified, every feature still works. Press Verify again when you're online.
 - For details, see [Supporter license in the guide](/en/guide/#supporter-license).
 
 ## 4. Refunds
 
 - Because this is a digital product, purchases are not refunded as a rule.
-- If you bought it twice by accident, or bought it by mistake, write to [support@getyunagi.com](mailto:support@getyunagi.com) within 14 days of the purchase. You will get a full refund. Refunds are made through Polar.
+- If you bought it twice by accident, write to [support@getyunagi.com](mailto:support@getyunagi.com) within 14 days of the purchase. The extra purchase is refunded in full.
+- If you bought it by mistake, write to the same address within 14 days of the purchase. If the key has never been verified in the app (you haven't pressed Verify), you will get a full refund. Whether it was verified is checked in the sales service's records.
+- Refunds are made through Polar.
 - A refunded key is disabled and can no longer be newly verified.
 
 ## 5. Legal notice under the Act on Specified Commercial Transactions
