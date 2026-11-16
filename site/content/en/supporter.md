@@ -16,7 +16,7 @@ A supporter license is a one-time purchase that supports Yunagi's development. I
 <!-- slot:purchase -->
 
 - You buy and pay on the checkout page of our sales service, Polar. This site does not handle any payment details.
-- The seller is Polar (Merchant of Record: Polar sells to you and handles sales tax, such as Japanese consumption tax). Polar issues the receipt. If you need a qualified invoice, please use Polar's receipt.
+- The seller is Polar (Merchant of Record: Polar sells to you and handles sales tax, such as Japanese consumption tax). Polar issues the receipt. The developer of Yunagi does not issue qualified invoices. Please check Polar's receipt to see whether it can serve as one.
 
 ## 3. Getting and entering your key
 
@@ -26,7 +26,7 @@ When the purchase is complete, a license key is issued. You can view and copy it
 2. Paste the key into the License key field, exactly as it is, and press Verify.
 3. Once verified, Settings shows the license as verified, and the About section shows a thank-you line.
 
-- Verifying the key needs an internet connection once, when you press Verify. Only the key and a fixed identifier for Yunagi's seller account are sent, never your notes or other data (the sales service may record your IP address and the time). Yunagi doesn't connect again after the key is verified.
+- Verifying the key needs an internet connection once, when you press Verify. Only the key and two fixed identifiers for Yunagi's seller account and product are sent, never your notes or other data (the sales service may record your IP address and the time). Yunagi doesn't connect again after the key is verified.
 - If Yunagi can't connect, or the key can't be verified, every feature still works. Press Verify again when you're online.
 - For details, see [Supporter license in the guide](/en/guide/#supporter-license).
 
@@ -34,7 +34,7 @@ When the purchase is complete, a license key is issued. You can view and copy it
 
 - Because this is a digital product, purchases are not refunded as a rule.
 - If you bought it twice by accident, write to [support@getyunagi.com](mailto:support@getyunagi.com) within 14 days of the purchase. The extra purchase is refunded in full.
-- If you bought it by mistake, write to the same address within 14 days of the purchase. If the key has never been verified in the app (you haven't pressed Verify), you will get a full refund. Whether it was verified is checked in the sales service's records.
+- If you bought it by mistake, write to the same address within 14 days of the purchase. If the sales service's records show the key has never been verified, you will get a full refund. Pressing Verify in the app can leave a record even if the app couldn't show the key as verified.
 - Refunds are made through Polar.
 - A refunded key is disabled and can no longer be newly verified.
 

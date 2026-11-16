@@ -36,18 +36,46 @@ export function sourcePaths(lang: Lang): Partial<Record<PageKey, string[]>> {
   };
 }
 
+/** 「まだ無い」ことを知らせる囲み。中身は HTML（呼ぶ側でエスケープ済みのもの） */
+function notice(html: string): string {
+  return `<div class="notice"><p>${html}</p></div>`;
+}
+
+/**
+ * 購入リンクの形を確かめる。空（準備中）か、`https://` の URL 1つだけを通す。
+ * 認証の情報（`user:pass@`）・空白・引用符・表示できない文字（制御文字・幅の無い空白・ASCII の外の文字）を含むもの、
+ * URL として読めないもの（ホストの無いものを含む）は、止める（コピーのときに混じった見えない文字で、リンクの行き先を黙って変えない）。
+ * 販売サービスのホスト名は決め打ちしない（窓口を選び直すことがあるため。要件定義書 9章）。
+ */
+export function checkPurchaseUrl(url: string): string {
+  if (url === "") return url;
+  if (/[^\x21-\x7e]|["'<>`]/.test(url)) throw new Error(`購入リンクに空白・引用符・表示できない文字がある: ${JSON.stringify(url)}`);
+  if (!url.startsWith("https://")) throw new Error(`購入リンクは https:// で始める: ${url}`);
+  let parsed: URL;
+  try {
+    // https の URL は、ホストが無ければここで読めずに止まる
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`購入リンクが URL の形ではない: ${url}`);
+  }
+  if (parsed.username !== "" || parsed.password !== "") throw new Error(`購入リンクに認証の情報を入れない: ${url}`);
+  return url;
+}
+
 /**
  * 販売ページの購入の案内。リンクが空の間は「準備中」の囲みだけを出す（購入へのリンクを作らない）。
  * 購入の画面は Polar のページへ移るだけのリンクで、Polar のスクリプトや埋め込みは読み込まない（07 の 2章「販売ページ」）。
  */
-function purchase(lang: Lang, url: string): string {
+function purchase(lang: Lang, purchaseUrl: string): string {
   const ja = lang === "ja";
+  // ビルドの入口（build）でも確かめるが、どの呼び出しからでも形の違うリンクを出さないよう、ここでも通す
+  const url = checkPurchaseUrl(purchaseUrl);
   if (url === "") {
-    return `<div class="notice"><p>${
+    return notice(
       ja
         ? "購入の受け付けは準備中です。始めたら、ここに購入の画面へのリンクを載せ、変更履歴・お知らせでもお知らせします。"
-        : "Purchases are not open yet. When they open, a link to the purchase page will appear here, and it will be announced on the News page."
-    }</p></div>`;
+        : "Purchases are not open yet. When they open, a link to the purchase page will appear here, and it will be announced on the News page.",
+    );
   }
   const label = ja ? "購入する（Polar の購入画面へ）" : "Buy (opens Polar's checkout page)";
   return `<p class="actions"><a class="button" href="${esc(url)}">${esc(label)}</a></p>`;
@@ -61,11 +89,11 @@ function changelogPath(lang: Lang): string[] {
 function download(lang: Lang, latest: Latest | null): string {
   const ja = lang === "ja";
   if (latest === null) {
-    return `<div class="notice"><p>${
+    return notice(
       ja
         ? `最初のリリースの前です。ファイルの一覧は、最初のリリースを公開するとここに出ます。公開済みのファイルは <a href="${RELEASES_URL}">GitHub の Releases</a> にもあります。`
-        : `This is before the first release. The list of files appears here once the first release is published. Published files are also on <a href="${RELEASES_URL}">GitHub Releases</a>.`
-    }</p></div>`;
+        : `This is before the first release. The list of files appears here once the first release is published. Published files are also on <a href="${RELEASES_URL}">GitHub Releases</a>.`,
+    );
   }
   const v = latest.version;
   const base = `${DOWNLOAD_BASE}/v${v}`;
@@ -101,11 +129,11 @@ ${rows.map(([, os, arch, name]) => `<tr><td>${os}</td><td>${arch}</td><td>${link
 function verifyKey(lang: Lang, key: string | null): string {
   const ja = lang === "ja";
   if (key === null) {
-    return `<div class="notice"><p>${
+    return notice(
       ja
         ? "配布用の公開鍵は最初のリリースの前にここに掲載します。掲載するまでは、署名の確認はできません。"
-        : "The public key for downloads will be published here before the first release. Until then, signatures cannot be checked."
-    }</p></div>`;
+        : "The public key for downloads will be published here before the first release. Until then, signatures cannot be checked.",
+    );
   }
   const text = ja
     ? `公開鍵のファイルは <a href="/yunagi-release.pub">yunagi-release.pub</a> です。同じ内容をリポジトリの<a href="https://github.com/misty-swan/yunagi/blob/main/site/keys/release.pub"><code>site/keys/release.pub</code></a> でも見られます。2か所が同じであることも確かめてください。`
@@ -119,7 +147,7 @@ function installCards(lang: Lang, latest: Latest | null): string {
     `<div class="card"><h3>${esc(label)}</h3><pre tabindex="0"><code>${esc(cmd)}</code></pre></div>`;
   const status = latest
     ? `<p class="section-lead">${esc(t.latest(latest.version))}</p>`
-    : `<div class="notice"><p>${esc(t.before)}</p></div>`;
+    : notice(esc(t.before));
   return `${status}
 <div class="cards two">
 ${card(t.mac, `curl -fsSL ${SITE}/install.sh | sh`)}

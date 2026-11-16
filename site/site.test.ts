@@ -7,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { JSDOM } from "jsdom";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { build, checkPurchaseUrl, headersFile, ROOT } from "./lib/build.ts";
+import { build, headersFile, ROOT } from "./lib/build.ts";
 import { ISSUES_URL, LANGS, PURCHASE_URL, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
 import { fetchPublishedLatest, parseLatest } from "./lib/latest.ts";
 import { renderMarkdown, slugify } from "./lib/markdown.ts";
-import { buildPages } from "./lib/pages.ts";
+import { buildPages, checkPurchaseUrl } from "./lib/pages.ts";
 import { PAGE_KEYS } from "./lib/text.ts";
 
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
@@ -490,11 +490,29 @@ describe("販売ページ（サポーターライセンス）", () => {
     }
   });
 
-  it("購入リンクを入れたら、お知らせで受け付けを始めたことを知らせている（『準備中』の文の約束）", () => {
-    if (PURCHASE_URL === "") return;
+  // 購入リンクを入れる PR（YUN-123。07 の 2章「販売ページ」の「値を入れる順」）で、
+  // 一緒に直すものが残っていれば止める。リンクが空の間は、まだ受け付けていない文があることを確かめる
+  it("購入リンクを入れたら、お知らせの節で販売ページを案内し、販売ページの『表記を載せるまで受け付けない』の文を消している", () => {
+    const heads = { ja: ["## お知らせ", "## 変更履歴"], en: ["## Announcements", "## Change log"] } as const;
+    const waiting = { ja: "それまでは、購入の受け付けを始めません", en: "Purchases will not open until then" } as const;
     for (const lang of LANGS) {
-      expect(read(`site/content/${lang}/news.md`), lang).toContain(`(/${lang}/supporter/)`);
+      const news = read(`site/content/${lang}/news.md`);
+      const [from, to] = heads[lang];
+      expect(news.indexOf(from), lang).toBeGreaterThanOrEqual(0);
+      expect(news.indexOf(to), lang).toBeGreaterThan(news.indexOf(from));
+      const announcements = news.slice(news.indexOf(from), news.indexOf(to));
+      const body = read(`site/content/${lang}/supporter.md`);
+      if (PURCHASE_URL === "") {
+        expect(body, lang).toContain(waiting[lang]);
+      } else {
+        expect(announcements, lang).toContain(`(/${lang}/supporter/)`);
+        expect(body, lang).not.toContain(waiting[lang]);
+      }
     }
+  });
+
+  it("ページを作る部品も、形の違う購入リンクを出さない", () => {
+    expect(() => buildPages("ja", { root: ROOT, latest: null, releaseKey: null, purchaseUrl: "javascript:alert(1)" })).toThrow(/購入リンク/);
   });
 
   it("購入リンクの形が違えば、出力先に触れる前にビルドを止める", () => {

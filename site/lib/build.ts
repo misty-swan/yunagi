@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { LANGS, PURCHASE_URL, SITE } from "./consts.ts";
 import { esc } from "./html.ts";
 import { parseLatest, type Latest } from "./latest.ts";
-import { buildPages } from "./pages.ts";
+import { buildPages, checkPurchaseUrl } from "./pages.ts";
 import { HEAD_COMMON, pagePath } from "./layout.ts";
 import { PAGE_KEYS } from "./text.ts";
 
@@ -24,27 +24,6 @@ export interface BuildOptions {
   latestJson?: string;
   /** サポーターライセンスの購入リンク。既定は consts.ts の PURCHASE_URL（試験だけが替える） */
   purchaseUrl?: string;
-}
-
-/**
- * 購入リンクの形を確かめる。空（準備中）か、`https://` の URL 1 つだけを通す。
- * 認証の情報（`user:pass@`）・空白・引用符・表示できない文字（制御文字・幅の無い空白・ASCII の外の文字）を含むもの、
- * ホストの無いものは、ビルドを止める（コピーのときに混じった見えない文字で、リンクの行き先を黙って変えない）。
- * 販売サービスのホスト名は決め打ちしない（窓口を選び直すことがあるため。要件定義書 9章）。
- */
-export function checkPurchaseUrl(url: string): string {
-  if (url === "") return url;
-  if (/[^\x21-\x7e]|["'<>`]/.test(url)) throw new Error(`購入リンクに空白・引用符・表示できない文字がある: ${JSON.stringify(url)}`);
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`購入リンクが URL の形ではない: ${url}`);
-  }
-  if (parsed.protocol !== "https:" || !url.startsWith("https://")) throw new Error(`購入リンクは https:// で始める: ${url}`);
-  if (parsed.hostname === "") throw new Error(`購入リンクにホストが無い: ${url}`);
-  if (parsed.username !== "" || parsed.password !== "") throw new Error(`購入リンクに認証の情報を入れない: ${url}`);
-  return url;
 }
 
 export interface BuildResult {
@@ -157,6 +136,7 @@ export function build(options: BuildOptions): BuildResult {
     latest = parseLatest(latestText);
   }
 
+  // 出力先を消す前に確かめる（形が違えば、前の出力を残したまま止まる）
   const purchaseUrl = checkPurchaseUrl(options.purchaseUrl ?? PURCHASE_URL);
 
   assertSafeOutDir(root, outDir);
