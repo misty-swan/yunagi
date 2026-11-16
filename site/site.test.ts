@@ -8,9 +8,10 @@ import { join, relative } from "node:path";
 import { JSDOM } from "jsdom";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { build, headersFile, ROOT } from "./lib/build.ts";
-import { ISSUES_URL, LANGS, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
+import { ISSUES_URL, LANGS, PURCHASE_URL, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
 import { fetchPublishedLatest, parseLatest } from "./lib/latest.ts";
 import { renderMarkdown, slugify } from "./lib/markdown.ts";
+import { buildPages, checkPurchaseUrl } from "./lib/pages.ts";
 import { PAGE_KEYS } from "./lib/text.ts";
 
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8");
@@ -456,6 +457,123 @@ describe("配布用の公開鍵", () => {
     expect(readFileSync(join(out, "en", "verify", "index.html"), "utf8")).toContain(`RWQ${"A".repeat(53)}`);
     writeFileSync(join(root, "site", "keys", "release.pub"), "bogus\n");
     expect(() => build({ root, outDir: join(tmp, "key-bad") })).toThrow(/公開鍵の形/);
+  });
+});
+
+describe("販売ページ（サポーターライセンス）", () => {
+  const page = (dir: string, lang: string) => readFileSync(join(dir, lang, "supporter", "index.html"), "utf8");
+  const URL_OK = "https://example.com/checkout/yunagi-supporter";
+
+  it("リポジトリの購入リンク（PURCHASE_URL）が空の間は『準備中』を出し、購入へのリンクを作らない", () => {
+    for (const lang of LANGS) {
+      const doc = dom(join(plainDir, lang, "supporter", "index.html"));
+      if (PURCHASE_URL === "") {
+        expect(doc.querySelector(".doc .notice")?.textContent, lang).toContain(
+          lang === "ja" ? "購入の受け付けは準備中です" : "Purchases are not open yet",
+        );
+        expect(doc.querySelectorAll(".doc a.button"), lang).toHaveLength(0);
+      } else {
+        expect([...doc.querySelectorAll(".doc a.button")].map((a) => a.getAttribute("href")), lang).toEqual([PURCHASE_URL]);
+        expect(doc.querySelector(".doc .notice"), lang).toBeNull();
+      }
+    }
+  });
+
+  it("購入リンクを入れると、日英のページに同じ 1 つのリンクが出て、『準備中』は消える", () => {
+    for (const lang of LANGS) {
+      const html = buildPages(lang, { root: ROOT, latest: null, releaseKey: null, purchaseUrl: URL_OK }).supporter;
+      const doc = new JSDOM(html).window.document;
+      expect([...doc.querySelectorAll(".doc a.button")].map((a) => a.getAttribute("href")), lang).toEqual([URL_OK]);
+      expect(doc.querySelector(".doc .notice"), lang).toBeNull();
+      // 外部のスクリプト・埋め込みは、リンクを入れても増えない（各ページの HTML の検査と同じ）
+      expect(doc.querySelectorAll("script,iframe,form"), lang).toHaveLength(0);
+    }
+  });
+
+  // 購入リンクを入れる PR（YUN-123。07 の 2章「販売ページ」の「値を入れる順」）で、
+  // 一緒に直すものが残っていれば止める。リンクが空の間は、まだ受け付けていない文があることを確かめる
+  it("購入リンクを入れたら、お知らせの節で販売ページを案内し、販売ページの『表記を載せるまで受け付けない』の文を消している", () => {
+    const heads = { ja: ["## お知らせ", "## 変更履歴"], en: ["## Announcements", "## Change log"] } as const;
+    const waiting = { ja: "それまでは、購入の受け付けを始めません", en: "Purchases will not open until then" } as const;
+    for (const lang of LANGS) {
+      const news = read(`site/content/${lang}/news.md`);
+      const [from, to] = heads[lang];
+      expect(news.indexOf(from), lang).toBeGreaterThanOrEqual(0);
+      expect(news.indexOf(to), lang).toBeGreaterThan(news.indexOf(from));
+      const announcements = news.slice(news.indexOf(from), news.indexOf(to));
+      const body = read(`site/content/${lang}/supporter.md`);
+      if (PURCHASE_URL === "") {
+        expect(body, lang).toContain(waiting[lang]);
+      } else {
+        expect(announcements, lang).toContain(`(/${lang}/supporter/)`);
+        expect(body, lang).not.toContain(waiting[lang]);
+      }
+    }
+  });
+
+  it("ページを作る部品も、形の違う購入リンクを出さない", () => {
+    expect(() => buildPages("ja", { root: ROOT, latest: null, releaseKey: null, purchaseUrl: "javascript:alert(1)" })).toThrow(/購入リンク/);
+  });
+
+  it("購入リンクの形が違えば、出力先に触れる前にビルドを止める", () => {
+    for (const bad of [
+      "http://example.com/checkout",
+      "https://user:pass@example.com/checkout",
+      "https://example.com/a b",
+      'https://example.com/"x',
+      "javascript:alert(1)",
+      "//example.com/checkout",
+      "example.com/checkout",
+      "https://example.com/​checkout",
+      "https://example.com/\u0001checkout",
+      "https://exämple.com/checkout",
+    ]) {
+      expect(() => checkPurchaseUrl(bad), bad).toThrow(/購入リンク/);
+    }
+    expect(checkPurchaseUrl("")).toBe("");
+    expect(checkPurchaseUrl(URL_OK)).toBe(URL_OK);
+    const out = join(tmp, "purchase-bad");
+    expect(() => build({ outDir: out, purchaseUrl: "http://example.com" })).toThrow(/https/);
+    expect(existsSync(out)).toBe(false);
+    // リポジトリに書いた値も、同じ決まりに合っている
+    expect(checkPurchaseUrl(PURCHASE_URL)).toBe(PURCHASE_URL);
+  });
+
+  it("価格と有料同期の目安は、ロードマップ 4章と同じ値を載せる", () => {
+    // 値はロードマップから読む（ロードマップを変えたら、販売ページも直さないと通らない）
+    const roadmap = read("docs/future/roadmap.md");
+    const price = roadmap.match(/価格：\*\*([0-9,]+) 円（税込）\*\*/)?.[1];
+    const sync = roadmap.match(/有料同期（有料機能 B）：月 ([0-9,]+) 円（仮）/)?.[1];
+    expect(price).toBeDefined();
+    expect(sync).toBeDefined();
+    // サイトの日本語は数字と助数詞の間に空白を入れない（下の「数字と助数詞」の検査）
+    expect(page(plainDir, "ja")).toContain(`${price}円（税込）`);
+    expect(page(plainDir, "ja")).toContain(`月${sync}円を目安`);
+    expect(page(plainDir, "en")).toContain(`JPY ${price} (tax included)`);
+    expect(page(plainDir, "en")).toContain(`around JPY ${sync} a month`);
+  });
+
+  it("キーの入力の案内は、アプリの画面の文言（設定のライセンス区分）と同じ", () => {
+    const i18n = read("src/lib/i18n_settings.ts");
+    for (const [lang, key, verify] of [
+      ["ja", "ライセンスキー", "確認する"],
+      ["en", "License key", "Verify"],
+    ] as const) {
+      expect(i18n).toContain(`key: "${key}",`);
+      expect(i18n).toContain(`verify: "${verify}",`);
+      const html = page(plainDir, lang);
+      expect(html, lang).toContain(lang === "ja" ? `「${key}」` : `${key} field`);
+      expect(html, lang).toContain(lang === "ja" ? `「${verify}」` : `press ${verify}`);
+    }
+  });
+
+  it("フッターと問い合わせのページから着ける", () => {
+    for (const lang of LANGS) {
+      for (const p of ["index.html", "support/index.html"]) {
+        const doc = dom(join(plainDir, lang, p));
+        expect(doc.querySelector(`a[href="/${lang}/supporter/"]`), `${lang}/${p}`).not.toBeNull();
+      }
+    }
   });
 });
 

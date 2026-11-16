@@ -10,5 +10,12 @@ export const DOWNLOAD_BASE = `${REPO}/releases/download`;
 export const SUPPORT_MAIL = "support@getyunagi.com";
 export const SECURITY_MAIL = "security@getyunagi.com";
 
+/**
+ * サポーターライセンスの購入リンク（Polar の Checkout Link。`https://` で始まる 1 つの URL）。
+ * 空の間は、販売ページに「準備中」を出し、購入へのリンクを作らない。秘密ではないので、そのままコミットする。
+ * 入れる順と手順は docs/release/07-build-and-distribution.md 2章「販売ページ」（値を入れるのは YUN-123）。
+ */
+export const PURCHASE_URL = "";
+
 export const LANGS = ["ja", "en"] as const;
 export type Lang = (typeof LANGS)[number];

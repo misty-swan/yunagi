@@ -4,10 +4,10 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync,
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LANGS, SITE } from "./consts.ts";
+import { LANGS, PURCHASE_URL, SITE } from "./consts.ts";
 import { esc } from "./html.ts";
 import { parseLatest, type Latest } from "./latest.ts";
-import { buildPages } from "./pages.ts";
+import { buildPages, checkPurchaseUrl } from "./pages.ts";
 import { HEAD_COMMON, pagePath } from "./layout.ts";
 import { PAGE_KEYS } from "./text.ts";
 
@@ -22,6 +22,8 @@ export interface BuildOptions {
   outDir: string;
   /** 取り込む latest.json のパス。無ければ含めない（最初のリリースの前） */
   latestJson?: string;
+  /** サポーターライセンスの購入リンク。既定は consts.ts の PURCHASE_URL（試験だけが替える） */
+  purchaseUrl?: string;
 }
 
 export interface BuildResult {
@@ -134,6 +136,9 @@ export function build(options: BuildOptions): BuildResult {
     latest = parseLatest(latestText);
   }
 
+  // 出力先を消す前に確かめる（形が違えば、前の出力を残したまま止まる）
+  const purchaseUrl = checkPurchaseUrl(options.purchaseUrl ?? PURCHASE_URL);
+
   assertSafeOutDir(root, outDir);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
@@ -150,7 +155,7 @@ export function build(options: BuildOptions): BuildResult {
   }
 
   for (const lang of LANGS) {
-    const pages = buildPages(lang, { root, latest, releaseKey });
+    const pages = buildPages(lang, { root, latest, releaseKey, purchaseUrl });
     for (const page of PAGE_KEYS) {
       write(outDir, `${pagePath(lang, page).slice(1)}index.html`, pages[page], files);
     }

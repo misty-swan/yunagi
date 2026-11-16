@@ -17,7 +17,7 @@
 
 ## メール
 
-GitHub のアカウントが無いときや、購入・ライセンスのことは、[support@getyunagi.com](mailto:support@getyunagi.com) へ送ってください。
+GitHub のアカウントが無いときや、購入・ライセンスのことは、[support@getyunagi.com](mailto:support@getyunagi.com) へ送ってください。価格・購入のしかた・返金の扱いは[サポーターライセンス](/ja/supporter/)にあります。
 
 ## 脆弱性
 

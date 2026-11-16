@@ -3,7 +3,16 @@
 // 長い本文は site/content/<言語>/*.md に書く。
 import type { Lang } from "./consts.ts";
 
-export type PageKey = "home" | "download" | "verify" | "guide" | "requirements" | "news" | "support" | "security";
+export type PageKey =
+  | "home"
+  | "download"
+  | "verify"
+  | "guide"
+  | "requirements"
+  | "news"
+  | "support"
+  | "security"
+  | "supporter";
 
 /** ページの URL の末尾（`/<言語>/<slug>/`）。トップは空。 */
 export const SLUGS: Record<PageKey, string> = {
@@ -15,6 +24,7 @@ export const SLUGS: Record<PageKey, string> = {
   news: "news",
   support: "support",
   security: "security",
+  supporter: "supporter",
 };
 
 export const PAGE_KEYS = Object.keys(SLUGS) as PageKey[];
@@ -51,6 +61,7 @@ export const UI: Record<Lang, Ui> = {
       { page: "verify", label: "配布物の確かめ方" },
       { page: "requirements", label: "動作環境" },
       { page: "support", label: "問い合わせ" },
+      { page: "supporter", label: "サポーターライセンス" },
     ],
     sourceLabel: "ソースコード（GitHub）",
     licenseNote: "本体は MIT / Apache-2.0 のデュアルライセンスです。",
@@ -74,6 +85,7 @@ export const UI: Record<Lang, Ui> = {
       { page: "verify", label: "Verify a download" },
       { page: "requirements", label: "System requirements" },
       { page: "support", label: "Support" },
+      { page: "supporter", label: "Supporter license" },
     ],
     sourceLabel: "Source code (GitHub)",
     licenseNote: "The app is dual-licensed under MIT and Apache-2.0.",
@@ -94,6 +106,7 @@ export const DESCRIPTIONS: Record<Lang, Record<PageKey, string>> = {
     news: "Yunagi の変更履歴とお知らせ。",
     support: "Yunagi の不具合報告と問い合わせの窓口。",
     security: "Yunagi のセキュリティ。脆弱性の報告先、対象の版、配布物の保護。",
+    supporter: "Yunagi のサポーターライセンス（買い切り）。価格と特典、購入のしかた、キーの入力、返金の扱い。",
   },
   en: {
     home: "Yunagi is a daily work-organizing app for engineers. It turns your whole screen into a single note for today's work.",
@@ -104,6 +117,7 @@ export const DESCRIPTIONS: Record<Lang, Record<PageKey, string>> = {
     news: "Yunagi change log and announcements.",
     support: "Where to report problems and ask questions about Yunagi.",
     security: "Yunagi security: where to report vulnerabilities, supported versions, and how downloads are protected.",
+    supporter: "The Yunagi supporter license (one-time purchase): price and benefits, how to buy, entering the key, and refunds.",
   },
 };
 
