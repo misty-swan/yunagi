@@ -42,8 +42,8 @@ export class LicenseStore {
   confirmingRemove = $state(false);
   /** ライセンス区分か「このアプリについて」を出している。 */
   #shown = false;
-  /** 待っている間に設定を閉じた（結果の失敗は捨てる）。 */
-  #closedWhileWaiting = false;
+  /** 確認中を読み直す時計（1 つだけ持つ）。 */
+  #poll: ReturnType<typeof setTimeout> | null = null;
 
   /** 確認済みなら、その印。 */
   get verified(): VerifiedLicense | null {
@@ -64,12 +64,18 @@ export class LicenseStore {
   /** 設定を閉じた・区分を離れた：入力と文を捨てる。待っている確認は続く。 */
   hide() {
     this.#shown = false;
-    if (this.waiting) this.#closedWhileWaiting = true;
+    this.#stopPoll();
     this.input = "";
     this.notice = null;
     this.confirmingRemove = false;
   }
 
+  #stopPoll() {
+    if (this.#poll !== null) clearTimeout(this.#poll);
+    this.#poll = null;
+  }
+
+  /** 状態を読み直す（読めなければ `loadFailed`）。 */
   async #refresh() {
     try {
       this.state = await core.getLicense();
@@ -78,8 +84,10 @@ export class LicenseStore {
       this.loadFailed = true;
     }
     // 結果を待つ Promise が無いのにコアが確認中と答えた（画面を読み込み直した後など）：終わるまで読み直す
+    this.#stopPoll();
     if (this.#shown && !this.waiting && this.state?.state === "verifying") {
-      setTimeout(() => {
+      this.#poll = setTimeout(() => {
+        this.#poll = null;
         if (this.#shown && !this.waiting) void this.#refresh();
       }, VERIFYING_POLL_MS);
     }
@@ -89,7 +97,6 @@ export class LicenseStore {
   async verify() {
     if (this.input.trim() === "" || this.verifying) return;
     this.waiting = true;
-    this.#closedWhileWaiting = false;
     this.notice = null;
     let result: VerifyResult | null;
     try {
@@ -98,20 +105,20 @@ export class LicenseStore {
       result = null;
     }
     this.waiting = false;
-    const closed = this.#closedWhileWaiting;
-    this.#closedWhileWaiting = false;
     if (result?.result === "verified") {
       this.state = { state: "verified", license: result.license };
       this.input = "";
       this.notice = this.#shown ? "verified" : null;
       return;
     }
-    // 閉じている間に終わった失敗・データベースが替わった・コマンドの失敗は、文を出さない
-    if (closed || result === null || result.result === "discarded" || result.result === "busy" || result.result === "unavailable") {
-      if (closed) this.input = "";
+    // 区分を出していない間に終わった失敗は捨てる（閉じた・離れたときに入力も捨ててある。区分を出し直して
+    // いれば、文を出す）。データベースが替わった・コマンドの失敗も、文を出さない
+    if (!this.#shown || result === null || result.result === "discarded" || result.result === "busy" || result.result === "unavailable") {
       if (this.#shown) await this.#refresh();
       return;
     }
+    // 待っている間に読んだ状態（確認中）は、もう古い：失敗したので未確認
+    if (this.state?.state === "verifying") this.state = { state: "unverified" };
     this.notice = result.result;
   }
 
@@ -133,6 +140,8 @@ export class LicenseStore {
       this.notice = "remove_failed";
       return;
     }
+    // 消せた。状態を読めなければ、確認済みの表示を残さない（「読めませんでした」を出す）
+    this.state = null;
     await this.#refresh();
     this.notice = "removed";
   }

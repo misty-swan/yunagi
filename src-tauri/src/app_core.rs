@@ -464,15 +464,17 @@ impl AppCore {
         let Slot::Open(db) = std::mem::replace(&mut *slot, Slot::Opening) else {
             unreachable!("checked above");
         };
-        self.bump_generation(&slot);
         let held = match db.close_keeping_lock() {
             Ok(held) => held,
             Err(e) => {
+                // 閉じられず、同じデータベースのまま：世代は進めない
                 let e = *e;
                 *slot = Slot::Open(e.db);
                 return Err(CommandError::storage(&e.error));
             }
         };
+        // 閉じられた：開き直すデータは別のものかもしれないので、世代を進める
+        self.bump_generation(&slot);
         // `f` が panic しても、開き直してから伝える（データベースを開けないまま残さない）
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&held)));
         let reopened = open_slot(held, Database::open);
@@ -691,12 +693,13 @@ impl AppCore {
     }
 
     /// 画面の操作による書き込みのうち、ほかの画面にもエージェントにも知らせないもの（`changed` を出さず、
-    /// 保存の失敗中にも数えない。サポーターライセンスの確認の印を消すとき）。
+    /// 保存の失敗中にも数えない。サポーターライセンスの確認の印を消すとき）。中身は [`AppCore::read`] と
+    /// 同じ（開いたデータベースで `f` を行うだけ）で、呼ぶ側の意図を名前で示すためにある。
     pub fn quiet_write<T, E: Into<CommandError>>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, E>,
     ) -> Result<T, CommandError> {
-        self.with_db(|db| f(db.connection()).map_err(Into::into))
+        self.read(f)
     }
 
     /// データベースの世代を進める。`db` の錠を持っている間に呼ぶ（錠の中身 `_slot` を受け取るのは、

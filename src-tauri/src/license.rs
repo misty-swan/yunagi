@@ -201,8 +201,17 @@ impl LicenseService {
         } else if outcome == Outcome::ServiceError
             && let Response::Http { status, .. } = &response
         {
-            // 本文はログに出さない（購入者の情報が入りうる）
-            eprintln!("yunagi: the license service answered with status {status}");
+            // 本文はログに出さない（購入者の情報が入りうる）。画面の文は「時間をおいて」のまま（画面設計書
+            // 7章「結果の分け方」）だが、依頼が断られた 4xx（429 を除く）は、ビルドの識別子の誤りかもしれない
+            // ことをログに残す
+            if (400..500).contains(status) && *status != 429 {
+                eprintln!(
+                    "yunagi: the license service refused the request with status {status} \
+                     (check the seller ids in this build)"
+                );
+            } else {
+                eprintln!("yunagi: the license service answered with status {status}");
+            }
         }
         if outcome != Outcome::Granted {
             // 確かめている間にデータベースが替わっていたら、失敗の結果も捨てる（画面は読み込み直す）
@@ -243,20 +252,37 @@ pub struct HttpBackend {
     https_only: bool,
     /// OS・環境変数のプロキシの設定に従うか（本物は従う。手元の試験のサーバーには使わない）。
     system_proxy: bool,
+    client: Mutex<Option<reqwest::Client>>,
 }
 
 impl HttpBackend {
     /// 販売サービス（[`ENDPOINT`]）への部品。
     pub fn polar() -> Self {
+        Self::new(ENDPOINT, TIMEOUT, true, true)
+    }
+
+    fn new(url: &'static str, timeout: Duration, https_only: bool, system_proxy: bool) -> Self {
         Self {
-            url: ENDPOINT,
-            timeout: TIMEOUT,
-            https_only: true,
-            system_proxy: true,
+            url,
+            timeout,
+            https_only,
+            system_proxy,
+            client: Mutex::new(None),
         }
     }
 
+    /// 通信の部品（初めて使うときに作り、以後は同じものを使う。作れなかったときは覚えず、次に作り直す）。
     fn client(&self) -> reqwest::Result<reqwest::Client> {
+        let mut cached = lock(&self.client);
+        if let Some(c) = &*cached {
+            return Ok(c.clone());
+        }
+        let c = self.build_client()?;
+        *cached = Some(c.clone());
+        Ok(c)
+    }
+
+    fn build_client(&self) -> reqwest::Result<reqwest::Client> {
         ensure_crypto_provider();
         let builder = reqwest::Client::builder();
         let builder = if self.system_proxy {
@@ -436,12 +462,11 @@ mod tests {
     }
 
     fn local(url: String, timeout: Duration) -> HttpBackend {
-        HttpBackend {
-            url: Box::leak(url.into_boxed_str()),
-            timeout,
-            https_only: false,
-            system_proxy: false,
-        }
+        local_with(url, timeout, false)
+    }
+
+    fn local_with(url: String, timeout: Duration, https_only: bool) -> HttpBackend {
+        HttpBackend::new(Box::leak(url.into_boxed_str()), timeout, https_only, false)
     }
 
     fn respond(stream: &mut std::net::TcpStream, head: &str, body: &[u8]) {
@@ -557,10 +582,7 @@ mod tests {
         // 本物の部品は https だけを使う（http の送り先には、通信せずに失敗する）
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/validate", listener.local_addr().unwrap());
-        let backend = HttpBackend {
-            https_only: true,
-            ..local(url, TIMEOUT)
-        };
+        let backend = local_with(url, TIMEOUT, true);
         listener.set_nonblocking(true).unwrap();
         assert_eq!(classify(&backend.validate(b"{}")), Outcome::Unreachable);
         assert!(listener.accept().is_err(), "nothing should have connected");

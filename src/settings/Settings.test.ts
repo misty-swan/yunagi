@@ -1219,6 +1219,29 @@ test("ライセンス：確認中に設定を閉じても確認は続く。閉�
   expect(core.count("verify_license")).toBe(2);
 });
 
+test("ライセンス：確認中に区分を離れて戻ったら、その後に終わった失敗の文は出す。About の版が届いても確認の状態は読み直さない", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  let release!: () => void;
+  core.verifyGate = new Promise((r) => (release = r));
+  core.verifyResult = { result: "rejected" };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result() === "確認しています…");
+  $('[data-section="about"]')?.click();
+  await until(() => text('[data-about="version"]') === "v0.4.0");
+  const reads = core.count("get_license");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(core.count("get_license")).toBe(reads);
+  $('[data-section="license"]')?.click();
+  await until(() => result() === "確認しています…");
+  release();
+  await until(() => result().startsWith("このキーは確認できませんでした。"));
+  // 欄は押せる状態に戻る（入力は区分を離れたときに捨ててある）
+  expect(keyInput()!.disabled).toBe(false);
+});
+
 test("ライセンス：キーを消すは確かめる文を出し（初めのフォーカスは「やめる」）、Esc で閉じる。「消す」で消して伝える", async () => {
   const core = await start();
   core.license = { state: "verified", license: VERIFIED };

@@ -8,7 +8,7 @@
   // キー：Esc で閉じる（保存先などの確かめる画面を出していれば、先にそれを閉じる）、Mod+, でも閉じる、
   // Tab はこの画面の中だけを回る。開いている間は、ほかの画面のキー（Mod+J・ノートの Mod+Shift+H など）を
   // 受け付けない。区分の一覧は ↑/↓ で移る。
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { t } from "../lib/i18n";
   import { imeSupport } from "../lib/ime.svelte";
   import { shellActionOf } from "../lib/keys";
@@ -110,8 +110,11 @@
   // 入力と結果の文を捨てる（確かめている途中の確認は、コアで続く）
   $effect(() => {
     if (panel.open && (panel.section === "license" || panel.section === "about")) {
-      void license.show();
-      if (panel.section === "about") void about.load();
+      // 読み込みが読む状態（版など）に、この effect を結び付けない（届いたときに開き直したことにしない）
+      untrack(() => {
+        void license.show();
+        if (panel.section === "about") void about.load();
+      });
       return () => license.hide();
     }
   });
