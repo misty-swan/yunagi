@@ -75,7 +75,8 @@ struct ValidateRequest<'a> {
 pub enum Response {
     /// つながらない・名前を引けない・時間切れ・TLS の失敗。中はログ用の文（キーを含まない）。
     Unreachable(String),
-    /// 応答があった。`body` は、読めなかった（上限を超えた・途中で切れた）ときは `None`。
+    /// 応答があった。`body` は、上限（[`MAX_RESPONSE_BYTES`]）を超えたときは `None`（読み切らない）。
+    /// 本文の途中で止まった・切れたときは、[`Response::Unreachable`] にする。
     Http { status: u16, body: Option<Vec<u8>> },
 }
 
@@ -298,7 +299,8 @@ impl HttpBackend {
                     read.extend_from_slice(&chunk);
                 }
                 Ok(None) => break Some(read),
-                Err(_) => break None,
+                // 本文の途中で止まった・切れた（時間切れを含む）：通信そのものの失敗
+                Err(e) => return Response::Unreachable(chain(&e)),
             }
         };
         Response::Http { status, body }
@@ -523,6 +525,22 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
         assert!(matches!(response, Response::Unreachable(_)), "{response:?}");
         assert_eq!(classify(&response), Outcome::Unreachable);
+    }
+
+    #[test]
+    fn a_body_that_stops_midway_times_out_as_unreachable() {
+        // 見出しと本文の一部だけを返して黙る
+        let (url, _rx) = serve(|s| {
+            let _ = s.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"status\":",
+            );
+            let _ = s.flush();
+            thread::sleep(Duration::from_secs(3));
+        });
+        let started = Instant::now();
+        let response = local(url, Duration::from_millis(500)).validate(b"{}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(matches!(response, Response::Unreachable(_)), "{response:?}");
     }
 
     #[test]

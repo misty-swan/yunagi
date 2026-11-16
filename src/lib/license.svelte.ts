@@ -19,6 +19,9 @@ export type LicenseNotice =
   | "removed"
   | "remove_failed";
 
+/** この画面が頼んでいない確認の途中を見ているときに、状態を読み直す間隔。 */
+const VERIFYING_POLL_MS = 1000;
+
 /** 確認した日（端末の時刻で `YYYY.MM.DD`）。 */
 export function verifiedDate(ms: number): string {
   const d = new Date(ms);
@@ -73,6 +76,12 @@ export class LicenseStore {
       this.loadFailed = false;
     } catch {
       this.loadFailed = true;
+    }
+    // 結果を待つ Promise が無いのにコアが確認中と答えた（画面を読み込み直した後など）：終わるまで読み直す
+    if (this.#shown && !this.waiting && this.state?.state === "verifying") {
+      setTimeout(() => {
+        if (this.#shown && !this.waiting) void this.#refresh();
+      }, VERIFYING_POLL_MS);
     }
   }
 

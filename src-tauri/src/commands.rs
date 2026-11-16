@@ -502,7 +502,8 @@ pub async fn remove_license(
     blocking(&core, move |core| license.remove(core)).await
 }
 
-/// サードパーティライセンスの表記の最大の大きさ（バイト）。超えるものは読まない。
+/// サードパーティライセンスの表記を読む上限（バイト）。超えた分は読まない（いまの表記は数百 KiB。切れて
+/// UTF-8 として読めなくなったときは、無いものとして扱う）。
 pub const THIRD_PARTY_LICENSES_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// 配布物に入れたサードパーティライセンスの表記（`THIRD_PARTY_LICENSES.md`。ビルド・配布手順書 3章）の

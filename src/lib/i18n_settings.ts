@@ -1,6 +1,6 @@
 // 設定画面（S-05）の文言（画面設計書 7章、デザインガイド 7章）。i18n.ts の `Messages.settings`。
 //
-// 区分の名前（General / Display / Operation / Data / Agents）は英字ラベルで、日英で共通
+// 区分の名前（General / Display / Operation / Data / Agents / License / About）は英字ラベルで、日英で共通
 // （`labels.settings`）。設定の項目名と説明は、各言語で書く。
 
 import type { CloudService, Layout, NoteFont, RejectReason, Theme } from "./bindings";
