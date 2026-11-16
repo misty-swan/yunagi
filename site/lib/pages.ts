@@ -16,6 +16,8 @@ export interface SiteInputs {
   latest: Latest | null;
   /** 配布用の公開鍵（minisign の公開鍵ファイルの中身）。無ければ null（鍵の作成後に置く。07 の公式サイトの作り方） */
   releaseKey: string | null;
+  /** サポーターライセンスの購入リンク（consts.ts の PURCHASE_URL。形はビルドが確かめ済み）。空なら「準備中」を出す */
+  purchaseUrl: string;
 }
 
 const read = (root: string, ...path: string[]): string => readFileSync(join(root, ...path), "utf8");
@@ -30,7 +32,25 @@ export function sourcePaths(lang: Lang): Partial<Record<PageKey, string[]>> {
     requirements: ["site", "content", lang, "requirements.md"],
     support: ["site", "content", lang, "support.md"],
     security: ["site", "content", lang, "security.md"],
+    supporter: ["site", "content", lang, "supporter.md"],
   };
+}
+
+/**
+ * 販売ページの購入の案内。リンクが空の間は「準備中」の囲みだけを出す（購入へのリンクを作らない）。
+ * 購入の画面は Polar のページへ移るだけのリンクで、Polar のスクリプトや埋め込みは読み込まない（07 の 2章「販売ページ」）。
+ */
+function purchase(lang: Lang, url: string): string {
+  const ja = lang === "ja";
+  if (url === "") {
+    return `<div class="notice"><p>${
+      ja
+        ? "購入の受け付けは準備中です。始めたら、ここに購入の画面へのリンクを載せ、変更履歴・お知らせでもお知らせします。"
+        : "Purchases are not open yet. When they open, a link to the purchase page will appear here, and it will be announced on the News page."
+    }</p></div>`;
+  }
+  const label = ja ? "購入する（Polar の購入画面へ）" : "Buy (opens Polar's checkout page)";
+  return `<p class="actions"><a class="button" href="${esc(url)}">${esc(label)}</a></p>`;
 }
 
 /** 変更履歴の元（日本語は CHANGELOG.md、英語は CHANGELOG.en.md） */
@@ -186,7 +206,7 @@ ${eyebrow(t.guide.eyebrow)}
 
 /** 言語ごとの全ページ。キーは PageKey、値は完成した HTML。 */
 export function buildPages(lang: Lang, inputs: SiteInputs): Record<PageKey, string> {
-  const { root, latest, releaseKey } = inputs;
+  const { root, latest, releaseKey, purchaseUrl } = inputs;
   const sources = sourcePaths(lang);
   const out = {} as Record<PageKey, string>;
   const tableLabel = UI[lang].tableLabel;
@@ -201,6 +221,7 @@ export function buildPages(lang: Lang, inputs: SiteInputs): Record<PageKey, stri
     const slots: Record<string, string> = {};
     if (page === "download") slots.files = download(lang, latest);
     if (page === "verify") slots.key = verifyKey(lang, releaseKey);
+    if (page === "supporter") slots.purchase = purchase(lang, purchaseUrl);
     if (page === "news") {
       slots.changelog = renderMarkdown(read(root, ...changelogPath(lang)), { shift: 1, dropFirstH1: true, tableLabel }).html;
     }

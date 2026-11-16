@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { JSDOM } from "jsdom";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { build, headersFile, ROOT } from "./lib/build.ts";
-import { ISSUES_URL, LANGS, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
+import { build, checkPurchaseUrl, headersFile, ROOT } from "./lib/build.ts";
+import { ISSUES_URL, LANGS, PURCHASE_URL, SITE, SUPPORT_MAIL } from "./lib/consts.ts";
 import { fetchPublishedLatest, parseLatest } from "./lib/latest.ts";
 import { renderMarkdown, slugify } from "./lib/markdown.ts";
 import { PAGE_KEYS } from "./lib/text.ts";
@@ -456,6 +456,92 @@ describe("配布用の公開鍵", () => {
     expect(readFileSync(join(out, "en", "verify", "index.html"), "utf8")).toContain(`RWQ${"A".repeat(53)}`);
     writeFileSync(join(root, "site", "keys", "release.pub"), "bogus\n");
     expect(() => build({ root, outDir: join(tmp, "key-bad") })).toThrow(/公開鍵の形/);
+  });
+});
+
+describe("販売ページ（サポーターライセンス）", () => {
+  const page = (dir: string, lang: string) => readFileSync(join(dir, lang, "supporter", "index.html"), "utf8");
+  const URL_OK = "https://example.com/checkout/yunagi-supporter";
+
+  it("リポジトリの購入リンク（PURCHASE_URL）が空の間は『準備中』を出し、購入へのリンクを作らない", () => {
+    for (const lang of LANGS) {
+      const doc = dom(join(plainDir, lang, "supporter", "index.html"));
+      if (PURCHASE_URL === "") {
+        expect(doc.querySelector(".doc .notice"), lang).not.toBeNull();
+        expect(doc.querySelectorAll(".doc a.button"), lang).toHaveLength(0);
+      } else {
+        expect([...doc.querySelectorAll(".doc a.button")].map((a) => a.getAttribute("href")), lang).toEqual([PURCHASE_URL]);
+      }
+    }
+    expect(page(plainDir, "ja")).toContain("購入の受け付けは準備中です");
+    expect(page(plainDir, "en")).toContain("Purchases are not open yet");
+  });
+
+  it("購入リンクを入れると、日英のページに同じ 1 つのリンクが出て、『準備中』は消える", () => {
+    const out = join(tmp, "purchase-out");
+    build({ outDir: out, purchaseUrl: URL_OK });
+    for (const lang of LANGS) {
+      const doc = dom(join(out, lang, "supporter", "index.html"));
+      expect([...doc.querySelectorAll(".doc a.button")].map((a) => a.getAttribute("href")), lang).toEqual([URL_OK]);
+      expect(doc.querySelector(".doc .notice"), lang).toBeNull();
+      // 外部のスクリプト・埋め込みは、リンクを入れても増えない（各ページの HTML の検査と同じ）
+      expect(doc.querySelectorAll("script,iframe,form"), lang).toHaveLength(0);
+    }
+  });
+
+  it("購入リンクの形が違えば、出力先に触れる前にビルドを止める", () => {
+    for (const bad of [
+      "http://example.com/checkout",
+      "https://user:pass@example.com/checkout",
+      "https://example.com/a b",
+      'https://example.com/"x',
+      "javascript:alert(1)",
+      "//example.com/checkout",
+      "example.com/checkout",
+    ]) {
+      expect(() => checkPurchaseUrl(bad), bad).toThrow(/購入リンク/);
+    }
+    expect(checkPurchaseUrl("")).toBe("");
+    expect(checkPurchaseUrl(URL_OK)).toBe(URL_OK);
+    const out = join(tmp, "purchase-bad");
+    expect(() => build({ outDir: out, purchaseUrl: "http://example.com" })).toThrow(/https/);
+    expect(existsSync(out)).toBe(false);
+    // リポジトリに書いた値も、同じ決まりに合っている
+    expect(checkPurchaseUrl(PURCHASE_URL)).toBe(PURCHASE_URL);
+  });
+
+  it("価格と有料同期の目安は、ロードマップ 4章と同じ値を載せる", () => {
+    const roadmap = read("docs/future/roadmap.md");
+    expect(roadmap).toContain("価格：**2,500 円（税込）**");
+    expect(roadmap).toContain("月 500 円（仮）");
+    // サイトの日本語は数字と助数詞の間に空白を入れない（下の「数字と助数詞」の検査）
+    expect(page(plainDir, "ja")).toContain("2,500円（税込）");
+    expect(page(plainDir, "ja")).toContain("月500円を目安");
+    expect(page(plainDir, "en")).toContain("JPY 2,500 (tax included)");
+    expect(page(plainDir, "en")).toContain("around JPY 500 a month");
+  });
+
+  it("キーの入力の案内は、アプリの画面の文言（設定のライセンス区分）と同じ", () => {
+    const i18n = read("src/lib/i18n_settings.ts");
+    for (const [lang, key, verify] of [
+      ["ja", "ライセンスキー", "確認する"],
+      ["en", "License key", "Verify"],
+    ] as const) {
+      expect(i18n).toContain(`key: "${key}",`);
+      expect(i18n).toContain(`verify: "${verify}",`);
+      const html = page(plainDir, lang);
+      expect(html, lang).toContain(lang === "ja" ? `「${key}」` : `${key} field`);
+      expect(html, lang).toContain(lang === "ja" ? `「${verify}」` : `press ${verify}`);
+    }
+  });
+
+  it("フッターと問い合わせのページから着ける", () => {
+    for (const lang of LANGS) {
+      for (const p of ["index.html", "support/index.html"]) {
+        const doc = dom(join(plainDir, lang, p));
+        expect(doc.querySelector(`a[href="/${lang}/supporter/"]`), `${lang}/${p}`).not.toBeNull();
+      }
+    }
   });
 });
 

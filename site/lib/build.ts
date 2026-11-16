@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync,
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LANGS, SITE } from "./consts.ts";
+import { LANGS, PURCHASE_URL, SITE } from "./consts.ts";
 import { esc } from "./html.ts";
 import { parseLatest, type Latest } from "./latest.ts";
 import { buildPages } from "./pages.ts";
@@ -22,6 +22,28 @@ export interface BuildOptions {
   outDir: string;
   /** 取り込む latest.json のパス。無ければ含めない（最初のリリースの前） */
   latestJson?: string;
+  /** サポーターライセンスの購入リンク。既定は consts.ts の PURCHASE_URL（試験だけが替える） */
+  purchaseUrl?: string;
+}
+
+/**
+ * 購入リンクの形を確かめる。空（準備中）か、`https://` の URL 1 つだけを通す。
+ * 認証の情報（`user:pass@`）・空白・引用符を含むもの、ホストの無いものは、ビルドを止める。
+ * 販売サービスのホスト名は決め打ちしない（窓口を選び直すことがあるため。要件定義書 9章）。
+ */
+export function checkPurchaseUrl(url: string): string {
+  if (url === "") return url;
+  if (/[\s"'<>`]/.test(url)) throw new Error(`購入リンクに空白や引用符がある: ${url}`);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`購入リンクが URL の形ではない: ${url}`);
+  }
+  if (parsed.protocol !== "https:" || !url.startsWith("https://")) throw new Error(`購入リンクは https:// で始める: ${url}`);
+  if (parsed.hostname === "") throw new Error(`購入リンクにホストが無い: ${url}`);
+  if (parsed.username !== "" || parsed.password !== "") throw new Error(`購入リンクに認証の情報を入れない: ${url}`);
+  return url;
 }
 
 export interface BuildResult {
@@ -134,6 +156,8 @@ export function build(options: BuildOptions): BuildResult {
     latest = parseLatest(latestText);
   }
 
+  const purchaseUrl = checkPurchaseUrl(options.purchaseUrl ?? PURCHASE_URL);
+
   assertSafeOutDir(root, outDir);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
@@ -150,7 +174,7 @@ export function build(options: BuildOptions): BuildResult {
   }
 
   for (const lang of LANGS) {
-    const pages = buildPages(lang, { root, latest, releaseKey });
+    const pages = buildPages(lang, { root, latest, releaseKey, purchaseUrl });
     for (const page of PAGE_KEYS) {
       write(outDir, `${pagePath(lang, page).slice(1)}index.html`, pages[page], files);
     }

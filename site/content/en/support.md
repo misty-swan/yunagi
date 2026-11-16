@@ -17,7 +17,7 @@ Please do not paste real work data such as your notes.
 
 ## Email
 
-If you do not have a GitHub account, or for purchases and licenses, write to [support@getyunagi.com](mailto:support@getyunagi.com).
+If you do not have a GitHub account, or for purchases and licenses, write to [support@getyunagi.com](mailto:support@getyunagi.com). The price, how to buy, and refunds are on the [Supporter license](/en/supporter/) page.
 
 ## Vulnerabilities
 
