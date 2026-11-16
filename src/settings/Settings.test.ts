@@ -1242,6 +1242,32 @@ test("ライセンス：確認中に区分を離れて戻ったら、その後�
   expect(keyInput()!.disabled).toBe(false);
 });
 
+test("ライセンス：確かめる処理そのものが失敗したら、押したことへの答えを出す", async () => {
+  const core = await start();
+  await open("license");
+  await until(() => keyInput() !== null);
+  core.answer.verify_license = { kind: "not_ready" };
+  typeKey(ENTERED);
+  button("確認する").click();
+  await until(() => result().startsWith("確認できませんでした。もう一度お試しください。"));
+  expect(keyInput()!.value).toBe(ENTERED);
+});
+
+test("このアプリについて：表記を読めなかったときは、無いとは言わずに伝え、次に押したときに読み直す", async () => {
+  const core = await start();
+  core.answer.get_third_party_licenses = { kind: "internal", detail: "x" };
+  await open("about");
+  button("表示する").click();
+  await until(() => text('[data-pane="about"] .missing') !== "");
+  expect(text('[data-pane="about"] .missing')).toContain("読めませんでした");
+  button("閉じる").click();
+  await until(() => $('[data-pane="about"] .missing') === null);
+  delete core.answer.get_third_party_licenses;
+  core.thirdParty = "notices";
+  button("表示する").click();
+  await until(() => $('[data-pane="about"] pre')?.textContent === "notices");
+});
+
 test("ライセンス：キーを消すは確かめる文を出し（初めのフォーカスは「やめる」）、Esc で閉じる。「消す」で消して伝える", async () => {
   const core = await start();
   core.license = { state: "verified", license: VERIFIED };

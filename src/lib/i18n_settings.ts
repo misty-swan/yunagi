@@ -149,6 +149,8 @@ export interface SettingsMessages {
       unreachable: string;
       service_error: string;
       save_failed: string;
+      /** 確かめる処理そのものが失敗した（データベースを開いていない・処理が止まった）。 */
+      failed: string;
       removed: string;
       remove_failed: string;
     };
@@ -162,6 +164,8 @@ export interface SettingsMessages {
     showThirdParty: string;
     hideThirdParty: string;
     thirdPartyMissing: string;
+    /** 表記を読めなかった（配布物にはあるはずのとき）。 */
+    thirdPartyFailed: string;
     /** サポーターの表示（キーが確認できているときだけ）。 */
     supporter: string;
   };
@@ -356,6 +360,7 @@ const ja: SettingsMessages = {
       service_error:
         "販売サービスから正しい応答が無かったため、確認できませんでした。時間をおいて、もう一度お試しください。確認できなくても、Yunagi の機能はすべて使えます。",
       save_failed: "確認はできましたが、保存できませんでした。もう一度「確認する」を押してください。",
+      failed: "確認できませんでした。もう一度お試しください。確認できなくても、Yunagi の機能はすべて使えます。",
       removed: "キーを消しました。",
       remove_failed: "キーを消せませんでした。もう一度お試しください。",
     },
@@ -368,6 +373,7 @@ const ja: SettingsMessages = {
     showThirdParty: "表示する",
     hideThirdParty: "閉じる",
     thirdPartyMissing: "この版には、サードパーティライセンスの表記が入っていません（開発用のビルド）。",
+    thirdPartyFailed: "サードパーティライセンスの表記を読めませんでした。もう一度「表示する」を押してください。",
     supporter: "サポーターライセンスで Yunagi を支えていただき、ありがとうございます。",
   },
 };
@@ -560,6 +566,7 @@ const en: SettingsMessages = {
       service_error:
         "The sales service didn't respond properly, so the key wasn't verified. Please try again later. Every Yunagi feature works without it.",
       save_failed: "The key was verified but couldn't be saved. Press Verify again.",
+      failed: "The key couldn't be verified. Please try again. Every Yunagi feature works without it.",
       removed: "Key removed.",
       remove_failed: "Couldn't remove the key. Please try again.",
     },
@@ -572,6 +579,7 @@ const en: SettingsMessages = {
     showThirdParty: "Show",
     hideThirdParty: "Hide",
     thirdPartyMissing: "This build doesn't include the third-party license notices (development build).",
+    thirdPartyFailed: "Couldn't read the third-party license notices. Press Show again.",
     supporter: "Thank you for supporting Yunagi with a Supporter license.",
   },
 };

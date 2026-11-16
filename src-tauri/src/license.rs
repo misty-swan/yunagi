@@ -11,6 +11,7 @@
 //!   `domain::license`）。キーの全体は保存せず、ログにも出さない。
 //! - 販売元の識別子のどちらかが空のビルドでは、通信せずに「この版では使えない」を返す。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -82,8 +83,9 @@ pub enum Response {
 
 /// 販売サービスへの問い合わせ。本物（[`HttpBackend`]）と、試験の偽物がある。
 pub trait Backend: Send + Sync {
-    /// 本文 `body`（JSON）を送り先へ POST する（1 回だけ。やり直さない）。
-    fn validate(&self, body: &[u8]) -> Response;
+    /// 本文 `body`（JSON）を送り先へ POST する（1 回だけ。やり直さない）。本文はキーを持つので、写さずに
+    /// 受け取る（メモリにキーの写しを増やさない）。
+    fn validate(&self, body: Vec<u8>) -> Response;
 }
 
 /// 応答の分け方（画面設計書 7章「結果の分け方」）。
@@ -127,15 +129,15 @@ pub struct LicenseService {
     seller: Seller,
     backend: Arc<dyn Backend>,
     /// 確認の途中か（同時に 1 本だけ）。
-    verifying: Mutex<bool>,
+    verifying: AtomicBool,
 }
 
-/// 確認の途中の印。手放すと（panic でも）、途中でなくなる。
-struct Verifying<'a>(&'a Mutex<bool>);
+/// 確認の途中の印。手放すと（panic でも）、途中でなくなる（`AppCore` の保存先の作業の印と同じ形）。
+struct Verifying<'a>(&'a AtomicBool);
 
 impl Drop for Verifying<'_> {
     fn drop(&mut self) {
-        *lock(self.0) = false;
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -144,7 +146,7 @@ impl LicenseService {
         Arc::new(Self {
             seller,
             backend,
-            verifying: Mutex::new(false),
+            verifying: AtomicBool::new(false),
         })
     }
 
@@ -158,7 +160,7 @@ impl LicenseService {
         if let Some(l) = core.read(license::load)? {
             return Ok(LicenseState::Verified { license: l.into() });
         }
-        Ok(if *lock(&self.verifying) {
+        Ok(if self.verifying.load(Ordering::Acquire) {
             LicenseState::Verifying
         } else if !self.seller.configured() {
             LicenseState::Unavailable
@@ -176,14 +178,14 @@ impl LicenseService {
         let Some(key) = license::check_key(input, self.seller.key_prefix) else {
             return Ok(VerifyResult::InvalidFormat);
         };
-        let _verifying = {
-            let mut verifying = lock(&self.verifying);
-            if *verifying {
-                return Ok(VerifyResult::Busy);
-            }
-            *verifying = true;
-            Verifying(&self.verifying)
-        };
+        if self
+            .verifying
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(VerifyResult::Busy);
+        }
+        let _verifying = Verifying(&self.verifying);
         let Some(generation) = core.database_generation() else {
             return Err(CommandError::NotReady);
         };
@@ -193,8 +195,7 @@ impl LicenseService {
             benefit_id: self.seller.benefit_id,
         })
         .expect("strings are serializable");
-        let response = self.backend.validate(&body);
-        drop(body);
+        let response = self.backend.validate(body);
         let outcome = classify(&response);
         if let Response::Unreachable(detail) = &response {
             eprintln!("yunagi: could not reach the license service: {detail}");
@@ -334,8 +335,8 @@ impl HttpBackend {
 }
 
 impl Backend for HttpBackend {
-    fn validate(&self, body: &[u8]) -> Response {
-        tauri::async_runtime::block_on(self.send(body.to_vec()))
+    fn validate(&self, body: Vec<u8>) -> Response {
+        tauri::async_runtime::block_on(self.send(body))
     }
 }
 
@@ -484,7 +485,7 @@ mod tests {
     fn the_request_carries_only_the_key_and_the_seller_ids() {
         let (url, rx) = serve(|s| respond(s, "HTTP/1.1 200 OK", br#"{"status":"granted"}"#));
         let body = br#"{"key":"YUNAGI_aaaaaaaa","organization_id":"org","benefit_id":"ben"}"#;
-        let response = local(url, TIMEOUT).validate(body);
+        let response = local(url, TIMEOUT).validate(body.to_vec());
         assert_eq!(classify(&response), Outcome::Granted);
         let request = String::from_utf8(rx.recv().unwrap()).unwrap();
         let (head, sent) = request.split_once("\r\n\r\n").unwrap();
@@ -511,7 +512,7 @@ mod tests {
                 b"",
             )
         });
-        let response = local(url, TIMEOUT).validate(b"{}");
+        let response = local(url, TIMEOUT).validate(b"{}".to_vec());
         assert_eq!(
             response,
             Response::Http {
@@ -531,7 +532,7 @@ mod tests {
             );
             respond(s, "HTTP/1.1 200 OK", big.as_bytes());
         });
-        let response = local(url, TIMEOUT).validate(b"{}");
+        let response = local(url, TIMEOUT).validate(b"{}".to_vec());
         assert_eq!(
             response,
             Response::Http {
@@ -546,7 +547,7 @@ mod tests {
     fn a_silent_server_times_out_as_unreachable() {
         let (url, _rx) = serve(|_| thread::sleep(Duration::from_secs(3)));
         let started = Instant::now();
-        let response = local(url, Duration::from_millis(300)).validate(b"{}");
+        let response = local(url, Duration::from_millis(300)).validate(b"{}".to_vec());
         assert!(started.elapsed() < Duration::from_secs(3));
         assert!(matches!(response, Response::Unreachable(_)), "{response:?}");
         assert_eq!(classify(&response), Outcome::Unreachable);
@@ -563,7 +564,7 @@ mod tests {
             thread::sleep(Duration::from_secs(3));
         });
         let started = Instant::now();
-        let response = local(url, Duration::from_millis(500)).validate(b"{}");
+        let response = local(url, Duration::from_millis(500)).validate(b"{}".to_vec());
         assert!(started.elapsed() < Duration::from_secs(3));
         assert!(matches!(response, Response::Unreachable(_)), "{response:?}");
     }
@@ -573,7 +574,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/validate", listener.local_addr().unwrap());
         drop(listener);
-        let response = local(url, TIMEOUT).validate(b"{}");
+        let response = local(url, TIMEOUT).validate(b"{}".to_vec());
         assert_eq!(classify(&response), Outcome::Unreachable);
     }
 
@@ -584,7 +585,10 @@ mod tests {
         let url = format!("http://{}/validate", listener.local_addr().unwrap());
         let backend = local_with(url, TIMEOUT, true);
         listener.set_nonblocking(true).unwrap();
-        assert_eq!(classify(&backend.validate(b"{}")), Outcome::Unreachable);
+        assert_eq!(
+            classify(&backend.validate(b"{}".to_vec())),
+            Outcome::Unreachable
+        );
         assert!(listener.accept().is_err(), "nothing should have connected");
     }
 

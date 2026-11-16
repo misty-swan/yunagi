@@ -693,13 +693,14 @@ impl AppCore {
     }
 
     /// 画面の操作による書き込みのうち、ほかの画面にもエージェントにも知らせないもの（`changed` を出さず、
-    /// 保存の失敗中にも数えない。サポーターライセンスの確認の印を消すとき）。中身は [`AppCore::read`] と
-    /// 同じ（開いたデータベースで `f` を行うだけ）で、呼ぶ側の意図を名前で示すためにある。
+    /// 保存の失敗中にも数えない。サポーターライセンスの確認の印を消すとき）。読み取り（[`AppCore::read`]）
+    /// とは別に、開いたデータベースで `f` を行う（読み取りの入口の決まりが変わっても、書き込みに響かない
+    /// ように）。
     pub fn quiet_write<T, E: Into<CommandError>>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, E>,
     ) -> Result<T, CommandError> {
-        self.read(f)
+        self.with_db(|db| f(db.connection()).map_err(Into::into))
     }
 
     /// データベースの世代を進める。`db` の錠を持っている間に呼ぶ（錠の中身 `_slot` を受け取るのは、

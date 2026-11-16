@@ -5,6 +5,7 @@
 // 設定を閉じても確認は続き、確認できればコアが保存する。この状態は設定の画面の外に持ち、閉じた後に届いた
 // 結果も受ける：確認できていれば確認済みにし、失敗していれば捨てる（閉じた後に失敗の文を出す場所を作らない）。
 
+import { localDate } from "./backups";
 import type { LicenseState, VerifiedLicense, VerifyResult } from "./bindings";
 import { core } from "./core";
 
@@ -16,6 +17,7 @@ export type LicenseNotice =
   | "unreachable"
   | "service_error"
   | "save_failed"
+  | "failed"
   | "removed"
   | "remove_failed";
 
@@ -23,11 +25,7 @@ export type LicenseNotice =
 const VERIFYING_POLL_MS = 1000;
 
 /** 確認した日（端末の時刻で `YYYY.MM.DD`）。 */
-export function verifiedDate(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
-}
+export const verifiedDate = localDate;
 
 export class LicenseStore {
   /** コアの状態（読めるまでは `null`）。 */
@@ -44,6 +42,11 @@ export class LicenseStore {
   #shown = false;
   /** 確認中を読み直す時計（1 つだけ持つ）。 */
   #poll: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 状態を変えた回数。読み直しを始めた後に、確認・消すの結果で状態を変えたら、その読み直しの答え（古い）は
+   * 使わない。
+   */
+  #version = 0;
 
   /** 確認済みなら、その印。 */
   get verified(): VerifiedLicense | null {
@@ -75,17 +78,28 @@ export class LicenseStore {
     this.#poll = null;
   }
 
+  /** 結果で状態を変える（それより前に始めた読み直しの答えを捨てる）。 */
+  #set(state: LicenseState | null) {
+    this.#version++;
+    this.state = state;
+  }
+
   /** 状態を読み直す（読めなければ `loadFailed`）。 */
   async #refresh() {
+    const version = this.#version;
+    let read: LicenseState;
     try {
-      this.state = await core.getLicense();
-      this.loadFailed = false;
+      read = await core.getLicense();
     } catch {
-      this.loadFailed = true;
+      if (version === this.#version) this.loadFailed = true;
+      return;
     }
+    if (version !== this.#version) return;
+    this.state = read;
+    this.loadFailed = false;
     // 結果を待つ Promise が無いのにコアが確認中と答えた（画面を読み込み直した後など）：終わるまで読み直す
     this.#stopPoll();
-    if (this.#shown && !this.waiting && this.state?.state === "verifying") {
+    if (this.#shown && !this.waiting && this.state.state === "verifying") {
       this.#poll = setTimeout(() => {
         this.#poll = null;
         if (this.#shown && !this.waiting) void this.#refresh();
@@ -106,20 +120,23 @@ export class LicenseStore {
     }
     this.waiting = false;
     if (result?.result === "verified") {
-      this.state = { state: "verified", license: result.license };
+      this.#set({ state: "verified", license: result.license });
       this.input = "";
       this.notice = this.#shown ? "verified" : null;
       return;
     }
     // 区分を出していない間に終わった失敗は捨てる（閉じた・離れたときに入力も捨ててある。区分を出し直して
-    // いれば、文を出す）。データベースが替わった・コマンドの失敗も、文を出さない
-    if (!this.#shown || result === null || result.result === "discarded" || result.result === "busy" || result.result === "unavailable") {
-      if (this.#shown) await this.#refresh();
+    // いれば、文を出す）。データベースが替わった・ほかの確認の途中・この版では使えないは、文を出さずに
+    // 状態を読み直す
+    if (!this.#shown) return;
+    if (result !== null && (result.result === "discarded" || result.result === "busy" || result.result === "unavailable")) {
+      await this.#refresh();
       return;
     }
-    // 待っている間に読んだ状態（確認中）は、もう古い：失敗したので未確認
-    if (this.state?.state === "verifying") this.state = { state: "unverified" };
-    this.notice = result.result;
+    // 失敗した：待っている間に読んだ状態（確認中）は、もう古い
+    if (this.state?.state === "verifying") this.#set({ state: "unverified" });
+    // コマンドそのものの失敗（データベースを開いていない・処理が止まった）も、押したことへの答えを出す
+    this.notice = result === null ? "failed" : result.result;
   }
 
   askRemove() {
@@ -137,13 +154,13 @@ export class LicenseStore {
     try {
       await core.removeLicense();
     } catch {
-      this.notice = "remove_failed";
+      if (this.#shown) this.notice = "remove_failed";
       return;
     }
     // 消せた。状態を読めなければ、確認済みの表示を残さない（「読めませんでした」を出す）
-    this.state = null;
+    this.#set(null);
     await this.#refresh();
-    this.notice = "removed";
+    if (this.#shown) this.notice = "removed";
   }
 }
 
@@ -152,6 +169,8 @@ export class AboutStore {
   version = $state("");
   /** 表記の中身。読んでいなければ `undefined`、この版に無ければ `null`。 */
   thirdParty = $state<string | null | undefined>(undefined);
+  /** 表記を読めなかった（次に「表示する」を押すと読み直す）。 */
+  thirdPartyFailed = $state(false);
   open = $state(false);
   readonly #getVersion: () => Promise<string>;
 
@@ -168,7 +187,7 @@ export class AboutStore {
     }
   }
 
-  /** 表記を出す・閉じる。初めて出すときに読む。 */
+  /** 表記を出す・閉じる。まだ読めていなければ読む。 */
   async toggle() {
     if (this.open) {
       this.open = false;
@@ -177,8 +196,10 @@ export class AboutStore {
     if (this.thirdParty === undefined) {
       try {
         this.thirdParty = await core.getThirdPartyLicenses();
+        this.thirdPartyFailed = false;
       } catch {
-        this.thirdParty = null;
+        // 読めなかった：無いとは言わない。覚えずに、次に押したときに読み直す
+        this.thirdPartyFailed = true;
       }
     }
     this.open = true;

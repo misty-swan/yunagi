@@ -2134,8 +2134,8 @@ impl FakeSales {
 }
 
 impl Backend for FakeSales {
-    fn validate(&self, body: &[u8]) -> Response {
-        self.calls.lock().unwrap().push(body.to_vec());
+    fn validate(&self, body: Vec<u8>) -> Response {
+        self.calls.lock().unwrap().push(body);
         if let Some((entered, release)) = self.gate.lock().unwrap().take() {
             entered.send(()).unwrap();
             release.recv().unwrap();

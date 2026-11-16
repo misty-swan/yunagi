@@ -502,35 +502,51 @@ pub async fn remove_license(
     blocking(&core, move |core| license.remove(core)).await
 }
 
-/// サードパーティライセンスの表記を読む上限（バイト）。超えた分は読まない（いまの表記は数百 KiB。切れて
-/// UTF-8 として読めなくなったときは、無いものとして扱う）。
+/// サードパーティライセンスの表記を読む上限（バイト。いまの表記は数百 KiB）。超えるものは、切って出さずに
+/// 失敗にする（表記の一部が黙って欠けないように）。
 pub const THIRD_PARTY_LICENSES_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// 配布物に入れたサードパーティライセンスの表記（`THIRD_PARTY_LICENSES.md`。ビルド・配布手順書 3章）の
-/// 中身（「このアプリについて」に出す）。開発のビルドには無いので `null`。
+/// 中身（「このアプリについて」に出す）。ファイルが無い（開発のビルド）ときは `null`。あるのに読めない・
+/// 上限を超える・UTF-8 でないときは [`CommandError::Internal`]（画面は「読めませんでした」を出す）。
 #[tauri::command]
 pub async fn get_third_party_licenses<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Option<String>, CommandError> {
-    use std::io::Read;
     use tauri::Manager;
     let Ok(dir) = app.path().resource_dir() else {
         return Ok(None);
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        let Ok(file) = std::fs::File::open(dir.join("THIRD_PARTY_LICENSES.md")) else {
-            return None;
-        };
-        let mut text = String::new();
-        file.take(THIRD_PARTY_LICENSES_MAX_BYTES)
-            .read_to_string(&mut text)
-            .ok()
-            .map(|_| text)
-    })
-    .await
-    .map_err(|e| CommandError::Internal {
-        detail: e.to_string(),
-    })
+    tauri::async_runtime::spawn_blocking(move || read_third_party_licenses(&dir))
+        .await
+        .map_err(|e| CommandError::Internal {
+            detail: e.to_string(),
+        })?
+}
+
+/// `dir` の `THIRD_PARTY_LICENSES.md` を読む（[`get_third_party_licenses`]）。
+pub fn read_third_party_licenses(dir: &Path) -> Result<Option<String>, CommandError> {
+    use std::io::Read;
+    let path = dir.join("THIRD_PARTY_LICENSES.md");
+    let failed = |detail: String| CommandError::Internal {
+        detail: format!("could not read {}: {detail}", path.display()),
+    };
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(failed(e.to_string())),
+    };
+    // 上限を 1 バイト超えて読み、超えたかを知る
+    let mut bytes = Vec::new();
+    file.take(THIRD_PARTY_LICENSES_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| failed(e.to_string()))?;
+    if bytes.len() as u64 > THIRD_PARTY_LICENSES_MAX_BYTES {
+        return Err(failed("the file is too large".into()));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|e| failed(e.to_string()))
 }
 
 /// いまの保存先のフォルダ（設定画面のデータ区分に示す）。
@@ -973,4 +989,40 @@ pub async fn mark_changes_seen(core: Core<'_>, ids: Vec<Id>) -> Result<usize, Co
 #[tauri::command]
 pub async fn report_ui_state(core: Core<'_>, state: UiReport) -> Result<(), CommandError> {
     blocking(&core, move |core| core.screen().report(state)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn third_party_notices_are_read_whole_or_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        // 無い（開発のビルド）
+        assert_eq!(read_third_party_licenses(dir.path()).unwrap(), None);
+        let path = dir.path().join("THIRD_PARTY_LICENSES.md");
+        std::fs::write(&path, "# Third-party licenses\n").unwrap();
+        assert_eq!(
+            read_third_party_licenses(dir.path()).unwrap().as_deref(),
+            Some("# Third-party licenses\n")
+        );
+        // 上限ちょうどは読む。超えるものは切らずに失敗にする
+        let max = THIRD_PARTY_LICENSES_MAX_BYTES as usize;
+        std::fs::write(&path, "a".repeat(max)).unwrap();
+        assert_eq!(
+            read_third_party_licenses(dir.path())
+                .unwrap()
+                .unwrap()
+                .len(),
+            max
+        );
+        std::fs::write(&path, "a".repeat(max + 1)).unwrap();
+        assert!(matches!(
+            read_third_party_licenses(dir.path()),
+            Err(CommandError::Internal { .. })
+        ));
+        // UTF-8 でない
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(read_third_party_licenses(dir.path()).is_err());
+    }
 }

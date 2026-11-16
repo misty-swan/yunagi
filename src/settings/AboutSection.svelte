@@ -32,6 +32,8 @@
       <!-- 長い表記を、キーボードでもスクロールできるようにフォーカスを受ける -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <pre class="notices" tabindex="0" aria-label={s.thirdParty}>{about.thirdParty}</pre>
+    {:else if about.thirdPartyFailed}
+      <p class="note missing" role="alert">{s.thirdPartyFailed}</p>
     {:else}
       <p class="note missing">{s.thirdPartyMissing}</p>
     {/if}
